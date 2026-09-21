@@ -7,12 +7,13 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from jdlib.context import TenantContext, current_privilege
+from jdlib.context import TenantContext
 from jdlib.errors import (
     AuthorizationError,
     CrossTenantReferenceError,
     MissingTenantContext,
     UnscopedBulkOperation,
+    UnscopedRawSql,
 )
 from jdlib.models.base import SoftDelete, TenantRouted
 from jdlib.persistence.models import tenant_table_map
@@ -64,13 +65,15 @@ def _register_events(session: Session) -> None:
             ]
             if options:
                 state.statement = state.statement.options(*options)
-        elif state.is_update or state.is_delete:
-            if state.execution_options.get("jdlib_scoped"):
+        elif state.is_insert or state.is_update or state.is_delete:
+            if state.execution_options.get("jdlib_scoped") or state.execution_options.get(
+                "jdlib_raw_sql"
+            ):
                 return
             table = getattr(state.statement, "table", None)
             if table is not None and table.name in tables:
                 raise UnscopedBulkOperation(
-                    f"unscoped bulk DML on {table.name}; use update_where/delete_where"
+                    f"unscoped bulk DML on {table.name}; use update_where/delete_where/raw_sql"
                 )
 
     @sa.event.listens_for(session, "before_flush")
@@ -140,6 +143,8 @@ class TenantSession:
         await self._session.rollback()
 
     async def execute(self, statement: sa.Executable) -> sa.Result[Any]:
+        if isinstance(statement, sa.TextClause):
+            raise UnscopedRawSql("use raw_sql for text statements")
         return await self._session.execute(statement)
 
     async def get(self, model: type[Any], entity_id: uuid.UUID) -> Any | None:
@@ -156,6 +161,8 @@ class TenantSession:
     async def update_where(
         self, model: type[Any], values: dict[str, Any], *criteria: sa.ColumnElement[bool]
     ) -> int:
+        if "tenant_id" in values and self.context.privilege is None:
+            raise AuthorizationError("tenant_id update requires a privileged context")
         statement = (
             sa.update(model)
             .where(model.tenant_id == self.context.tenant_id, *criteria)
@@ -168,6 +175,8 @@ class TenantSession:
     async def delete_where(
         self, model: type[Any], *criteria: sa.ColumnElement[bool]
     ) -> int:
+        if issubclass(model, SoftDelete) and self.context.privilege is None:
+            raise AuthorizationError("hard delete requires a privileged context")
         statement = (
             sa.delete(model)
             .where(model.tenant_id == self.context.tenant_id, *criteria)
@@ -186,8 +195,8 @@ class TenantSession:
         params = params or {}
         dialect = self._session.bind.dialect
         compiled: CompiledRawSql = self._validator.compile(statement, dialect, params)
-        if mode is RawSqlMode.PRIVILEGED:
-            privilege = current_privilege()
+        if mode == RawSqlMode.PRIVILEGED:
+            privilege = self.context.privilege
             if privilege is None:
                 raise AuthorizationError("privileged raw SQL requires a privileged context")
             capability = privilege.capability or ""
@@ -199,4 +208,6 @@ class TenantSession:
             )
         else:
             self._validator.validate_tenant_bound(compiled, self.context.tenant_id)
-        return await self._session.execute(statement, params)
+        return await self._session.execute(
+            statement.execution_options(jdlib_raw_sql=True), params
+        )

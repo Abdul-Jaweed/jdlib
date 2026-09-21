@@ -764,11 +764,13 @@ git commit -m "feat: structural raw SQL validator"
 **Files:**
 - Create: `src/jdlib/persistence/session.py`
 - Create: `tests/integration/test_session_isolation.py`
+- Create: `tests/unit/test_session.py`
 - Modify: `tests/integration/conftest.py` (add async engine + seeded tenants fixtures)
 
 **Interfaces:**
 - Consumes: Task 1–2; `TenantContext`; `TenantRouted`, `SoftDelete`; errors.
 - Produces: `TenantSession` with `context`, `raw_sql(statement, params, *, mode)`, `execute(statement)`, `get(model, id)`, `add(obj)`, `flush()`, `update_where(model, values, *criteria)`, `delete_where(model, *criteria)`; `RawSqlAuditor` protocol.
+- Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set; `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar).
 
 - [ ] **Step 1: Add async fixtures to `tests/integration/conftest.py`**
 
@@ -815,12 +817,14 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from jdlib.context import Principal, TenantContext
-from jdlib.control.enums import PlacementStrategy, PrincipalKind
+from jdlib.context import Principal, PrincipalKind, TenantContext
+from jdlib.control.enums import PlacementStrategy
 from jdlib.errors import (
+    AuthorizationError,
     CrossTenantReferenceError,
     MissingTenantContext,
     UnscopedBulkOperation,
+    UnscopedRawSql,
 )
 from jdlib.persistence.session import TenantSession
 from tests.support.invoice import Invoice
@@ -847,10 +851,16 @@ async def _session(session_factory, tenant_id: uuid.UUID) -> TenantSession:
 
 
 async def test_reads_are_scoped_to_context_tenant(session_factory):
+    async with await _session(session_factory, TENANT_B) as session:
+        await session.add(Invoice(number=f"B-{uuid.uuid4().hex[:8]}"))
+        await session.commit()
     async with await _session(session_factory, TENANT_A) as session:
         await session.add(Invoice(number=f"A-{uuid.uuid4().hex[:8]}"))
-        await session.flush()
+        await session.add(Invoice(number=f"A-{uuid.uuid4().hex[:8]}"))
+        await session.commit()
+    async with await _session(session_factory, TENANT_A) as session:
         rows = (await session.execute(sa.select(Invoice))).scalars().all()
+        assert rows
         assert all(row.tenant_id == TENANT_A for row in rows)
 
 
@@ -858,7 +868,9 @@ async def test_cross_tenant_get_returns_none(session_factory):
     other_id = uuid.uuid4()
     async with await _session(session_factory, TENANT_B) as session:
         await session.add(Invoice(id=other_id, number=f"B-{uuid.uuid4().hex[:8]}"))
-        await session.flush()
+        await session.commit()
+    async with await _session(session_factory, TENANT_B) as session:
+        assert await session.get(Invoice, other_id) is not None
     async with await _session(session_factory, TENANT_A) as session:
         assert await session.get(Invoice, other_id) is None
 
@@ -904,15 +916,134 @@ async def test_scoped_bulk_helpers_work(session_factory):
         assert changed == 1
 
 
+async def test_delete_where_rejects_soft_delete_without_privilege(session_factory):
+    invoice = Invoice(number=f"A-{uuid.uuid4().hex[:8]}")
+    async with await _session(session_factory, TENANT_A) as session:
+        await session.add(invoice)
+        await session.flush()
+        with pytest.raises(AuthorizationError):
+            await session.delete_where(Invoice, Invoice.id == invoice.id)
+
+
+async def test_update_where_rejects_tenant_id_change(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(AuthorizationError):
+            await session.update_where(
+                Invoice, {"tenant_id": TENANT_B}, Invoice.number == "missing"
+            )
+
+
+async def test_execute_text_statement_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="use raw_sql for text statements"):
+            await session.execute(sa.text("DELETE FROM invoices"))
+
+
+async def test_execute_core_insert_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedBulkOperation):
+            await session.execute(
+                sa.insert(Invoice).values(
+                    id=uuid.uuid4(),
+                    tenant_id=TENANT_A,
+                    number=f"A-{uuid.uuid4().hex[:8]}",
+                    status="draft",
+                )
+            )
+
+
 async def test_session_requires_context(session_factory):
     raw = session_factory()
     with pytest.raises(MissingTenantContext):
         TenantSession(raw, None)  # type: ignore[arg-type]
 ```
 
+`tests/unit/test_session.py` (privileged raw SQL must read the session context's privilege, not
+the ambient contextvar):
+
+```python
+import uuid
+from datetime import UTC, datetime
+from typing import Any, cast
+
+import pytest
+import sqlalchemy as sa
+
+from jdlib.context import (
+    Principal,
+    PrincipalKind,
+    PrivilegeContext,
+    PrivilegeKind,
+    TenantContext,
+    context_scope,
+)
+from jdlib.control.enums import PlacementStrategy
+from jdlib.errors import AuthorizationError
+from jdlib.persistence.rawsql import RawSqlMode
+from jdlib.persistence.session import TenantSession
+
+TENANT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+
+
+def _context(privilege: PrivilegeContext | None = None) -> TenantContext:
+    return TenantContext(
+        tenant_id=TENANT_ID,
+        tenant_slug="acme",
+        strategy=PlacementStrategy.SHARED,
+        principal=Principal(kind=PrincipalKind.USER, id=uuid.uuid4()),
+        request_id="req",
+        correlation_id="corr",
+        privilege=privilege,
+    )
+
+
+def _privilege() -> PrivilegeContext:
+    return PrivilegeContext(
+        kind=PrivilegeKind.OPERATOR,
+        capability="tenant.raw_sql",
+        justification="ticket",
+        actor=Principal(kind=PrincipalKind.PLATFORM_OPERATOR, id=uuid.uuid4()),
+        issued_at=datetime.now(UTC),
+        expires_at=None,
+    )
+
+
+class _StubAsyncSession:
+    def __init__(self) -> None:
+        self.sync_session = sa.orm.Session()
+        self.bind = sa.create_engine("postgresql+psycopg://")
+        self.result: Any = object()
+        self.executed: list[sa.Executable] = []
+
+    async def execute(self, statement: sa.Executable, params: object = None) -> Any:
+        self.executed.append(statement)
+        return self.result
+
+
+def _tenant_session(context: TenantContext, stub: _StubAsyncSession) -> TenantSession:
+    return TenantSession(cast(Any, stub), context)
+
+
+async def test_privileged_raw_sql_rejects_without_session_privilege() -> None:
+    stub = _StubAsyncSession()
+    session = _tenant_session(_context(), stub)
+    with context_scope(_context(_privilege())), pytest.raises(AuthorizationError):
+        await session.raw_sql(sa.text("SELECT 1"), mode=RawSqlMode.PRIVILEGED)
+    assert stub.executed == []
+
+
+async def test_privileged_raw_sql_accepts_session_privilege() -> None:
+    stub = _StubAsyncSession()
+    session = _tenant_session(_context(_privilege()), stub)
+    with context_scope(_context()):
+        result = await session.raw_sql(sa.text("SELECT 1"), mode=RawSqlMode.PRIVILEGED)
+    assert result is stub.result
+    assert len(stub.executed) == 1
+```
+
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_session_isolation.py -v`
+Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_session_isolation.py tests/unit/test_session.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.persistence.session'`
 
 - [ ] **Step 4: Implement `src/jdlib/persistence/session.py`**
@@ -921,18 +1052,19 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.persistence.ses
 from __future__ import annotations
 
 import uuid
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from jdlib.context import TenantContext, current_privilege
+from jdlib.context import TenantContext
 from jdlib.errors import (
     AuthorizationError,
     CrossTenantReferenceError,
     MissingTenantContext,
     UnscopedBulkOperation,
+    UnscopedRawSql,
 )
 from jdlib.models.base import SoftDelete, TenantRouted
 from jdlib.persistence.models import tenant_table_map
@@ -955,7 +1087,7 @@ class _NoopRawSqlAuditor:
 
 
 def _context_of(session: Session) -> TenantContext:
-    context = session.info.get(_CTX_KEY)
+    context: TenantContext | None = session.info.get(_CTX_KEY)
     if context is None:
         raise MissingTenantContext("session has no tenant context")
     return context
@@ -972,10 +1104,11 @@ def _register_events(session: Session) -> None:
                 raise MissingTenantContext("session has no tenant context")
             return
         if state.is_select:
+            tenant_id = context.tenant_id
             options = [
                 sa.orm.with_loader_criteria(
                     mapper.class_,
-                    lambda cls: cls.tenant_id == context.tenant_id,
+                    lambda cls: cls.tenant_id == tenant_id,
                     include_aliases=True,
                 )
                 for mapper in state.all_mappers
@@ -983,13 +1116,15 @@ def _register_events(session: Session) -> None:
             ]
             if options:
                 state.statement = state.statement.options(*options)
-        elif state.is_update or state.is_delete:
-            if state.execution_options.get("jdlib_scoped"):
+        elif state.is_insert or state.is_update or state.is_delete:
+            if state.execution_options.get("jdlib_scoped") or state.execution_options.get(
+                "jdlib_raw_sql"
+            ):
                 return
             table = getattr(state.statement, "table", None)
             if table is not None and table.name in tables:
                 raise UnscopedBulkOperation(
-                    f"unscoped bulk DML on {table.name}; use update_where/delete_where"
+                    f"unscoped bulk DML on {table.name}; use update_where/delete_where/raw_sql"
                 )
 
     @sa.event.listens_for(session, "before_flush")
@@ -1007,12 +1142,15 @@ def _register_events(session: Session) -> None:
         for obj in flush_session.dirty:
             if not isinstance(obj, TenantRouted):
                 continue
-            history = sa.inspect(obj).attrs.tenant_id.history
-            if history.has_changes() and history.deleted[0] != context.tenant_id:
+            state = sa.inspect(obj)
+            if state is None:
+                continue
+            history = state.attrs.tenant_id.history
+            if history.has_changes():
                 raise CrossTenantReferenceError(
                     f"{type(obj).__name__}.tenant_id",
                     str(context.tenant_id),
-                    str(history.deleted[0]),
+                    str(history.added[0] if history.added else history.deleted[0]),
                 )
         for obj in flush_session.deleted:
             if isinstance(obj, SoftDelete) and context.privilege is None:
@@ -1056,12 +1194,16 @@ class TenantSession:
         await self._session.rollback()
 
     async def execute(self, statement: sa.Executable) -> sa.Result[Any]:
+        if isinstance(statement, sa.TextClause):
+            raise UnscopedRawSql("use raw_sql for text statements")
         return await self._session.execute(statement)
 
     async def get(self, model: type[Any], entity_id: uuid.UUID) -> Any | None:
+        if issubclass(model, TenantRouted):
+            return await self._session.get(model, (self.context.tenant_id, entity_id))
         return await self._session.get(model, entity_id)
 
-    def add(self, obj: Any) -> None:
+    async def add(self, obj: Any) -> None:
         self._session.add(obj)
 
     async def delete(self, obj: Any) -> None:
@@ -1070,24 +1212,28 @@ class TenantSession:
     async def update_where(
         self, model: type[Any], values: dict[str, Any], *criteria: sa.ColumnElement[bool]
     ) -> int:
+        if "tenant_id" in values and self.context.privilege is None:
+            raise AuthorizationError("tenant_id update requires a privileged context")
         statement = (
             sa.update(model)
             .where(model.tenant_id == self.context.tenant_id, *criteria)
             .values(**values)
             .execution_options(jdlib_scoped=True)
         )
-        result = await self._session.execute(statement)
+        result = cast(sa.CursorResult[Any], await self._session.execute(statement))
         return int(result.rowcount or 0)
 
     async def delete_where(
         self, model: type[Any], *criteria: sa.ColumnElement[bool]
     ) -> int:
+        if issubclass(model, SoftDelete) and self.context.privilege is None:
+            raise AuthorizationError("hard delete requires a privileged context")
         statement = (
             sa.delete(model)
             .where(model.tenant_id == self.context.tenant_id, *criteria)
             .execution_options(jdlib_scoped=True)
         )
-        result = await self._session.execute(statement)
+        result = cast(sa.CursorResult[Any], await self._session.execute(statement))
         return int(result.rowcount or 0)
 
     async def raw_sql(
@@ -1100,8 +1246,8 @@ class TenantSession:
         params = params or {}
         dialect = self._session.bind.dialect
         compiled: CompiledRawSql = self._validator.compile(statement, dialect, params)
-        if mode is RawSqlMode.PRIVILEGED:
-            privilege = current_privilege()
+        if mode == RawSqlMode.PRIVILEGED:
+            privilege = self.context.privilege
             if privilege is None:
                 raise AuthorizationError("privileged raw SQL requires a privileged context")
             capability = privilege.capability or ""
@@ -1113,25 +1259,31 @@ class TenantSession:
             )
         else:
             self._validator.validate_tenant_bound(compiled, self.context.tenant_id)
-        return await self._session.execute(statement, params)
+        return await self._session.execute(
+            statement.execution_options(jdlib_raw_sql=True), params
+        )
 ```
 
-Note for the implementer: if the installed SQLAlchemy `ORMExecuteState` lacks
-`is_insert`, drop that member from the guard condition (select/update/delete are
-sufficient for Phase 3) and document the adjustment. Likewise, if
-`pglast.ast.BoolExpr` uses different constant names, adapt minimally.
+Note for the implementer: `ORMExecuteState.is_insert` exists in SQLAlchemy 2.0.54 and is
+required for the bulk-DML guard. If `pglast.ast.BoolExpr` uses different constant names in a
+future version, adapt minimally.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_session_isolation.py -v`
-Expected: PASS (8 passed)
+Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_session_isolation.py tests/unit/test_session.py -v`
+Expected: PASS (14 passed: 12 integration + 2 unit)
 
 - [ ] **Step 6: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
+Expected: `148 passed`; `All checks passed!`; `Success: no issues found in 27 source files`.
+Note: under `-W error` a pre-existing unraisable `ResourceWarning` (undisposed engines in
+`tests/integration/test_migrations.py` / `test_tenant_models.py`) fails one test regardless of
+this task's changes.
+
 ```bash
-git add src/jdlib/persistence/session.py tests/integration/test_session_isolation.py tests/integration/conftest.py
+git add src/jdlib/persistence/session.py tests/integration/test_session_isolation.py tests/unit/test_session.py tests/integration/conftest.py
 git commit -m "feat: tenant session with scoping, stamping, and bulk guards"
 ```
 
