@@ -83,21 +83,26 @@ Rules:
 
 - `tenant_migration_states.current_version` changes only after the target's
   `alembic_version` is committed.
-- `status='failed'` records `last_error`; the tenant stays on its previous
-  version and remains usable unless the operator explicitly suspends it for
-  non-backward-compatible changes.
+- `failed` and `blocked` on an already-active tenant immediately suspend it:
+  `tenants.status='suspended'`, `suspended_reason='migration_failed'`, audited.
+  The tenant does not serve on a version mismatch (fail closed); an operator
+  resolves the migration and explicitly resumes. There is no
+  "failed but usable" state.
 - `blocked` means automated retry is unsafe (divergent schema detected); a
   platform operator must resolve and reset the state to `pending`.
-- Activation invariant (`tenant_migration_states.status='success' AND
-  current_version = desired_version`) is checked by the health step and by the
-  `TenantRegistry.assert_servable(tenant)` gate used by the router.
+- Servability is a single predicate used by both the health step and
+  `TenantRegistry.assert_servable(tenant)`:
+  `tenants.status='active' AND migration.status='success' AND
+  current_version = desired_version`.
 - A failed migration never silently appears `active`-with-new-version: version
-  and status are written in one transaction.
+  and status are written in one transaction; the suspension transition is part
+  of the same operation.
 
 ## 4. Suspension
 
-- Suspending sets `tenants.status='suspended'`, `suspended_at`, and immediately
-  denies all requests (precedence chain gate 2).
+- Suspending sets `tenants.status='suspended'`, `suspended_at`,
+  `suspended_reason`, and immediately denies all requests (precedence chain
+  gate 2).
 - Suspension does not touch tenant-plane data, bindings, or sessions; it is
   reversible.
 - Membership-level and user-level suspension narrow access without deleting
@@ -112,10 +117,10 @@ Explicit operation with three modes:
 | Mode | Effect |
 |---|---|
 | `archive` | no storage change; records intent; tenant enters `archived` |
-| `soft` | logical delete; control-plane rows retained (audit, billing); tenant-plane storage dropped |
-| `drop` | full removal: tenant-plane storage dropped, target deallocated, control-plane access rows deleted, audit retained |
+| `purge` | destroys tenant-plane storage; control-plane rows retained (audit, administrative metadata) |
+| `destroy` | full removal: tenant-plane storage dropped, target deallocated, control-plane access rows deleted, audit retained |
 
-Ordering for `soft`/`drop` (under lifecycle lock):
+Ordering for `purge`/`destroy` (under lifecycle lock):
 
 ```
 1. status=deprovisioning (denies traffic)
@@ -128,10 +133,19 @@ Ordering for `soft`/`drop` (under lifecycle lock):
 ```
 
 - `archived` is reversible; `deleted` is terminal.
+- Parent/child: deleting a tenant that has `parent_tenant_id` children is
+  blocked (`ON DELETE RESTRICT`) while children exist; the operation supports an
+  explicit `detach_children=true` that clears their `parent_tenant_id` first
+  (audited). Cascade deletion of children never happens implicitly.
 - Backups/retention are the deployment's responsibility; the framework emits
   the audit record needed to prove deletion.
 - Audit events (`platform_audit_events`) are never removed by tenant deletion;
   tenant-plane `audit_events` are removed with the tenant (mode-dependent).
+- Mandatory platform audit events (lifecycle transitions, migration results,
+  access-control changes, privileged use, authentication and resolution
+  failures) must be durably recorded before the operation is considered
+  complete; if the sink is unavailable the operation fails closed. Informational
+  events are best-effort with buffering.
 
 ## 6. Tenant relocation (manual procedure, v1)
 
@@ -143,13 +157,16 @@ application feature:
 2. copy data (logical export/import or logical replication)
 3. verify: row counts, migration version, seed invariants, health checks
 4. flip: update tenant_placements (strategy, target_handle) in one transaction
-5. deprovision old target
-6. audit: tenant.relocated with from/to placement
+5. post-flip health check on the new target (servability predicate + smoke query)
+6. retain old target; deprovision it only after verification succeeds
+7. audit: tenant.relocated with from/to placement
 ```
 
-Rollback: the old placement row is kept until step 5; flipping back restores
-service. Application code is unaware; ids do not change; logical references
-remain valid. Automated relocation is explicitly out of v1 scope.
+Rollback: flipping back restores service because the old target is retained
+until step 6; if the post-flip health check fails, flip back and leave both
+targets intact for diagnosis. Application code is unaware; ids do not change;
+logical references remain valid. Automated relocation is explicitly out of v1
+scope.
 
 ## 7. Secret and target resolution
 
@@ -169,9 +186,12 @@ remain valid. Automated relocation is explicitly out of v1 scope.
 | provisioning idempotency | `provision` × 3 leaves one target, one role set, one settings set |
 | provisioning failure | failure at any step never yields `active` |
 | concurrent lifecycle | two parallel provisions for one tenant serialize; different tenants parallelize |
-| migration state | failed migration leaves prior version servable; no silent state |
-| activation gate | `assert_servable` rejects `current != desired` and non-`success` |
+| migration state | failed/blocked migration on an active tenant suspends it with `suspended_reason='migration_failed'`; prior version not served |
+| activation gate | `assert_servable` accepts only `active AND success AND current=desired`; rejects every other combination |
 | suspension | suspended tenant denies and resumes without data change |
 | deprovision ordering | access rows gone before storage drop; audit retained |
-| relocation | flip preserves ids and logical references; rollback restores service |
+| parent deletion | parent with children blocked; `detach_children=true` detaches then deletes |
+| relocation | flip preserves ids and logical references; post-flip health failure rolls back; old target retained until verification |
+| invitation tokens | valid accepted; wrong/expired/revoked/already-accepted/tampered/duplicate/nonexistent `token_id` all rejected; Argon2id verify is the only acceptance path |
+| mandatory audit | lifecycle operation fails when the audit sink is unavailable |
 | secret resolution | missing handle fails closed, no fallback to shared |

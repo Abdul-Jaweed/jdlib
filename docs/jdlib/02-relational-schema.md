@@ -78,6 +78,7 @@ Tenant (from control plane, logical parent)
 | `slug` | text | NOT NULL, UNIQUE, `CHECK (slug ~ '^[a-z0-9][a-z0-9-]{1,62}$')`, immutable |
 | `name` | text | NOT NULL |
 | `status` | text | NOT NULL, `CHECK (status IN ('provisioning','active','suspended','archived','deprovisioning','deleted'))` |
+| `suspended_reason` | text | NULL; e.g. `migration_failed`, `operator_action` |
 | `parent_tenant_id` | uuid | NULL, FK → `tenants(id)` ON DELETE RESTRICT; delegation metadata only |
 | `created_at` / `updated_at` | timestamptz | NOT NULL |
 | `suspended_at` / `archived_at` | timestamptz | NULL |
@@ -108,8 +109,13 @@ not enforced at the DB level; the router validates handles per strategy.
 | `last_error` | text | NULL |
 | `updated_at` | timestamptz | NOT NULL |
 
-Invariant: a tenant is `active` only if `status = 'success'` and
-`current_version = desired_version`.
+Servability predicate (single source of truth for the router and the registry):
+a tenant is servable **iff** `tenants.status = 'active'` **and**
+`tenant_migration_states.status = 'success'` **and**
+`current_version = desired_version`. A `failed` or `blocked` migration on an
+active tenant immediately moves it to `suspended`
+(`suspended_reason = 'migration_failed'`, audited); an operator resolves the
+migration and explicitly resumes.
 
 ### 3.4 `users`
 
@@ -126,6 +132,12 @@ Uniqueness is enforced with a partial unique index
 (`UNIQUE (email) WHERE email IS NOT NULL`). Rationale: deterministic invitation
 matching and duplicate-account prevention; authority remains
 `identity_links.(issuer, subject)`.
+
+Deleted-user policy: `status='deleted'` rows are retained while any logical
+reference exists; `created_by` / `updated_by` / audit `actor_id` values resolve
+to `deleted_user` for such rows, and to `unknown_actor(id)` only after an
+explicit retention purge. Users are never hard-deleted by cascade, and no
+cross-plane FK is ever added to enforce this.
 
 ### 3.5 `identity_links`
 
@@ -173,7 +185,7 @@ Capability mapping per level lives in code, not data.
 | `service_account_id` | uuid | NOT NULL, composite FK → `service_accounts(tenant_id, id)` ON DELETE CASCADE |
 | `key_prefix` | text | NOT NULL, UNIQUE; lookup value, non-secret |
 | `key_hash` | text | NOT NULL; Argon2id |
-| `scopes` | text[] | NULL; optional narrowing only |
+| `scopes` | text[] | NULL; optional narrowing only; effective key permissions = binding permissions ∩ scopes |
 | `status` | text | NOT NULL, `CHECK (status IN ('active','revoked','expired'))` |
 | `expires_at` | timestamptz | NULL |
 | `last_used_at` | timestamptz | NULL |
@@ -274,7 +286,8 @@ Grant creation is idempotent (`ON CONFLICT DO NOTHING`).
 | `scope_type` | text | NOT NULL, `CHECK (scope_type IN ('tenant','org','team'))` |
 | `scope_id` | uuid | NULL only when `scope_type = 'tenant'` |
 | `role_id` | uuid | NOT NULL, composite FK → `roles(tenant_id, id)` ON DELETE RESTRICT |
-| `token_hash` | text | NOT NULL, UNIQUE; Argon2id; token is single-use |
+| `token_id` | text | NOT NULL, UNIQUE; deterministic lookup value (non-secret) |
+| `token_hash` | text | NOT NULL; Argon2id verification hash (never a lookup key) |
 | `status` | text | NOT NULL, `CHECK (status IN ('pending','accepted','expired','revoked'))` |
 | `expires_at` | timestamptz | NOT NULL |
 | `accepted_at` / `revoked_at` | timestamptz | NULL |
@@ -286,6 +299,11 @@ partial `UNIQUE (tenant_id, email, scope_type, COALESCE(scope_id, '00000000-0000
 `CHECK (scope_type = 'tenant' AND scope_id IS NULL OR scope_type <> 'tenant' AND scope_id IS NOT NULL)`.
 An invitation grants nothing until acceptance; acceptance is atomic
 (`invitations` update + `memberships` insert + `role_bindings` insert).
+Token semantics: raw token = `inv_<token_id>_<secret>`. Lookup is by
+`token_id` (deterministic, non-secret); verification is
+`Argon2id.verify(secret, token_hash)` — the Argon2id hash is never a lookup
+key because its salt makes it non-deterministic. Raw tokens are never stored;
+tokens are single-use, expire, and become invalid on acceptance or revocation.
 
 ### 3.15 `platform_audit_events`
 
@@ -396,6 +414,7 @@ required shape:
 | Audit columns | `created_by` / `updated_by` logical user references; UTC timestamps |
 | Soft delete | `deleted_at`; unique business keys use partial indexes excluding deleted rows |
 | Indexes | Every high-volume table indexes `(tenant_id, created_at)` and common filters `(tenant_id, status)` |
+| RLS eligibility | Every model built on `TenantOwned` is RLS-eligible; when RLS is enabled the standard policy **must** be emitted for it (see `06-strategy-matrix.md` section 6) |
 
 ## 6. Enforced invariants (metadata lint and write-path tests)
 
@@ -412,6 +431,21 @@ required shape:
 - `L7` (write path, not metadata lint) Every `permission_code` column is
   validated against the code catalog by
   the write path (test asserts an unknown code is rejected).
+- `L8` (runtime/mapper) `tenant_id` is immutable after insert; assigning it
+  raises.
+- `L9` (metadata) `tenant_id` is NOT NULL on every tenant-scoped model.
+- `L10` (metadata) Every tenant-scoped FK column set contains `tenant_id`
+  (same rule as L2, checked independently per constraint).
+- `L11` (metadata) Every tenant-scoped model is built on `TenantOwned` (no
+  hand-rolled `tenant_id` columns).
+- `L12` (metadata) Every unique constraint on a tenant-scoped model includes
+  `tenant_id` (business keys are tenant-scoped unless listed as global in
+  section 2).
+- `L13` (metadata, only when `rls` is enabled) Every `TenantOwned` model —
+  framework or application — is RLS-eligible and its policy has been emitted.
+- `L14` (write path) Every polymorphic reference (`RoleBinding.scope_id`,
+  `ResourceGrant.resource_id`, ownership columns) validates existence, tenant
+  match, and allowed state (see I11 in `03-isolation-invariants.md`).
 
 ## 7. Migration artifacts
 

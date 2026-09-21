@@ -16,6 +16,23 @@ platform operator capabilities, and the role × action test matrix.
 not receive bindings; their authority is capability-based and evaluated
 separately.
 
+Authorization ERD:
+
+```
+User / ServiceAccount
+        │ principal
+        ▼
+   RoleBinding ── role_id ──▶ Role ──▶ RolePermission ──▶ Permission catalog (code)
+        │
+        │ scope_type + scope_id
+        ├──▶ tenant   (scope_id NULL)
+        ├──▶ Organization  (tenant plane)
+        └──▶ Team          (tenant plane)
+
+ResourceGrant ──▶ exact resource (resource_type, resource_id)
+ResourceTypeRegistry validates resource_type
+```
+
 ## 2. Status precedence chain
 
 All gates must pass, in order; the first failure denies with that reason:
@@ -58,12 +75,19 @@ For principal `P`, tenant `T`, target `X` (resource | team | org | tenant):
        AND (scope_type='tenant' AND scope_id IS NULL
             OR (scope_type, scope_id) ∈ scope_chain(X))
 4. perms = ∪ role_permissions(role_id of bindings)
+   if P is a service_account authenticated by an API key with scopes:
+       perms = perms ∩ key.scopes            # narrowing only, never a union
 5. grants = resource_grants
      WHERE tenant_id = T AND resource_type = type(X) AND resource_id = id(X)
        AND (principal_type, principal_id) = P
 6. effective = perms ∪ {grant.permission_code for grant in grants}
 7. allowed = requested_permission ∈ effective
 ```
+
+API-key scope rule (frozen): effective key permissions =
+`binding_permissions ∩ key_scopes` when scopes are present, and
+`binding_permissions` unchanged when `scopes IS NULL`. A key with scopes can
+never exceed the bindings of its service account; scopes never widen authority.
 
 Properties:
 
@@ -89,6 +113,26 @@ Examples (tenant A, org X → team Y → resource R):
 | membership suspended | denied (gate 3) |
 | user has no binding, holds a grant on R only | allowed for R, denied for any other resource |
 
+Ownership truth table (frozen). Columns are the binding's scope:
+
+| Resource ownership | Tenant binding | Org X binding | Team Y binding |
+|---|---|---|---|
+| tenant-owned (`org_id NULL, team_id NULL`) | ✓ | – | – |
+| org X (`org_id X, team_id NULL`) | ✓ | ✓ | – |
+| org Z (`org_id Z, team_id NULL`) | ✓ | – | – |
+| team Y (`org_id X, team_id Y`) | ✓ | ✓ | ✓ |
+| team Z (`org_id X, team_id Z`) | ✓ | – | – |
+
+Explicit rule: a team binding does **not** inherit access to
+organization-owned resources where `team_id IS NULL`. An org binding does not
+reach another org's resources, even within the same tenant.
+
+Resource type registry (P1.5): `ResourceGrant`, `AuditEvent.target_type`, and
+the authorization layer accept only `resource_type` values declared in the
+`ResourceTypeRegistry` — each entry maps `resource_type → (model, tenant_owned,
+permission namespace)`. Unknown types are rejected (`UnknownResourceType`);
+declared types are what the RLS generator and the consumer isolation kit use.
+
 ## 4. Anti-escalation rules
 
 Enforced inside `AccessControl`, not per endpoint:
@@ -108,7 +152,17 @@ Enforced inside `AccessControl`, not per endpoint:
    operator; a tenant must always retain at least one active owner (the last
    owner cannot be unbound).
 8. Grants (`resource:share`) require holding the permission being granted, plus
-   `resource:share`.
+   `resource:share`; truth table (executable test):
+
+| Principal holds | Tries to grant | Result |
+|---|---|---|
+| `resource:read`, `resource:share` | `resource:read` | allowed |
+| `resource:read`, `resource:share` | `resource:delete` | `RoleEscalationBlocked` |
+| `resource:delete` | `resource:delete` | denied (missing `resource:share`) |
+| owner (full catalog) | any catalog permission | allowed |
+
+   The same subset rule applies wherever authority is transferred: binding
+   assignment (rule 3), role edits (rule 2), and resource grants (rule 8).
 
 ## 5. Ownership transfer
 
@@ -149,14 +203,31 @@ Levels are code-mapped capability sets; there is no blanket bypass.
 Rules:
 
 - Tenant **administration** is distinct from tenant **data access**.
-- `platform.tenant.access` opens a privileged `TenantContext` with a mandatory
-  `justification` and a TTL (default 30 minutes); every use writes
-  `platform_audit_events` with `context.privileged_used`.
+- `platform.tenant.access` opens a privileged `TenantContext` carrying a
+  `PrivilegeContext` descriptor (`kind='operator'`, capability,
+  `justification`, `actor`, `issued_at`, `expires_at`); the TTL defaults to 30
+  minutes. Creation and every use write `platform_audit_events` with
+  `context.privileged_used`.
 - Tenant data access never inherits tenant permissions: an operator cannot
   approve an invoice unless `platform.tenant.access.write` is held; the action
   is still audited as operator-originated in the tenant `AuditEvent`.
 - Support-level operators can read platform audit but not tenant data.
 - `platform.operator` rows cannot be created or changed except by `admin`.
+
+Authorization layers (frozen — one layer, not both):
+
+```
+Platform operator request
+  1. platform capability check        # authoritative for operator contexts
+  2. privileged TenantContext         # descriptor, TTL, justification, audit
+  3. tenant operation
+```
+
+The tenant PDP is **not consulted for operator contexts**: operators hold no
+`role_bindings`, and the platform layer is the sole authority. Applications that
+want extra restrictions can inspect `ctx.privilege.kind == 'operator'`, but the
+default policy is platform-layer authorization. Non-operator principals use the
+tenant PDP exclusively. No principal is ever authorized by both layers.
 
 ## 7. PDP contract
 

@@ -75,7 +75,9 @@ Statement: cross-tenant reads/writes, operator data access, and system
 operations only occur with a factory-issued privileged context and always emit a
 `PlatformAuditEvent` (and `AuditEvent` when a tenant is in scope).
 
-Enforcement: private constructor + capability token; every privileged context
+Enforcement: private constructor + capability token; a `PrivilegeContext`
+descriptor (`kind`, `capability`, `justification`, `actor`, `issued_at`,
+`expires_at`) is attached to privileged contexts; every privileged context
 creation and use audited; operator tenant-data access is a distinct, time-boxed
 capability with a justification field.
 
@@ -101,13 +103,15 @@ execution; envelope carrying an invented permission field has no effect.
 Statement: caches, queues, object storage keys, search/vector indexes never mix
 tenants.
 
-Enforcement: documented convention and `scoped_key(prefix, *parts)` producing
-`{tenant_id}:{...}`; event envelopes carry tenant identity; extension points
-receive the context.
+Enforcement: documented convention and `scoped_key(namespace, *parts)`
+producing `jdlib:v1:{tenant_id}:{namespace}:{part}:...` where every part is
+RFC 3986 percent-encoded (so separators can never appear inside a part, and
+`("a:b", "c")` cannot collide with `("a", "b:c")`); event envelopes carry tenant
+identity; extension points receive the context.
 
-Tests: `scoped_key` output format; contract tests in `jdlib.testing` that
-consumer cache adapters must pass; events emitted by framework services include
-tenant identity.
+Tests: `scoped_key` output format and collision cases; contract tests in
+`jdlib.testing` that consumer cache adapters must pass; events emitted by
+framework services include tenant identity.
 
 ### I9 — Database-per-tenant still validates tenant context
 
@@ -133,6 +137,24 @@ Tests: a member without `invoice:approve` in the correct tenant is denied; a
 service account without a binding is denied; operator without
 `platform.tenant.access` is denied even though privileged.
 
+### I11 — Polymorphic references are tenant-validated
+
+Statement: every polymorphic reference (`RoleBinding.scope_id`,
+`ResourceGrant.resource_id`, `AuditEvent.target_id`, ownership columns)
+validates three things at write time: the referenced object **exists**, it
+**belongs to `ctx.tenant_id`**, and it is in an **allowed state**
+(not deleted/archived when the reference requires an active target).
+
+Enforcement: `AccessControl` validates through the `ResourceTypeRegistry`
+(resource types) and tenant-plane lookups (org/team scopes); violations raise
+`CrossTenantReferenceError` or `InvalidReference`. Reads treat dangling
+references as invalid and never as allow.
+
+Tests: grant to a resource id from another tenant rejected; binding to a team of
+another tenant rejected; binding/grant to a soft-deleted or archived target
+rejected; unknown `resource_type` rejected by the registry; dangling reference
+created out-of-band is ignored by the PDP and reported by a consistency check.
+
 ## 2. Isolation matrix
 
 | Mechanism | Shared | Schema | Database |
@@ -157,6 +179,8 @@ service account without a binding is denied; operator without
 | Cross-tenant reference in database mode | `CrossTenantReferenceError` from write validation |
 | RLS policy violation (should be unreachable) | DB error surfaced as `CrossTenantReferenceError`; alert, never swallowed |
 | Privileged use without token | `AuthorizationError` |
+| RLS `app.tenant_id` unset or empty | zero rows, zero writes (policy predicate evaluates to NULL → no allow) |
+| Mandatory audit event cannot be durably recorded | operation fails closed (401/403/503 as appropriate for authn/resolution/privileged paths) |
 
 ## 4. Test suite shape
 
@@ -171,9 +195,13 @@ tests/isolation/
 ├── test_context.py        # I1, I5
 ├── test_envelope.py       # I7
 ├── test_external_keys.py  # I8
+├── test_polymorphic.py    # I11 (grants, scopes, dangling references)
 ├── test_strategy_matrix.py# I9; pool-leakage test (A → checkout → B → checkout)
-├── test_authorization.py  # I10 (delegates to 04 matrix)
-└── test_schema_lint.py    # L1–L7
+├── test_pool_eviction.py  # P1.15: never evict a pool with checked-out connections
+├── test_rls_app_tables.py # P0.2: consumer TenantOwned table under RLS; unset setting → zero rows/writes
+├── test_constraints.py    # NULLS NOT DISTINCT bindings; partial uniques; CHECKs; cross-tenant insert
+├── test_authorization.py  # I10 (delegates to the 04 matrix)
+└── test_schema_lint.py    # L1–L14
 ```
 
 Every test in this directory runs unchanged under `{shared, schema, database} ×

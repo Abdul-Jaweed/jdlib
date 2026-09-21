@@ -1,7 +1,7 @@
 # jdlib — Multi-Tenancy Foundation: Design
 
-Date: 2026-09-21 (rev 2: incorporates external design review)
-Status: Approved (design rev 2), pending implementation plan
+Date: 2026-09-21 (rev 3: hardening pass, second external review incorporated)
+Status: Approved (design rev 3), implementation-ready after sign-off
 Package: `jdlib` (Python 3.12+, async-first)
 Detail contracts: `docs/jdlib/02-relational-schema.md`, `03-isolation-invariants.md`,
 `04-authorization-model.md`, `05-tenant-lifecycle.md`, `06-strategy-matrix.md`
@@ -95,11 +95,33 @@ domain-model changes. Strategy is deployment configuration, not business logic.
    explicit filtering in service code) and `TenantSession` (auto-scoped,
    rule-enforced, provided to application code).
 
+### 2.3 Tenant-owned vs tenant-routed
+
+- **Tenant-owned**: the row logically belongs to a tenant (`tenant_id` present,
+  filtered per tenant). Applies to control-plane rows as well.
+- **Tenant-routed**: physical storage is selected by the tenant's placement.
+  Only tenant-plane rows are routed.
+
+`Membership`, `Role`, `RoleBinding`, `ResourceGrant`, `Invitation`, `ApiKey`,
+and `ServiceAccount` are tenant-owned but **not** tenant-routed: they live in
+the control plane, always in one physical place. `Organization`, `Team`,
+`TenantSetting`, `AuditEvent`, and application resources are tenant-owned and
+tenant-routed. `Tenant` itself and platform identity tables are neither owned by
+another tenant nor routed.
+
+### 2.4 What is not a tenant
+
+`User`, `Organization`, `Team`, `ServiceAccount`, `PlatformOperator`, and
+application resources such as `Project` or `Invoice` are **not** tenants. Only
+`Tenant` is the isolation boundary, billing/administration unit, and placement
+owner. No other entity may be given a `tenant_id`; it is either tenant-scoped
+(carries the tenant's `tenant_id` for ownership) or global (no tenant).
+
 ## 3. Control-plane model
 
 | Entity | Why it exists | Identity / constraints |
 |---|---|---|
-| `Tenant` | Customer/account and isolation boundary. Single-tenant mode seeds exactly one. | `PK(id)`, `UNIQUE(slug)`, self-FK `parent_tenant_id` (reserved: delegation only, never data access) |
+| `Tenant` | Customer/account and isolation boundary. Single-tenant mode seeds exactly one. | `PK(id)`, `UNIQUE(slug)`, self-FK `parent_tenant_id` (reserved: delegation only, never data access), `suspended_reason` |
 | `TenantPlacement` | Where this tenant's data lives. The strategy switch. | `PK(tenant_id)`, `strategy ∈ {shared, schema, database}`, `target_handle` (opaque; resolved via secret provider), `region` |
 | `TenantMigrationState` | Per-tenant migration position and health. | `PK(tenant_id)`, `current_version`, `desired_version`, `status` |
 | `User` | One row per human; global so one login serves many tenants. | `PK(id)`, `email` nullable/normalized/partial-unique |
@@ -108,7 +130,7 @@ domain-model changes. Strategy is deployment configuration, not business logic.
 | `ServiceAccount` | Tenant-owned machine principal referenced by bindings and keys. | `PK(tenant_id, id)`, `UNIQUE(tenant_id, name)` |
 | `ApiKey` | Machine credential; verified before tenant resolution. | `PK(tenant_id, id)`, `UNIQUE(key_prefix)`, Argon2id `key_hash`, pinned `(tenant_id, service_account_id)` |
 | `Membership` | User joins tenant; tenant-scoped profile and status. | `PK(tenant_id, id)`, `UNIQUE(tenant_id, user_id)`, `FK(user_id)` |
-| `Invitation` | Onboarding into tenant/org/team with a role. | `PK(tenant_id, id)`, single-use hashed token, `status ∈ {pending, accepted, expired, revoked}` |
+| `Invitation` | Onboarding into tenant/org/team with a role. | `PK(tenant_id, id)`, `UNIQUE(token_id)` lookup + Argon2id `token_hash`, `status ∈ {pending, accepted, expired, revoked}` |
 | `Role` | Named permission bundle; built-ins seeded per tenant, custom allowed. | `PK(tenant_id, id)`, `UNIQUE(tenant_id, name)` |
 | `RolePermission` | Relational composition of a role. | `PK(tenant_id, role_id, permission_code)`, `FK` to `Role`; code validated against catalog |
 | `RoleBinding` | The single authorization link: role → principal at scope. | `PK(tenant_id, id)`, `UNIQUE(tenant_id, role_id, principal_type, principal_id, scope_type, scope_id)`, `principal_type ∈ {user, service_account}`, `scope_type ∈ {tenant, org, team}` |
@@ -142,15 +164,29 @@ Applications define resources with the mixins:
 ### 5.1 Tenant context
 
 `TenantContext(tenant_id, strategy, principal, request_id, correlation_id,
-trace_id, privileged)` in a `contextvars.ContextVar`.
+trace_id, privilege)` in a `contextvars.ContextVar`, where `privilege` is
+`None` for normal contexts or a `PrivilegeContext` descriptor.
 
 - **Created only by the framework's `ContextFactory`**, which performs the full
   authoritative flow: authenticated principal → resolved tenant → membership or
   operator validation → context. The constructor is private.
-- **Privileged contexts require an internal capability token** held by the
-  factory (`operator` after validating `PlatformOperator`; `system` for
-  provisioning/migrations; `test`). Application code cannot obtain one through
-  public API; any privileged context use produces a platform audit event.
+- **Privileged contexts carry a `PrivilegeContext` descriptor**, never a bare
+  boolean:
+
+  ```
+  PrivilegeContext(kind, capability, justification, actor, issued_at, expires_at)
+      kind ∈ {operator, system, test}
+      capability: e.g. platform.tenant.access, platform.tenant.access.write
+      justification: required string (operator kind)
+      expires_at: required TTL (operator kind)
+  ```
+
+  The descriptor is issued by the `ContextFactory` against an internal
+  capability token (`operator` after validating `PlatformOperator` and the
+  requested capability; `system` for provisioning/migrations; `test`).
+  Application code cannot obtain one through public API; creation and every use
+  produce a `PlatformAuditEvent`, and operator descriptors expire.
+  `privileged=True` is never sufficient authorization by itself.
 - **Fail closed:** tenant-plane access without a context raises
   `MissingTenantContext`. There is no default tenant.
 - **Immutable for the session lifetime**: a session is bound to exactly one
@@ -190,8 +226,10 @@ Invitation (pending) → acceptance by an authenticated principal whose verified
 email matches, or whose `(issuer, subject)` is already linked → `Membership` +
 initial `RoleBinding` created atomically in the control plane → audit event.
 Suspension at any level denies access without deleting data (precedence chain in
-04). Invitation tokens are single-use, short-lived, cryptographically random,
-stored hashed, and grant nothing until acceptance.
+04). Invitation tokens use a deterministic lookup id plus an Argon2id
+verification hash (`token_id` + `token_hash`; the raw token is never stored and
+the Argon2id hash is never used as a lookup key), are single-use, short-lived,
+cryptographically random, and grant nothing until acceptance.
 
 ## 6. Isolation architecture
 
@@ -246,12 +284,18 @@ Programmatic Alembic runner distributes the same chain per target; each target
 tracks `alembic_version` locally and the registry tracks
 `TenantMigrationState` (`pending → running → success | failed | blocked`). A
 tenant becomes `active` only after create → migrate → seed → health check →
-invariants pass. Provisioning, migration, seeding, and deprovisioning are
-idempotent or safely resumable; lifecycle operations are serialized per tenant
-with a Postgres advisory lock. RLS is opt-in, shared-schema only: `FORCE ROW
-LEVEL SECURITY`, `NOBYPASSRLS` runtime role, `SET LOCAL app.tenant_id` per
-transaction, and pool-leakage tests. Details: `05-tenant-lifecycle.md`,
-`06-strategy-matrix.md`.
+invariants pass. Servability is a single predicate:
+`tenants.status = 'active' AND migration.status = 'success' AND
+current_version = desired_version`. A migration that fails or becomes blocked
+on an already-active tenant immediately suspends it
+(`suspended_reason = 'migration_failed'`, audited); the operator resolves the
+migration and explicitly resumes. Provisioning, migration, seeding, and
+deprovisioning are idempotent or safely resumable; lifecycle operations are
+serialized per tenant with a Postgres advisory lock. RLS is opt-in,
+shared-schema only: `FORCE ROW LEVEL SECURITY` on every tenant-owned model
+(framework and application), `NOBYPASSRLS` runtime role, fail-closed
+`SET LOCAL app.tenant_id` per transaction, and pool-leakage tests. Details:
+`05-tenant-lifecycle.md`, `06-strategy-matrix.md`.
 
 ### 6.5 Strategy-independent vs strategy-specific
 
@@ -272,8 +316,10 @@ transaction, and pool-leakage tests. Details: `05-tenant-lifecycle.md`,
   existing user → link; else create a user. No unverified email is ever trusted;
   no silent auto-provisioning outside this algorithm.
 - **API keys:** `prefix.keyid.secret`; Argon2id hash at rest; prefix lookup in
-  the control plane (works before tenant resolution); optional narrowing scopes;
-  `last_used_at`; pinned to one tenant and service account; revocable.
+  the control plane (works before tenant resolution); optional scopes **narrow**
+  authority, never expand it: when present, effective key permissions are
+  `binding_permissions ∩ key_scopes`; `last_used_at`; pinned to one tenant and
+  service account; revocable.
 - The package verifies credentials; it never issues passwords or sessions.
 
 ### 7.2 Authorization
@@ -318,7 +364,7 @@ src/jdlib/
 │   ├── settings.py       # TenantSetting
 │   └── audit.py          # AuditEvent
 ├── authn/                # Authenticator protocol · oidc.py · apikey.py
-├── authz/                # permissions.py · scopes.py · pdp.py · guards.py
+├── authz/                # permissions.py · scopes.py · pdp.py · guards.py · resource_types.py
 ├── tenancy/              # resolution.py · middleware.py (ASGI, job/CLI decorators)
 ├── persistence/
 │   ├── session.py        # TenantSession: scoping, stamping, validation, raw_sql
@@ -343,7 +389,9 @@ Public API: `TenancyConfig`, `TenantContext`, `current_tenant`,
 
 Extension points: `IsolationStrategy`, `TenantResolver`, `Authenticator`,
 `PolicyDecisionPoint`, `AuditSink`, `RoleTemplateProvider`,
-`PermissionProvider`, `TenantLifecycleHook`, ORM mixins. Dependencies:
+`PermissionProvider`, `ResourceTypeRegistry` (declares resource types with
+model, tenant ownership, and permission namespace; rejects unknown types in
+grants/audit), `TenantLifecycleHook`, ORM mixins. Dependencies:
 SQLAlchemy 2.0, Pydantic v2 + pydantic-settings, Alembic, PyJWT + httpx,
 argon2-cffi; extras `[fastapi]`, `[postgres]`, `[cli]`.
 
@@ -351,9 +399,11 @@ argon2-cffi; extras `[fastapi]`, `[postgres]`, `[cli]`.
 
 Exception hierarchy (one root): `MissingTenantContext`;
 `TenantNotFound`/`TenantAccessDenied`/`TenantSuspended`; `CrossTenantReferenceError`;
+`InvalidReference`; `UnknownResourceType`; `UnknownPermission`;
 `AuthenticationError` (`InvalidToken`, `ExpiredToken`, `UnknownPrincipal`);
 `AuthorizationError` (`PermissionDenied`, `RoleEscalationBlocked`);
-`StrategyCapabilityError`; `ProvisioningError`/`MigrationError`. HTTP mapping:
+`StrategyCapabilityError`; `PoolCapacityError`; `TenantOperationInProgress`;
+`ProvisioningError`/`MigrationError`. HTTP mapping:
 401 / 403 / 404 / 423 / 409 as before.
 
 Audit splits into **platform audit** (authn failures, resolution failures,
@@ -361,12 +411,25 @@ privileged use, operator actions, lifecycle and migration events; written via
 `AuditSink`, may precede any transaction) and **tenant transactional audit**
 (same transaction as the mutation; actor from context). Both are append-only;
 runtime roles hold `INSERT`/`SELECT` only; retention/export is an `AuditSink`
-extension.
+extension. Events are classified **mandatory** (authn failure, resolution
+failure, privileged context creation and use, access-control changes, lifecycle
+transitions, migration results) or **best-effort** (informational); if a
+mandatory event cannot be durably recorded, the operation fails closed.
+Operator access to tenant data writes **both** a platform event
+(`context.privileged_used`) and a tenant `AuditEvent` with
+`actor_type='platform_operator'`.
+
+Historical actor references (`created_by`, `updated_by`, audit `actor_id`) are
+logical UUIDs to `users`, which are never hard-deleted while referenced:
+resolution returns `deleted_user` for `status='deleted'` rows and
+`unknown_actor(id)` only after an explicit retention purge. Cross-plane FKs are
+never introduced to solve this.
 
 External state (caches, queues, object storage, search/vector stores) is never
-allowed to cross tenants: framework-provided `scoped_key(prefix, *parts)`
-produces `{tenant_id}:{...}` keys, events carry the tenant envelope, and the
-convention is documented as an invariant (I8).
+allowed to cross tenants: framework-provided
+`scoped_key(namespace, *parts)` produces versioned, unambiguous keys
+(`jdlib:v1:{tenant_id}:{namespace}:{percent-encoded part}:...`), events carry the
+tenant envelope, and the convention is documented as an invariant (I8).
 
 ## 10. Testing strategy
 

@@ -25,7 +25,7 @@ The control plane is always a single, unrouted schema with its own pool and
 ```
 resolve tenant (control plane)
   → TenantContext
-  → TenantRegistry.assert_servable(tenant)   # status active + migration success
+  → TenantRegistry.assert_servable(tenant)   # active AND migration success AND current = desired
   → SessionRouter.route(tenant)
        placement.strategy: shared  → control-plane's tenant-plane engine (default handle)
                            schema → engine + SET search_path TO <validated handle>
@@ -39,6 +39,10 @@ resolve tenant (control plane)
   (default: 64) and LRU eviction of idle pools. A hybrid deployment with many
   dedicated tenants cannot exhaust connections silently; cap exhaustion raises
   `PoolCapacityError`.
+- Eviction safety: a pool with any checked-out connection is never evicted;
+  eviction only closes fully idle pools. When the cap is reached and every
+  candidate has checked-out connections, `PoolCapacityError` is raised instead
+  of closing a live pool (test: checked-out Pool A must survive cap pressure).
 - No strategy ever falls back to another target. Unresolvable placement raises
   `StrategyCapabilityError`.
 
@@ -62,8 +66,9 @@ resolve tenant (control plane)
   quoting (`psycopg.sql.Identifier`), never string interpolation.
 - Application code never sets or reads `search_path`; control-plane sessions use
   schema-qualified metadata and never share a pool with tenant sessions.
-- On checkin, `RESET search_path` to a safe default; even so, correctness does
-  not depend on the reset because checkout always sets it.
+- On checkin, reset `search_path` to the safe default `pg_catalog` (never
+  `"$user", public`); even so, correctness does not depend on the reset because
+  checkout always sets the tenant schema first.
 - Migration distribution: run the tenant-plane chain once per schema, bounded
   concurrency (default 4) to protect the primary; each schema keeps its own
   `alembic_version`.
@@ -87,28 +92,37 @@ resolve tenant (control plane)
 
 - Enabled by config `rls: on`; requesting it with `schema`/`database` placement
   raises `StrategyCapabilityError` at startup.
-- Per tenant-scoped tenant-plane table:
+- Coverage contract: **every `TenantOwned` model is RLS-eligible — framework
+  tables and application tables alike**. `jdlib.migrations.rls` exposes
+  `emit_rls_policies(metadata)` so consumer Alembic envs generate the same
+  policy for their resources instead of hand-writing SQL. Metadata lint L13
+  fails the build if any `TenantOwned` table lacks a policy when RLS is enabled.
+- Per table:
 
 ```sql
 ALTER TABLE t ENABLE ROW LEVEL SECURITY;
 ALTER TABLE t FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON t
-  USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
-  WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+  USING (
+    tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+  )
+  WITH CHECK (
+    tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+  );
 ```
 
+- Fail-closed predicate: when `app.tenant_id` is unset (or empty), `NULLIF`
+  yields NULL, the comparison yields NULL, and the policy permits nothing —
+  zero rows, zero writes. There is no SQL construct in the policy that can turn
+  an unset setting into an allow.
 - Runtime role: `NOBYPASSRLS`, not the table owner, not superuser; migrations run
   under a separate owner role. Startup self-check verifies the runtime role
   cannot bypass RLS and fails closed if it can.
 - Every transaction begins with `SET LOCAL app.tenant_id = '<uuid>'` (transaction
-  scoped, never `SET`); the value comes from `TenantContext`, and
-  `current_setting(..., true)` returning NULL denies everything (fail closed).
-- Pool-leakage test: run tenant A transaction, force connection return to pool,
-  run tenant B transaction on the same pooled connection, assert B never sees A
-  and A's setting never survives. The same test covers `search_path` in `schema`
-  mode.
-- RLS is defense in depth: I1–I2 tests pass with RLS off, and the RLS matrix runs
-  the same suite with it on.
+  scoped, never `SET`); the value comes from `TenantContext`.
+- Tests: pool-leakage (A → checkout → B → checkout), unset setting (zero
+  rows/writes), consumer `TenantOwned` table (tenant B invoice invisible to
+  tenant A with RLS on), and the full I1–I2 suite with RLS on and off.
 
 ## 7. Hybrid placement
 
@@ -141,8 +155,10 @@ tenants: acme → shared      globex → schema t_globex     initech → databas
 | Unknown strategy value | startup config validation error |
 | Missing/unresolvable `target_handle` | `StrategyCapabilityError`, no fallback |
 | Pool cap exceeded | `PoolCapacityError`, bounded latency, alert |
+| Eviction candidate has checked-out connections | never evicted; `PoolCapacityError` under pressure |
 | Schema missing after placement exists | `StrategyCapabilityError`; reprovision is idempotent |
-| `alembic_version` ≠ desired | migration state `failed`/`blocked`; health gate refuses activation |
+| `alembic_version` ≠ desired | migration state `failed`/`blocked`; tenant suspended, never served on mismatch |
 | RLS requested but role can bypass | startup self-check fails closed |
+| RLS enabled and a `TenantOwned` table lacks a policy | metadata lint L13 fails the build; no partial RLS deployment |
 | RLS session setting missing | queries return zero rows (fail closed), never all rows |
 | search_path not applied | queries fail with missing relation, never cross-schema read |
