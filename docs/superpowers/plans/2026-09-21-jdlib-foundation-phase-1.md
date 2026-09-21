@@ -115,6 +115,8 @@ dist/
 build/
 *.egg-info/
 .env
+.worktrees/
+.superpowers/
 ```
 
 `.github/workflows/ci.yml`:
@@ -1057,7 +1059,7 @@ class TenantRelocation(ControlBase):
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `python -m pytest tests/integration/test_registry_models.py -v`
-Expected: PASS (9 passed)
+Expected: PASS (8 passed)
 
 - [ ] **Step 7: Lint, type check, commit**
 
