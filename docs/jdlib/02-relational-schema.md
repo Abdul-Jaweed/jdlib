@@ -141,10 +141,16 @@ completed              → terminal
 Serving gate: the tenant is **not servable** during `copying`, `verifying`,
 `flipping`, and `post_flip_verification` (application traffic and writes are
 blocked before the snapshot is taken and remain blocked until verification
-succeeds). The old target is never deprovisioned before `completed`; `flipping`
-is a single transaction that updates `tenant_placements` and sets
-`post_flip_verification`; because no application writes can occur after the
-flip, rollback to the old placement cannot lose data.
+succeeds). Write fence: the same phases block **every** tenant-plane mutation at
+the infrastructure level (`assert_writable` checked by `TenantSession`,
+`UnitOfWork`, and tenant job execution) for all writer classes — HTTP, background
+jobs, queue consumers, CLI, service-to-service, and privileged tenant writes.
+Only explicitly authorized relocation-control operations (system context with
+the relocation-manage capability) bypass the fence. The old target is never
+deprovisioned before `completed`; `flipping` is a single transaction that
+updates `tenant_placements` and sets `post_flip_verification`; because no
+application writes can occur after the flip, rollback to the old placement
+cannot lose data.
 
 ### 3.3 `tenant_migration_states`
 

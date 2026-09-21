@@ -157,6 +157,7 @@ tenants: acme → shared      globex → schema t_globex     initech → databas
 | Condition | Behavior |
 |---|---|
 | Tenant not servable (`provisioning`, `suspended`, migration gate, relocation critical phase) | `TenantSuspended` / 404 semantics before routing |
+| Tenant-plane mutation during relocation critical phase (any writer class) | `TenantNotWritable` (423); relocation-control operations exempt |
 | Unknown strategy value | startup config validation error |
 | Missing/unresolvable `target_handle` | `StrategyCapabilityError`, no fallback |
 | Pool cap exceeded | `PoolCapacityError`, bounded latency, alert |

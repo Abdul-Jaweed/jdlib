@@ -344,15 +344,24 @@ class RawSqlValidator:   # persistence/rawsql.py
   `TENANT_BOUND` allows **SELECT, INSERT, UPDATE, DELETE** and rejects DDL,
   multiple statements, dynamic SQL, CTEs, transaction control
   (`BEGIN`/`COMMIT`/`ROLLBACK`), `SET`, `COPY`, and administrative commands.
-  It must *semantically prove* tenant boundedness, not string-match: every
-  referenced relation must resolve to a registered `TenantRouted` table for the
-  active target (no control-plane or foreign-schema references, no
-  table-valued functions), the WHERE clause must be an AND-conjunction, and
-  every relation must carry a conjunct `<relation>.tenant_id = $n` where bind
-  `$n` holds the context tenant id; `INSERT` must bind `tenant_id` explicitly.
-  `OR`, `NOT`, or nested boolean wrappers around the tenant predicate are
-  rejected (`WHERE tenant_id = $1 OR TRUE` cannot pass). Anything unprovable
-  raises `UnscopedRawSql`.
+  It must *semantically prove* tenant boundedness, not string-match, per
+  statement:
+
+  | Statement | Required proof |
+  |---|---|
+  | `SELECT` | every referenced tenant-routed relation (each join side included) has `tenant_id = $n` in the AND-conjunction |
+  | `UPDATE` | target relation has `tenant_id = $n` in the WHERE AND-conjunction |
+  | `DELETE` | target relation has `tenant_id = $n` in the WHERE AND-conjunction |
+  | `INSERT` | `tenant_id` explicitly supplied and its bound value `$n` proven equal to the context tenant id; `INSERT ... SELECT` sources must also be bounded |
+
+  Relations are resolved through authoritative metadata / the
+  `ResourceTypeRegistry`, never by table-name inference: known `TenantRouted`
+  relation → predicate validation; known control-plane/non-tenant relation →
+  rejected in `TENANT_BOUND`; unknown relation → rejected. No control-plane or
+  foreign-schema references, no table-valued functions. The WHERE clause must be
+  an AND-conjunction; `OR`, `NOT`, or nested boolean wrappers around the tenant
+  predicate are rejected (`WHERE tenant_id = $1 OR TRUE` cannot pass). Anything
+  unprovable raises `UnscopedRawSql`.
 
   `PRIVILEGED` requires an explicit capability: `tenant.raw_sql` (current
   tenant only; tenant-predicate proof waived, structural rejects still apply)
@@ -478,6 +487,27 @@ middleware, and migration runner, and it includes relocation state —
 serving`. Relocation permits serving in `pending` and `provisioning`, and
 blocks it in `copying`, `verifying`, `flipping`, and
 `post_flip_verification`. No adapter reimplements this predicate.
+
+Write fence (separate concept, same registry):
+
+```python
+class ServingState(StrEnum):
+    SERVABLE = "servable"; READ_ONLY = "read_only"
+    QUIESCING = "quiescing"; NOT_SERVABLE = "not_servable"
+
+class WriteFence(Protocol):     # implemented by TenantRegistry
+    async def assert_writable(self, tenant_id: uuid.UUID) -> None: ...   # TenantNotWritable
+```
+
+`assert_writable()` is checked at session/transaction admission by
+`TenantSession`, `UnitOfWork.begin()`, and `@tenant_job` execution — never by
+HTTP middleware alone — so background jobs, queue consumers, CLI commands,
+service-to-service calls, and privileged tenant writes are all fenced during the
+relocation critical phases. Only relocation-control operations (system context
+with the `relocation.manage` capability) bypass it. `servable → writable` today;
+the split exists so a future read-only state needs no redesign. Drain after the
+fence is bounded by `relocation_drain_grace` (default 2× maximum transaction
+duration), and the snapshot starts only after the drain bound elapses.
 
 ## 9. Authentication
 

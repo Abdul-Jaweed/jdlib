@@ -169,28 +169,46 @@ a `tenant_relocations` row (control plane, `02` section 3.3.1). The placement
 row is updated exactly once, at the atomic flip.
 
 ```
-1. create TenantRelocation(status=pending)      # from_* captured from current placement
-2. provision destination target; status=provisioning
-3. enter copying: serving gate closes for the tenant (application traffic and
-   writes blocked); wait for in-flight request/session drain
-4. copy data (logical export/import or logical replication); status=copying
-5. verify destination: row counts, migration version, seed invariants, health
+1. acquire tenant lifecycle/relocation lock
+2. create TenantRelocation(status=pending)      # from_* captured from current placement
+3. provision destination target; status=provisioning
+4. quiesce: status flips to copying in one transaction with the write-fence
+   transition
+   a. assert_servable → false (new HTTP traffic rejected)
+   b. assert_writable → false (every tenant-plane mutation rejected: HTTP,
+      jobs, queues, CLI, service-to-service, privileged tenant writes)
+   c. drain: wait for all pre-existing tenant transactions to finish
+      (bounded by the configured maximum transaction duration + grace)
+5. snapshot + copy data (logical export/import or logical replication)
+6. verify destination: row counts, migration version, seed invariants, health
    checks; status=verifying        (failure → failed, placement untouched)
-6. flip (single transaction): update tenant_placements to to_* + status=flipping
+7. flip (single transaction): update tenant_placements to to_* + status=flipping
    → post_flip_verification
-7. post-flip health check on the new target (servability predicate + smoke query)
-   while serving stays blocked
-   ├── success → status=completed; serving restored; deprovision old target
+8. post-flip health check on the new target while serving/writes stay blocked
+   ├── success → status=completed; restore serving; deprovision old target
    └── failure → rollback: restore tenant_placements to from_* in one transaction;
-                 status=rolled_back; serving stays blocked; retain BOTH targets
-8. audit events at each phase (section 6.1)
+                 status=rolled_back; serving/writes stay blocked; retain BOTH targets
+9. audit events at each phase (section 6.1)
 ```
 
-Serving gate (frozen): the tenant is non-servable during `copying`, `verifying`,
-`flipping`, and `post_flip_verification`. This is part of the single servability
-predicate (`TenantRegistry.assert_servable`), not a separate check in routing
-code. No application writes can reach either target after the snapshot is taken,
-so a rollback after post-flip failure cannot lose or fork writes.
+Critical invariant: the snapshot begins only after **all pre-existing tenant
+writes have completed and new writes are rejected**. The write fence is checked
+at session/transaction start by `TenantSession`, `UnitOfWork`, and tenant job
+execution — HTTP middleware is never the only enforcement point. Drain is
+bounded: after the fence is set, the relocation runner waits
+`relocation_drain_grace` (config; default 2× the configured maximum transaction
+duration), so any transaction admitted before the fence must have committed or
+aborted. Long-running tenant transactions are therefore bounded by
+configuration; exceeding the bound fails the relocation rather than risking a
+late write.
+
+Serving gate vs write fence (separate concepts, both in `TenantRegistry`):
+`assert_servable()` answers "may this tenant receive normal application
+traffic?" and `assert_writable()` answers "may this tenant receive a mutation
+right now?". They coincide today (`servable → writable`), and are split so a
+future read-only operational state (`servable=true, writable=false`) needs no
+redesign. Relocation control operations run under a system context with the
+relocation-manage capability and bypass the fence explicitly.
 
 Phase transitions are the table in `02` section 3.3.1; invalid transitions raise
 `RelocationPhaseError`, and `failed`/`rolled_back` retry is an explicit
@@ -234,7 +252,16 @@ Relocation test names (frozen): `test_relocation_blocks_application_traffic`;
 `test_relocation_post_flip_failure_rolls_back`;
 `test_relocation_old_target_retained_until_verification`;
 `test_relocation_cannot_run_concurrently`;
-`test_relocation_is_idempotent`.
+`test_relocation_is_idempotent`;
+`test_relocation_blocks_http_writes`;
+`test_relocation_blocks_background_job_writes`;
+`test_relocation_blocks_service_to_service_writes`;
+`test_relocation_blocks_cli_tenant_writes`;
+`test_relocation_blocks_privileged_tenant_writes`;
+`test_relocation_allows_relocation_control_operations`;
+`test_no_write_can_occur_after_relocation_snapshot` (racing writer admitted
+before the fence must commit before snapshot; a writer arriving after the fence
+is rejected).
 
 ## 7. Secret and target resolution
 

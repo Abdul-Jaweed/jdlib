@@ -1,7 +1,7 @@
 # jdlib — Multi-Tenancy Foundation: Design
 
-Date: 2026-09-21 (rev 6: relocation serving gate, raw-SQL SELECT/semantic proof, scope-compat fix, single servability predicate)
-Status: Approved (design rev 6), implementation-ready after sign-off
+Date: 2026-09-21 (rev 7: infrastructure write fence, per-statement raw-SQL semantics, relation resolution)
+Status: Approved (design rev 7), architecture frozen — proceeding to implementation plan
 Package: `jdlib` (Python 3.12+, async-first)
 Detail contracts: `docs/jdlib/02-relational-schema.md`, `03-isolation-invariants.md`,
 `04-authorization-model.md`, `05-tenant-lifecycle.md`, `06-strategy-matrix.md`,
@@ -296,7 +296,12 @@ invariants pass. Servability is a single predicate:
 current_version = desired_version AND relocation permits serving` (relocation
 blocks serving during `copying`, `verifying`, `flipping`,
 `post_flip_verification`; `TenantRegistry.assert_servable` is the only
-implementation of this predicate). A migration that fails or becomes blocked
+implementation of this predicate). Serving is not writability: a separate
+infrastructure-level write fence (`TenantRegistry.assert_writable`, enforced by
+`TenantSession`, `UnitOfWork`, and tenant job execution — never by HTTP
+middleware alone) blocks **every** tenant-plane mutation during those phases,
+including background jobs, queue consumers, CLI operations, service-to-service
+calls, and privileged tenant writes. A migration that fails or becomes blocked
 on an already-active tenant immediately suspends it
 (`suspended_reason = 'migration_failed'`, audited); the operator resolves the
 migration and explicitly resumes. Provisioning, migration, seeding, and
@@ -415,7 +420,8 @@ argon2-cffi, pglast (structural validation of raw SQL); extras `[fastapi]`,
 ## 9. Errors, auditing, external state
 
 Exception hierarchy (one root): `MissingTenantContext`;
-`TenantNotFound`/`TenantAccessDenied`/`TenantSuspended`; `CrossTenantReferenceError`;
+`TenantNotFound`/`TenantAccessDenied`/`TenantSuspended`/`TenantNotWritable`;
+`CrossTenantReferenceError`;
 `InvalidReference`; `InvalidResourcePermission`; `UnknownResourceType`;
 `UnknownPermission`; `RoleScopeMismatch`;
 `AuthenticationError` (`InvalidToken`, `ExpiredToken`, `UnknownPrincipal`);

@@ -177,6 +177,21 @@ Tests: `test_resource_team_same_tenant`; `test_resource_team_same_organization`;
 Statement: raw SQL either proves tenant-boundedness structurally or is rejected;
 cross-tenant/system raw SQL requires a `PrivilegeContext` and mandatory audit.
 
+Per-statement contract (frozen):
+
+| Statement | Required proof |
+|---|---|
+| `SELECT` | every referenced tenant-routed relation has `tenant_id = $n` in the AND-conjunction (joins included; each relation bounded separately) |
+| `UPDATE` | target relation has `tenant_id = $n` in the WHERE AND-conjunction |
+| `DELETE` | target relation has `tenant_id = $n` in the WHERE AND-conjunction |
+| `INSERT` | `tenant_id` is explicitly supplied in the column list and its bound value `$n` is proven equal to `TenantContext.tenant_id`; `INSERT ... SELECT` additionally requires every source relation to be bounded |
+
+Relation resolution (frozen): the validator resolves each SQL relation to a
+model through authoritative metadata / `ResourceTypeRegistry` — never by table
+name inference. Known `TenantRouted` relation → tenant-predicate validation;
+known control-plane or non-tenant relation → rejected in `TENANT_BOUND` (allowed
+only under `platform.raw_sql`); unknown relation → rejected.
+
 Enforcement: `RawSqlValidator` in `TENANT_BOUND` mode validates **compiled
 PostgreSQL SQL** (SQLAlchemy statement → PostgreSQL dialect compilation → SQL
 text + positional bind metadata) with a real parser (`pglast`), and must
@@ -202,6 +217,10 @@ Tests: `test_raw_sql_requires_scope`;
 `test_raw_sql_nested_boolean_predicate_rejected`;
 `test_raw_sql_parameter_binding_is_tenant_bound`;
 `test_raw_sql_compiles_before_pglast_validation`;
+`test_raw_sql_insert_tenant_value_must_match_context`;
+`test_raw_sql_unknown_relation_rejected`;
+`test_raw_sql_control_plane_relation_rejected_in_tenant_bound`;
+`test_raw_sql_relation_resolved_from_registry`;
 `test_raw_sql_cte_cannot_bypass_tenant_scope`;
 `test_raw_sql_subquery_cannot_bypass_tenant_scope`;
 `test_raw_sql_schema_escape_rejected`;
@@ -230,6 +249,7 @@ Tests: `test_raw_sql_requires_scope`;
 | Unknown tenant | 404 to caller; `platform_audit_events` reason |
 | Known tenant, principal not a member | 404 to caller; audit reason |
 | Suspended tenant / membership / user | `TenantSuspended` (423) or `TenantAccessDenied`; disclosed only to entitled principals, 404 to strangers |
+| Tenant-plane mutation during relocation critical phase | `TenantNotWritable` (423); relocation-control operations with the `relocation.manage` capability are exempt |
 | Cross-tenant FK in shared/schema mode | DB integrity error mapped to `CrossTenantReferenceError` (409) |
 | Cross-tenant reference in database mode | `CrossTenantReferenceError` from write validation |
 | RLS policy violation (should be unreachable) | DB error surfaced as `CrossTenantReferenceError`; alert, never swallowed |
@@ -253,7 +273,7 @@ tests/isolation/
 ├── test_ownership.py      # I12 (team/org/tenant hierarchy consistency)
 ├── test_api_key_scopes.py # scopes limit bindings and grants; never widen; NULL scopes preserve authority
 ├── test_raw_sql.py        # I2, I6: tenant-bound vs privileged vs rejected; CTE/subquery/schema escapes
-├── test_relocation.py     # operation record, quiesced traffic during critical phases, preserved placement until flip, rollback cannot lose writes, concurrency, idempotency
+├── test_relocation.py     # operation record, quiesced traffic/writes across ALL writer classes (HTTP/jobs/queues/CLI/service/privileged), snapshot-after-drain, preserved placement until flip, rollback cannot lose writes, concurrency, idempotency
 ├── test_model_classification.py # L17–L19 (TenantRouted mandate on both planes)
 ├── test_audit.py          # transactional audit rollback; mandatory platform audit failure; best-effort behavior
 ├── test_pdp_cache.py      # request-scoped decisions invalidated after authorization mutations
