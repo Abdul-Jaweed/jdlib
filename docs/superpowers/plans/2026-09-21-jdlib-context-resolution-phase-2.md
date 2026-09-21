@@ -1497,7 +1497,6 @@ import pytest
 
 from jdlib.config import ContextConfig
 from jdlib.context import (
-    ContextPropagator,
     EnvelopeCodec,
     Principal,
     PrincipalKind,
@@ -1513,7 +1512,7 @@ from jdlib.errors import (
     TenantSuspended,
     UnknownPrincipal,
 )
-from jdlib.tenancy.jobs import tenant_job
+from jdlib.tenancy.jobs import ContextPropagator, tenant_job
 from tests.support.context_fakes import (
     DictTenants,
     EntitlementsStub,
@@ -1640,7 +1639,6 @@ from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
 from jdlib.context import (
-    ContextFactory,
     EnvelopeCodec,
     EntitlementChecker,
     Principal,
