@@ -1325,8 +1325,8 @@ import uuid
 
 import pytest
 
-from jdlib.context import Principal, TenantContext
-from jdlib.control.enums import PlacementStrategy, PrincipalKind
+from jdlib.context import Principal, PrincipalKind, TenantContext
+from jdlib.control.enums import PlacementStrategy
 from jdlib.errors import TenantNotWritable
 from jdlib.persistence.uow import UnitOfWork
 
@@ -1407,7 +1407,7 @@ async def test_rollback_on_exception(monkeypatch):
         "jdlib.persistence.uow.TenantSession", lambda session, context, **kw: session
     )
     with pytest.raises(RuntimeError):
-        async with UnitOfWork(factory, _context(), fence=_Fence()) as session:
+        async with UnitOfWork(factory, _context(), fence=_Fence()) as _session:
             raise RuntimeError("boom")
     assert factory.sessions[0].rolled_back is True
     assert factory.sessions[0].committed is False
