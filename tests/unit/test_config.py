@@ -1,7 +1,7 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from jdlib.config import ContextConfig, ResolverName, TenancyConfig
+from jdlib.config import ContextConfig, ResolverConfig, ResolverName, TenancyConfig
 
 
 def test_signing_key_is_required():
@@ -35,6 +35,14 @@ def test_env_parsing(monkeypatch):
     assert config.context.signing_key.get_secret_value() == "env-key"
     assert config.resolvers.order == [ResolverName.HEADER, ResolverName.PATH]
     assert config.resolvers.base_domain == "app.example.com"
+
+
+def test_path_prefix_must_be_non_empty_and_absolute():
+    with pytest.raises(ValidationError):
+        ResolverConfig(path_prefix="")
+    with pytest.raises(ValidationError):
+        ResolverConfig(path_prefix="t/")
+    assert ResolverConfig(path_prefix="/tenants/").path_prefix == "/tenants/"
 
 
 def test_secret_is_not_leaked_in_repr():

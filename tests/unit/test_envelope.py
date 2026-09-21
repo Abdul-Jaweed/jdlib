@@ -1,7 +1,7 @@
 import base64
 import json
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -89,3 +89,20 @@ def test_future_envelope_rejected():
 def test_malformed_token_rejected():
     with pytest.raises(InvalidToken):
         _codec().decode("not-a-token")
+
+
+def test_naive_issued_at_is_invalid_token_not_type_error():
+    naive_codec = EnvelopeCodec(
+        config=ContextConfig(signing_key="sign-key"),
+        clock=FrozenClock(now=datetime(2026, 1, 1)),
+    )
+    token = naive_codec.encode(_context())
+    with pytest.raises(InvalidToken):
+        _codec().decode(token)
+
+
+def test_junk_payload_segment_rejected():
+    codec = _codec()
+    _, signature = codec.encode(_context()).split(".")
+    with pytest.raises(InvalidToken):
+        codec.decode(f"!!!.{signature}")

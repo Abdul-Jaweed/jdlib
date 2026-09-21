@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
@@ -69,7 +70,7 @@ def _request_ids(headers: Mapping[str, str]) -> tuple[str, str, str | None]:
     traceparent = headers.get("traceparent")
     if traceparent:
         parts = traceparent.split("-")
-        if len(parts) >= 4 and len(parts[1]) == 32:
+        if len(parts) >= 4 and re.fullmatch(r"[0-9a-f]{32}", parts[1]):
             trace_id = parts[1]
     return request_id, correlation_id, trace_id
 
@@ -81,7 +82,10 @@ async def _send_error(send: Callable[..., Awaitable[None]], exc: JdlibError) -> 
         {
             "type": "http.response.start",
             "status": status,
-            "headers": [(b"content-type", b"application/json")],
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
         }
     )
     await send({"type": "http.response.body", "body": body})

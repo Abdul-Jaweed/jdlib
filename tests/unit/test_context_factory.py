@@ -196,31 +196,58 @@ async def test_for_operator_accepts_ttl_at_maximum():
     assert context.privilege.expires_at - context.privilege.issued_at == timedelta(minutes=30)
 
 
-def test_for_system_requires_issuer_capability():
-    factory, _ = _factory()
+async def test_for_system_requires_issuer_capability():
+    factory, audit = _factory()
     with pytest.raises(AuthorizationError):
-        factory.for_system(_record(), purpose="migration", issuer=object())  # type: ignore[arg-type]
+        await factory.for_system(
+            _record(),
+            purpose="migration",
+            issuer=object(),  # type: ignore[arg-type]
+        )
     from jdlib.context import PRIVILEGE_ISSUER
 
-    context = factory.for_system(_record(), purpose="migration", issuer=PRIVILEGE_ISSUER)
+    context = await factory.for_system(_record(), purpose="migration", issuer=PRIVILEGE_ISSUER)
     assert context.privilege is not None
     assert context.privilege.kind is PrivilegeKind.SYSTEM
     assert context.privilege.capability == "migration"
+    assert audit.records == [
+        {
+            "kind": PrivilegeKind.SYSTEM,
+            "capability": "migration",
+            "justification": None,
+            "actor_id": context.privilege.actor.id,
+            "tenant_id": TENANT_ID,
+        }
+    ]
 
 
-def test_for_test_is_gated_by_config():
-    factory, _ = _factory()
+async def test_for_test_is_gated_by_config():
+    factory, audit = _factory()
     from jdlib.context import PRIVILEGE_ISSUER
 
     with pytest.raises(AuthorizationError):
-        factory.for_test(_record(), principal=_user(), issuer=PRIVILEGE_ISSUER)
-    factory, _ = _factory(allow_test=True)
-    context = factory.for_test(_record(), principal=_user(), issuer=PRIVILEGE_ISSUER)
+        await factory.for_test(_record(), principal=_user(), issuer=PRIVILEGE_ISSUER)
+    assert audit.records == []
+    factory, audit = _factory(allow_test=True)
+    context = await factory.for_test(_record(), principal=_user(), issuer=PRIVILEGE_ISSUER)
     assert context.privilege is not None
     assert context.privilege.kind is PrivilegeKind.TEST
+    assert audit.records == [
+        {
+            "kind": PrivilegeKind.TEST,
+            "capability": None,
+            "justification": None,
+            "actor_id": USER_ID,
+            "tenant_id": TENANT_ID,
+        }
+    ]
 
 
-def test_for_test_rejects_non_issuer():
+async def test_for_test_rejects_non_issuer():
     factory, _ = _factory(allow_test=True)
     with pytest.raises(AuthorizationError):
-        factory.for_test(_record(), principal=_user(), issuer=object())  # type: ignore[arg-type]
+        await factory.for_test(
+            _record(),
+            principal=_user(),
+            issuer=object(),  # type: ignore[arg-type]
+        )

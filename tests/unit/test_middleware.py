@@ -50,7 +50,12 @@ class _Provider:
 
 
 def _middleware(
-    provider: PrincipalProvider, inner, *, active: set[uuid.UUID] | None = None
+    provider: PrincipalProvider,
+    inner,
+    *,
+    active: set[uuid.UUID] | None = None,
+    suspended: set[uuid.UUID] | None = None,
+    allowed: set[tuple[uuid.UUID, uuid.UUID]] | None = None,
 ) -> TenantMiddleware:
     factory = ContextFactory(
         config=ContextConfig(signing_key="k"),
@@ -65,8 +70,10 @@ def _middleware(
                 )
             ]
         ),
-        servability=ServabilityStub(),
-        entitlements=EntitlementsStub({(USER_ID, TENANT_ID)}),
+        servability=ServabilityStub(suspended),
+        entitlements=EntitlementsStub(
+            allowed if allowed is not None else {(USER_ID, TENANT_ID)}
+        ),
         operators=OperatorsStub(),
         audit=RecordingPrivilegeAudit(),
         clock=FrozenClock(),
@@ -127,6 +134,8 @@ async def test_missing_principal_is_401():
     result = await _run(middleware, [(b"x-tenant-slug", b"acme")])
     assert result["status"] == 401
     assert json.loads(result["body"])["error"] == "AuthenticationError"
+    start = next(m for m in result["sent"] if m["type"] == "http.response.start")
+    assert dict(start["headers"])[b"content-length"] == str(len(result["body"])).encode()
 
 
 async def test_unresolved_tenant_is_404():
@@ -148,6 +157,38 @@ async def test_denied_principal_is_404():
     )
     result = await _run(middleware, [(b"x-tenant-slug", b"acme")])
     assert result["status"] == 404
+
+
+async def test_unentitled_principal_on_suspended_tenant_is_404_not_423():
+    async def inner(scope, receive, send):
+        raise AssertionError("must not run")
+
+    middleware = _middleware(
+        _Provider(Principal(kind=PrincipalKind.USER, id=USER_ID)),
+        inner,
+        suspended={TENANT_ID},
+        allowed=set(),
+    )
+    result = await _run(middleware, [(b"x-tenant-slug", b"acme")])
+    assert result["status"] == 404
+    assert json.loads(result["body"])["error"] == "TenantAccessDenied"
+
+
+async def test_non_hex_traceparent_trace_id_is_ignored():
+    seen: list[str | None] = []
+
+    async def inner(scope, receive, send):
+        from jdlib.context import current_tenant
+
+        seen.append(current_tenant().trace_id)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    middleware = _middleware(_Provider(Principal(kind=PrincipalKind.USER, id=USER_ID)), inner)
+    traceparent = b"00-0123456789abcdefghijklmnopqrstuv-0123456789abcdef-01"
+    result = await _run(middleware, [(b"x-tenant-slug", b"acme"), (b"traceparent", traceparent)])
+    assert result["status"] == 200
+    assert seen == [None]
 
 
 async def test_context_is_cleared_after_request():

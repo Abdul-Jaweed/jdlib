@@ -231,9 +231,9 @@ class ContextFactory:
         if not await self._principals.is_active(principal):
             raise UnknownPrincipal(str(principal.id))
         record = await self._resolve_tenant(tenant_ref)
-        await self._servability.assert_servable(record.id)
         if not await self._entitlements.can_act(principal, record.id):
             raise TenantAccessDenied(f"principal {principal.id} cannot act in {record.id}")
+        await self._servability.assert_servable(record.id)
         return self._build(
             record,
             principal,
@@ -293,7 +293,7 @@ class ContextFactory:
             privilege=privilege,
         )
 
-    def for_system(
+    async def for_system(
         self,
         tenant: TenantRecord,
         *,
@@ -311,6 +311,13 @@ class ContextFactory:
             issued_at=now,
             expires_at=None,
         )
+        await self._audit.record_privilege(
+            kind=PrivilegeKind.SYSTEM,
+            capability=purpose or None,
+            justification=None,
+            actor=privilege.actor,
+            tenant_id=tenant.id,
+        )
         return self._build(
             tenant,
             privilege.actor,
@@ -320,7 +327,7 @@ class ContextFactory:
             privilege=privilege,
         )
 
-    def for_test(
+    async def for_test(
         self,
         tenant: TenantRecord,
         *,
@@ -339,6 +346,13 @@ class ContextFactory:
             actor=principal,
             issued_at=now,
             expires_at=None,
+        )
+        await self._audit.record_privilege(
+            kind=PrivilegeKind.TEST,
+            capability=None,
+            justification=None,
+            actor=principal,
+            tenant_id=tenant.id,
         )
         return self._build(
             tenant,
@@ -402,17 +416,17 @@ class EnvelopeCodec:
                 principal_id=uuid.UUID(payload["principal_id"]),
                 request_id=str(payload["request_id"]),
                 correlation_id=str(payload["correlation_id"]),
-                trace_id=payload["trace_id"],
+                trace_id=str(payload["trace_id"]) if payload["trace_id"] is not None else None,
                 issued_at=issued_at,
                 signature=signature,
             )
-        except (KeyError, ValueError, TypeError) as exc:
+            now = self._clock.now()
+            if issued_at - now > timedelta(seconds=60):
+                raise InvalidToken("envelope issued in the future")
+            if now - issued_at > self._ttl:
+                raise ExpiredToken("envelope expired")
+        except (KeyError, ValueError, TypeError, AttributeError) as exc:
             raise InvalidToken("invalid envelope payload") from exc
-        now = self._clock.now()
-        if issued_at - now > timedelta(seconds=60):
-            raise InvalidToken("envelope issued in the future")
-        if now - issued_at > self._ttl:
-            raise ExpiredToken("envelope expired")
         return envelope
 
 
@@ -421,4 +435,5 @@ def _b64(raw: bytes) -> str:
 
 
 def _unb64(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    padded = value + "=" * (-len(value) % 4)
+    return base64.b64decode(padded, altchars=b"-_", validate=True)

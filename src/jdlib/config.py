@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from enum import StrEnum
 
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +34,13 @@ class ResolverConfig(BaseModel):
     path_prefix: str = "/t/"
     header_name: str = "X-Tenant-Slug"
     jwt_claim: str = "tid"
+
+    @field_validator("path_prefix")
+    @classmethod
+    def _path_prefix_must_be_absolute(cls, value: str) -> str:
+        if not value or not value.startswith("/"):
+            raise ValueError("path_prefix must be a non-empty path starting with '/'")
+        return value
 
 
 class TenancyConfig(BaseSettings):

@@ -12,6 +12,8 @@ _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 
 
 class RequestInfo(NamedTuple):
+    """A request snapshot. Header keys must be lowercase (ASGI convention)."""
+
     headers: Mapping[str, str]
     query: Mapping[str, str]
     path: str

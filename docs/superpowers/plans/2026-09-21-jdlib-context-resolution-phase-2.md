@@ -79,6 +79,14 @@ def test_env_parsing(monkeypatch):
     assert config.resolvers.base_domain == "app.example.com"
 
 
+def test_path_prefix_must_be_non_empty_and_absolute():
+    with pytest.raises(ValidationError):
+        ResolverConfig(path_prefix="")
+    with pytest.raises(ValidationError):
+        ResolverConfig(path_prefix="t/")
+    assert ResolverConfig(path_prefix="/tenants/").path_prefix == "/tenants/"
+
+
 def test_secret_is_not_leaked_in_repr():
     config = TenancyConfig(context=ContextConfig(signing_key="top-secret"))
     assert "top-secret" not in repr(config)
@@ -98,7 +106,7 @@ from __future__ import annotations
 from datetime import timedelta
 from enum import StrEnum
 
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -130,6 +138,13 @@ class ResolverConfig(BaseModel):
     header_name: str = "X-Tenant-Slug"
     jwt_claim: str = "tid"
 
+    @field_validator("path_prefix")
+    @classmethod
+    def _path_prefix_must_be_absolute(cls, value: str) -> str:
+        if not value or not value.startswith("/"):
+            raise ValueError("path_prefix must be a non-empty path starting with '/'")
+        return value
+
 
 class TenancyConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="JDLIB_", env_nested_delimiter="__")
@@ -142,7 +157,7 @@ class TenancyConfig(BaseSettings):
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_config.py -v`
-Expected: PASS (4 passed)
+Expected: PASS (5 passed)
 
 - [ ] **Step 5: Lint, type check, commit**
 
@@ -713,34 +728,61 @@ async def test_for_operator_accepts_ttl_at_maximum():
     assert context.privilege.expires_at - context.privilege.issued_at == timedelta(minutes=30)
 
 
-def test_for_system_requires_issuer_capability():
-    factory, _ = _factory()
+async def test_for_system_requires_issuer_capability():
+    factory, audit = _factory()
     with pytest.raises(AuthorizationError):
-        factory.for_system(_record(), purpose="migration", issuer=object())  # type: ignore[arg-type]
+        await factory.for_system(
+            _record(),
+            purpose="migration",
+            issuer=object(),  # type: ignore[arg-type]
+        )
     from jdlib.context import PRIVILEGE_ISSUER
 
-    context = factory.for_system(_record(), purpose="migration", issuer=PRIVILEGE_ISSUER)
+    context = await factory.for_system(_record(), purpose="migration", issuer=PRIVILEGE_ISSUER)
     assert context.privilege is not None
     assert context.privilege.kind is PrivilegeKind.SYSTEM
     assert context.privilege.capability == "migration"
+    assert audit.records == [
+        {
+            "kind": PrivilegeKind.SYSTEM,
+            "capability": "migration",
+            "justification": None,
+            "actor_id": context.privilege.actor.id,
+            "tenant_id": TENANT_ID,
+        }
+    ]
 
 
-def test_for_test_is_gated_by_config():
-    factory, _ = _factory()
+async def test_for_test_is_gated_by_config():
+    factory, audit = _factory()
     from jdlib.context import PRIVILEGE_ISSUER
 
     with pytest.raises(AuthorizationError):
-        factory.for_test(_record(), principal=_user(), issuer=PRIVILEGE_ISSUER)
-    factory, _ = _factory(allow_test=True)
-    context = factory.for_test(_record(), principal=_user(), issuer=PRIVILEGE_ISSUER)
+        await factory.for_test(_record(), principal=_user(), issuer=PRIVILEGE_ISSUER)
+    assert audit.records == []
+    factory, audit = _factory(allow_test=True)
+    context = await factory.for_test(_record(), principal=_user(), issuer=PRIVILEGE_ISSUER)
     assert context.privilege is not None
     assert context.privilege.kind is PrivilegeKind.TEST
+    assert audit.records == [
+        {
+            "kind": PrivilegeKind.TEST,
+            "capability": None,
+            "justification": None,
+            "actor_id": USER_ID,
+            "tenant_id": TENANT_ID,
+        }
+    ]
 
 
-def test_for_test_rejects_non_issuer():
+async def test_for_test_rejects_non_issuer():
     factory, _ = _factory(allow_test=True)
     with pytest.raises(AuthorizationError):
-        factory.for_test(_record(), principal=_user(), issuer=object())  # type: ignore[arg-type]
+        await factory.for_test(
+            _record(),
+            principal=_user(),
+            issuer=object(),  # type: ignore[arg-type]
+        )
 ```
 
 - [ ] **Step 3: Run tests to verify they fail**
@@ -855,9 +897,9 @@ class ContextFactory:
         if not await self._principals.is_active(principal):
             raise UnknownPrincipal(str(principal.id))
         record = await self._resolve_tenant(tenant_ref)
-        await self._servability.assert_servable(record.id)
         if not await self._entitlements.can_act(principal, record.id):
             raise TenantAccessDenied(f"principal {principal.id} cannot act in {record.id}")
+        await self._servability.assert_servable(record.id)
         return self._build(
             record,
             principal,
@@ -917,7 +959,7 @@ class ContextFactory:
             privilege=privilege,
         )
 
-    def for_system(
+    async def for_system(
         self,
         tenant: TenantRecord,
         *,
@@ -935,6 +977,13 @@ class ContextFactory:
             issued_at=now,
             expires_at=None,
         )
+        await self._audit.record_privilege(
+            kind=PrivilegeKind.SYSTEM,
+            capability=purpose or None,
+            justification=None,
+            actor=privilege.actor,
+            tenant_id=tenant.id,
+        )
         return self._build(
             tenant,
             privilege.actor,
@@ -944,7 +993,7 @@ class ContextFactory:
             privilege=privilege,
         )
 
-    def for_test(
+    async def for_test(
         self,
         tenant: TenantRecord,
         *,
@@ -963,6 +1012,13 @@ class ContextFactory:
             actor=principal,
             issued_at=now,
             expires_at=None,
+        )
+        await self._audit.record_privilege(
+            kind=PrivilegeKind.TEST,
+            capability=None,
+            justification=None,
+            actor=principal,
+            tenant_id=tenant.id,
         )
         return self._build(
             tenant,
@@ -1011,7 +1067,7 @@ git commit -m "feat: context factory with ports and privileged issuance"
 import base64
 import json
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -1099,6 +1155,23 @@ def test_future_envelope_rejected():
 def test_malformed_token_rejected():
     with pytest.raises(InvalidToken):
         _codec().decode("not-a-token")
+
+
+def test_naive_issued_at_is_invalid_token_not_type_error():
+    naive_codec = EnvelopeCodec(
+        config=ContextConfig(signing_key="sign-key"),
+        clock=FrozenClock(now=datetime(2026, 1, 1)),
+    )
+    token = naive_codec.encode(_context())
+    with pytest.raises(InvalidToken):
+        _codec().decode(token)
+
+
+def test_junk_payload_segment_rejected():
+    codec = _codec()
+    _, signature = codec.encode(_context()).split(".")
+    with pytest.raises(InvalidToken):
+        codec.decode(f"!!!.{signature}")
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1163,17 +1236,17 @@ class EnvelopeCodec:
                 principal_id=uuid.UUID(payload["principal_id"]),
                 request_id=str(payload["request_id"]),
                 correlation_id=str(payload["correlation_id"]),
-                trace_id=payload["trace_id"],
+                trace_id=str(payload["trace_id"]) if payload["trace_id"] is not None else None,
                 issued_at=issued_at,
                 signature=signature,
             )
-        except (KeyError, ValueError, TypeError) as exc:
+            now = self._clock.now()
+            if issued_at - now > timedelta(seconds=60):
+                raise InvalidToken("envelope issued in the future")
+            if now - issued_at > self._ttl:
+                raise ExpiredToken("envelope expired")
+        except (KeyError, ValueError, TypeError, AttributeError) as exc:
             raise InvalidToken("invalid envelope payload") from exc
-        now = self._clock.now()
-        if issued_at - now > timedelta(seconds=60):
-            raise InvalidToken("envelope issued in the future")
-        if now - issued_at > self._ttl:
-            raise ExpiredToken("envelope expired")
         return envelope
 
 
@@ -1182,13 +1255,14 @@ def _b64(raw: bytes) -> str:
 
 
 def _unb64(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    padded = value + "=" * (-len(value) % 4)
+    return base64.b64decode(padded, altchars=b"-_", validate=True)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_envelope.py -v`
-Expected: PASS (7 passed)
+Expected: PASS (9 passed)
 
 - [ ] **Step 5: Lint, type check, commit**
 
@@ -1337,6 +1411,8 @@ _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 
 
 class RequestInfo(NamedTuple):
+    """A request snapshot. Header keys must be lowercase (ASGI convention)."""
+
     headers: Mapping[str, str]
     query: Mapping[str, str]
     path: str
@@ -1678,9 +1754,9 @@ class ContextPropagator:
         record = await self._tenants.get(TenantRef(id=envelope.tenant_id))
         if record is None:
             raise TenantNotFound(str(envelope.tenant_id))
-        await self._servability.assert_servable(record.id)
         if not await self._entitlements.can_act(principal, record.id):
             raise TenantAccessDenied(f"principal {principal.id} cannot act in {record.id}")
+        await self._servability.assert_servable(record.id)
         return TenantContext(
             tenant_id=record.id,
             tenant_slug=record.slug,
@@ -1789,7 +1865,12 @@ class _Provider:
 
 
 def _middleware(
-    provider: PrincipalProvider, inner, *, active: set[uuid.UUID] | None = None
+    provider: PrincipalProvider,
+    inner,
+    *,
+    active: set[uuid.UUID] | None = None,
+    suspended: set[uuid.UUID] | None = None,
+    allowed: set[tuple[uuid.UUID, uuid.UUID]] | None = None,
 ) -> TenantMiddleware:
     factory = ContextFactory(
         config=ContextConfig(signing_key="k"),
@@ -1804,8 +1885,10 @@ def _middleware(
                 )
             ]
         ),
-        servability=ServabilityStub(),
-        entitlements=EntitlementsStub({(USER_ID, TENANT_ID)}),
+        servability=ServabilityStub(suspended),
+        entitlements=EntitlementsStub(
+            allowed if allowed is not None else {(USER_ID, TENANT_ID)}
+        ),
         operators=OperatorsStub(),
         audit=RecordingPrivilegeAudit(),
         clock=FrozenClock(),
@@ -1864,6 +1947,8 @@ async def test_missing_principal_is_401():
     result = await _run(middleware, [(b"x-tenant-slug", b"acme")])
     assert result["status"] == 401
     assert json.loads(result["body"])["error"] == "AuthenticationError"
+    start = next(m for m in result["sent"] if m["type"] == "http.response.start")
+    assert dict(start["headers"])[b"content-length"] == str(len(result["body"])).encode()
 
 
 async def test_unresolved_tenant_is_404():
@@ -1885,6 +1970,38 @@ async def test_denied_principal_is_404():
     )
     result = await _run(middleware, [(b"x-tenant-slug", b"acme")])
     assert result["status"] == 404
+
+
+async def test_unentitled_principal_on_suspended_tenant_is_404_not_423():
+    async def inner(scope, receive, send):
+        raise AssertionError("must not run")
+
+    middleware = _middleware(
+        _Provider(Principal(kind=PrincipalKind.USER, id=USER_ID)),
+        inner,
+        suspended={TENANT_ID},
+        allowed=set(),
+    )
+    result = await _run(middleware, [(b"x-tenant-slug", b"acme")])
+    assert result["status"] == 404
+    assert json.loads(result["body"])["error"] == "TenantAccessDenied"
+
+
+async def test_non_hex_traceparent_trace_id_is_ignored():
+    seen: list[str | None] = []
+
+    async def inner(scope, receive, send):
+        from jdlib.context import current_tenant
+
+        seen.append(current_tenant().trace_id)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    middleware = _middleware(_Provider(Principal(kind=PrincipalKind.USER, id=USER_ID)), inner)
+    traceparent = b"00-0123456789abcdefghijklmnopqrstuv-0123456789abcdef-01"
+    result = await _run(middleware, [(b"x-tenant-slug", b"acme"), (b"traceparent", traceparent)])
+    assert result["status"] == 200
+    assert seen == [None]
 
 
 async def test_context_is_cleared_after_request():
@@ -1923,6 +2040,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.tenancy.middlew
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
@@ -1991,7 +2109,7 @@ def _request_ids(headers: Mapping[str, str]) -> tuple[str, str, str | None]:
     traceparent = headers.get("traceparent")
     if traceparent:
         parts = traceparent.split("-")
-        if len(parts) >= 4 and len(parts[1]) == 32:
+        if len(parts) >= 4 and re.fullmatch(r"[0-9a-f]{32}", parts[1]):
             trace_id = parts[1]
     return request_id, correlation_id, trace_id
 
@@ -2003,7 +2121,10 @@ async def _send_error(send: Callable[..., Awaitable[None]], exc: JdlibError) -> 
         {
             "type": "http.response.start",
             "status": status,
-            "headers": [(b"content-type", b"application/json")],
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
         }
     )
     await send({"type": "http.response.body", "body": body})
@@ -2053,7 +2174,7 @@ class TenantMiddleware:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_middleware.py -v`
-Expected: PASS (7 passed)
+Expected: PASS (9 passed)
 
 - [ ] **Step 5: Full suite, lint, type check**
 

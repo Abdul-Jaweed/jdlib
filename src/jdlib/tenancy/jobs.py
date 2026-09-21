@@ -44,9 +44,9 @@ class ContextPropagator:
         record = await self._tenants.get(TenantRef(id=envelope.tenant_id))
         if record is None:
             raise TenantNotFound(str(envelope.tenant_id))
-        await self._servability.assert_servable(record.id)
         if not await self._entitlements.can_act(principal, record.id):
             raise TenantAccessDenied(f"principal {principal.id} cannot act in {record.id}")
+        await self._servability.assert_servable(record.id)
         return TenantContext(
             tenant_id=record.id,
             tenant_slug=record.slug,
