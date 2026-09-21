@@ -5,6 +5,7 @@ import pytest
 
 from jdlib.context import (
     Principal,
+    PrincipalKind,
     TenantContext,
     TenantRecord,
     TenantRef,
@@ -14,7 +15,7 @@ from jdlib.context import (
     current_tenant,
     scoped_key,
 )
-from jdlib.control.enums import PlacementStrategy, PrincipalType, TenantStatus
+from jdlib.control.enums import PlacementStrategy, TenantStatus
 from jdlib.errors import MissingTenantContext
 
 
@@ -23,7 +24,7 @@ def _context() -> TenantContext:
         tenant_id=uuid.UUID("00000000-0000-0000-0000-0000000000aa"),
         tenant_slug="acme",
         strategy=PlacementStrategy.SHARED,
-        principal=Principal(kind=PrincipalType.USER, id=uuid.uuid4()),
+        principal=Principal(kind=PrincipalKind.USER, id=uuid.uuid4()),
         request_id="req-1",
         correlation_id="corr-1",
     )
@@ -55,7 +56,7 @@ def test_value_objects_are_frozen():
     with pytest.raises(dataclasses.FrozenInstanceError):
         context.tenant_id = uuid.uuid4()  # type: ignore[misc]
     with pytest.raises(dataclasses.FrozenInstanceError):
-        context.principal.kind = PrincipalType.SERVICE_ACCOUNT  # type: ignore[misc]
+        context.principal.kind = PrincipalKind.SERVICE_ACCOUNT  # type: ignore[misc]
 
 
 def test_scoped_key_is_versioned_and_encoded():
