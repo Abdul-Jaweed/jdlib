@@ -155,12 +155,20 @@ async def test_text_fragment_in_criteria_rejected(session_factory):
 
 
 async def test_aliased_entity_select_is_scoped(session_factory):
+    a_id = uuid.uuid4()
+    async with await _session(session_factory, TENANT_A) as session:
+        await session.add(Invoice(id=a_id, number=f"A-{uuid.uuid4().hex[:8]}"))
+        await session.commit()
+    b_id = uuid.uuid4()
     async with await _session(session_factory, TENANT_B) as session:
-        await session.add(Invoice(number=f"B-{uuid.uuid4().hex[:8]}"))
+        await session.add(Invoice(id=b_id, number=f"B-{uuid.uuid4().hex[:8]}"))
         await session.commit()
     aliased = sa.orm.aliased(Invoice)
     async with await _session(session_factory, TENANT_A) as session:
         rows = (await session.execute(sa.select(aliased))).scalars().all()
+        ids = {row.id for row in rows}
+        assert a_id in ids
+        assert b_id not in ids
         assert all(row.tenant_id == TENANT_A for row in rows)
 
 
@@ -179,6 +187,36 @@ async def test_table_clause_alias_from_rejected(session_factory):
                 sa.select(sa.func.count()).select_from(
                     Invoice, sa.table("invoices").alias("raw")
                 )
+            )
+
+
+async def test_bare_table_alias_with_entity_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="aliases of tenant tables"):
+            await session.execute(sa.select(Invoice, Invoice.__table__.alias("raw")))
+
+
+async def test_bare_table_alias_join_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="aliases of tenant tables"):
+            await session.execute(
+                sa.select(Invoice).join(Invoice.__table__.alias("raw"), sa.true())
+            )
+
+
+async def test_bare_table_alias_select_from_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="aliases of tenant tables"):
+            await session.execute(
+                sa.select(Invoice).select_from(Invoice.__table__.alias("raw"))
+            )
+
+
+async def test_implicit_from_unselected_tenant_entity_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(
+                sa.select(LineItem).where(LineItem.invoice_id == Invoice.id)
             )
 
 

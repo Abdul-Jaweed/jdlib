@@ -130,7 +130,7 @@ def _register_events(session: Session) -> None:
         if state.is_select:
             tenant_id = context.tenant_id
             statement = cast(Any, state.statement)
-            tenant_tables: list[sa.TableClause] = []
+            tenant_tables: list[sa.TableClause | sa.Alias] = []
             for element in visitors.iterate(statement):
                 if isinstance(element, sa.TextClause):
                     raise UnscopedRawSql(
@@ -144,7 +144,11 @@ def _register_events(session: Session) -> None:
                         "literal SQL fragments are not allowed in tenant sessions; "
                         "use raw_sql"
                     )
-                if isinstance(element, sa.TableClause) and element.name in tables:
+                if isinstance(element, sa.Alias) and not hasattr(element, "_Annotated__element"):
+                    table = _underlying_table(element)
+                    if table is not None and table.name in tables:
+                        tenant_tables.append(element)
+                elif isinstance(element, sa.TableClause) and element.name in tables:
                     tenant_tables.append(element)
             direct_tables = _direct_tables(statement)
             entity_tables = _entity_tables(statement)
@@ -182,6 +186,11 @@ def _register_events(session: Session) -> None:
                 if local_table is not None:
                     trusted_tables.append(local_table)
             for tenant_table in tenant_tables:
+                if isinstance(tenant_table, sa.Alias):
+                    raise UnscopedRawSql(
+                        "aliases of tenant tables must be entity-derived; "
+                        "use aliased(Entity) or raw_sql"
+                    )
                 underlying = _underlying_table(tenant_table)
                 if underlying is None or not any(
                     underlying is trusted for trusted in trusted_tables
