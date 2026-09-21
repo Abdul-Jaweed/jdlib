@@ -57,6 +57,39 @@ def test_wrong_tenant_value_rejected(validator):
         )
 
 
+def test_is_distinct_from_predicate_rejected(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "SELECT * FROM invoices WHERE tenant_id IS DISTINCT FROM :tenant_id",
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
+def test_is_not_distinct_from_predicate_rejected(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "SELECT * FROM invoices WHERE tenant_id IS NOT DISTINCT FROM :tenant_id",
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
+def test_any_predicate_rejected(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "SELECT * FROM invoices WHERE tenant_id = ANY(:tenant_id)",
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
 def test_join_requires_predicate_on_every_relation(validator):
     sql = (
         "SELECT * FROM invoices i JOIN projects p ON p.tenant_id = i.tenant_id "

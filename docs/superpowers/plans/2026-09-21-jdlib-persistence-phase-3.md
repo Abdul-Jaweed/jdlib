@@ -246,6 +246,39 @@ def test_wrong_tenant_value_rejected(validator):
         )
 
 
+def test_is_distinct_from_predicate_rejected(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "SELECT * FROM invoices WHERE tenant_id IS DISTINCT FROM :tenant_id",
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
+def test_is_not_distinct_from_predicate_rejected(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "SELECT * FROM invoices WHERE tenant_id IS NOT DISTINCT FROM :tenant_id",
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
+def test_any_predicate_rejected(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "SELECT * FROM invoices WHERE tenant_id = ANY(:tenant_id)",
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
 def test_join_requires_predicate_on_every_relation(validator):
     sql = (
         "SELECT * FROM invoices i JOIN projects p ON p.tenant_id = i.tenant_id "
@@ -476,7 +509,7 @@ from pglast.ast import (
     SubLink,
     UpdateStmt,
 )
-from pglast.enums import BoolExprType
+from pglast.enums import A_Expr_Kind, BoolExprType
 
 from jdlib.errors import UnscopedRawSql
 from jdlib.persistence.models import tenant_table_map
@@ -524,7 +557,11 @@ def _relation_qualifier(relation: RangeVar) -> str:
 def _tenant_predicate(
     expr: object, tenant_id: uuid.UUID, binds: tuple[object, ...], qualifiers: set[str]
 ) -> bool:
-    if not isinstance(expr, A_Expr) or _operator_name(expr) != "=":
+    if (
+        not isinstance(expr, A_Expr)
+        or expr.kind != A_Expr_Kind.AEXPR_OP
+        or _operator_name(expr) != "="
+    ):
         return False
     for column, value in ((expr.lexpr, expr.rexpr), (expr.rexpr, expr.lexpr)):
         if _column_is_tenant_id(column, qualifiers):
@@ -709,7 +746,7 @@ Notes for the implementer (updated after review fixes, pglast v8.4 verified):
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_rawsql.py -v`
-Expected: PASS (18 passed)
+Expected: PASS (21 passed)
 
 - [ ] **Step 5: Lint, type check, commit**
 

@@ -22,7 +22,7 @@ from pglast.ast import (
     SubLink,
     UpdateStmt,
 )
-from pglast.enums import BoolExprType
+from pglast.enums import A_Expr_Kind, BoolExprType
 
 from jdlib.errors import UnscopedRawSql
 from jdlib.persistence.models import tenant_table_map
@@ -70,7 +70,11 @@ def _relation_qualifier(relation: RangeVar) -> str:
 def _tenant_predicate(
     expr: object, tenant_id: uuid.UUID, binds: tuple[object, ...], qualifiers: set[str]
 ) -> bool:
-    if not isinstance(expr, A_Expr) or _operator_name(expr) != "=":
+    if (
+        not isinstance(expr, A_Expr)
+        or expr.kind != A_Expr_Kind.AEXPR_OP
+        or _operator_name(expr) != "="
+    ):
         return False
     for column, value in ((expr.lexpr, expr.rexpr), (expr.rexpr, expr.lexpr)):
         if _column_is_tenant_id(column, qualifiers):
