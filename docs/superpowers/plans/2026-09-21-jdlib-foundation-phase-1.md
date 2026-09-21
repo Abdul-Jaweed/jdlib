@@ -2279,15 +2279,28 @@ def test_tenant_id_not_leading_pk_is_l4_violation():
 
 def test_cascade_from_tenants_is_l6_violation():
     metadata = MetaData()
-    sa.Table("parents", metadata, sa.Column("id", sa.Uuid, primary_key=True))
+    sa.Table("tenants", metadata, sa.Column("id", sa.Uuid, primary_key=True))
     sa.Table(
-        "tenants",
+        "children",
         metadata,
         sa.Column("id", sa.Uuid, primary_key=True),
-        sa.Column("parent_id", sa.Uuid, sa.ForeignKey("parents.id", ondelete="CASCADE")),
+        sa.Column("tenant_id", sa.Uuid, sa.ForeignKey("tenants.id", ondelete="CASCADE")),
     )
     issues = lint_metadata([metadata])
-    assert any(issue.rule == "L6" for issue in issues)
+    assert any(issue.rule == "L6" and issue.table == "children" for issue in issues)
+
+
+def test_restrict_fk_to_tenants_is_not_l6_violation():
+    metadata = MetaData()
+    sa.Table("tenants", metadata, sa.Column("id", sa.Uuid, primary_key=True))
+    sa.Table(
+        "children",
+        metadata,
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("tenant_id", sa.Uuid, sa.ForeignKey("tenants.id", ondelete="RESTRICT")),
+    )
+    issues = lint_metadata([metadata])
+    assert not any(issue.rule == "L6" for issue in issues)
 
 
 def test_nullable_tenant_id_is_l9_violation():
@@ -2419,19 +2432,19 @@ def _model_for(table: sa.Table, known: dict[int, type]) -> type | None:
 
 
 def _cascade_reachable(metadata: MetaData) -> set[str]:
-    graph: dict[str, set[str]] = {}
+    children: dict[str, set[str]] = {}
     for table in metadata.tables.values():
         for constraint in table.constraints:
             if isinstance(constraint, sa.ForeignKeyConstraint) and constraint.ondelete == "CASCADE":
-                graph.setdefault(table.name, set()).add(constraint.referred_table.name)
+                children.setdefault(constraint.referred_table.name, set()).add(table.name)
     reached: set[str] = set()
-    frontier = list(graph.get("tenants", set()))
+    frontier = list(children.get("tenants", set()))
     while frontier:
         name = frontier.pop()
         if name in reached or name == "tenants":
             continue
         reached.add(name)
-        frontier.extend(graph.get(name, set()))
+        frontier.extend(children.get(name, set()))
     return reached
 
 

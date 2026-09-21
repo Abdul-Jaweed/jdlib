@@ -52,19 +52,19 @@ def _model_for(table: sa.Table, known: dict[int, type]) -> type | None:
 
 
 def _cascade_reachable(metadata: MetaData) -> set[str]:
-    graph: dict[str, set[str]] = {}
+    children: dict[str, set[str]] = {}
     for table in metadata.tables.values():
         for constraint in table.constraints:
             if isinstance(constraint, sa.ForeignKeyConstraint) and constraint.ondelete == "CASCADE":
-                graph.setdefault(table.name, set()).add(constraint.referred_table.name)
+                children.setdefault(constraint.referred_table.name, set()).add(table.name)
     reached: set[str] = set()
-    frontier = list(graph.get("tenants", set()))
+    frontier = list(children.get("tenants", set()))
     while frontier:
         name = frontier.pop()
         if name in reached or name == "tenants":
             continue
         reached.add(name)
-        frontier.extend(graph.get(name, set()))
+        frontier.extend(children.get(name, set()))
     return reached
 
 
