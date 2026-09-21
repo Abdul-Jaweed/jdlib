@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import uuid
 from typing import Protocol
 
@@ -8,6 +9,9 @@ from jdlib.models.base import TenantBase, TenantRouted
 
 
 def tenant_table_map() -> dict[str, type]:
+    for module in ("jdlib.models.org", "jdlib.models.settings", "jdlib.models.audit"):
+        importlib.import_module(module)
+
     found: dict[str, type] = {}
 
     def walk(cls: type) -> None:

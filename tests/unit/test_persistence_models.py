@@ -1,3 +1,5 @@
+import subprocess
+import sys
 import uuid
 from datetime import UTC, datetime
 
@@ -33,6 +35,19 @@ def test_tenant_table_map_covers_framework_tenant_plane():
     tables = tenant_table_map()
     assert {"organizations", "teams", "tenant_settings", "audit_events"} <= set(tables)
     assert all(issubclass(model, TenantRouted) for model in tables.values())
+
+
+def test_tenant_table_map_bootstraps_framework_models():
+    code = (
+        "from jdlib.persistence.models import tenant_table_map\n"
+        "tables = tenant_table_map()\n"
+        "expected = {'organizations', 'teams', 'tenant_settings', 'audit_events'}\n"
+        "assert expected <= set(tables), sorted(tables)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
 
 
 async def test_null_write_fence_always_allows():
