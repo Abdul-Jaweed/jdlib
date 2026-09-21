@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import base64
 import contextvars
+import hashlib
+import hmac
+import json
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -14,6 +18,8 @@ from jdlib.config import ContextConfig
 from jdlib.control.enums import OperatorLevel, PlacementStrategy, TenantStatus
 from jdlib.errors import (
     AuthorizationError,
+    ExpiredToken,
+    InvalidToken,
     MissingTenantContext,
     TenantAccessDenied,
     TenantNotFound,
@@ -342,3 +348,77 @@ class ContextFactory:
             trace_id=None,
             privilege=privilege,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class TenantContextEnvelope:
+    tenant_id: uuid.UUID
+    principal_type: PrincipalKind
+    principal_id: uuid.UUID
+    request_id: str
+    correlation_id: str
+    trace_id: str | None
+    issued_at: datetime
+    signature: bytes
+
+
+class EnvelopeCodec:
+    def __init__(self, *, config: ContextConfig, clock: Clock | None = None) -> None:
+        self._key = config.signing_key.get_secret_value().encode()
+        self._ttl = config.envelope_ttl
+        self._clock = clock or SystemClock()
+
+    def _sign(self, payload: bytes) -> bytes:
+        return hmac.new(self._key, payload, hashlib.sha256).digest()
+
+    def encode(self, context: TenantContext) -> str:
+        payload = {
+            "tenant_id": str(context.tenant_id),
+            "principal_type": context.principal.kind.value,
+            "principal_id": str(context.principal.id),
+            "request_id": context.request_id,
+            "correlation_id": context.correlation_id,
+            "trace_id": context.trace_id,
+            "issued_at": self._clock.now().isoformat(),
+        }
+        raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return f"{_b64(raw)}.{_b64(self._sign(raw))}"
+
+    def decode(self, token: str) -> TenantContextEnvelope:
+        try:
+            payload_b64, signature_b64 = token.split(".")
+            raw = _unb64(payload_b64)
+            signature = _unb64(signature_b64)
+        except (ValueError, TypeError) as exc:
+            raise InvalidToken("malformed envelope") from exc
+        if not hmac.compare_digest(signature, self._sign(raw)):
+            raise InvalidToken("envelope signature mismatch")
+        try:
+            payload = json.loads(raw)
+            issued_at = datetime.fromisoformat(payload["issued_at"])
+            envelope = TenantContextEnvelope(
+                tenant_id=uuid.UUID(payload["tenant_id"]),
+                principal_type=PrincipalKind(payload["principal_type"]),
+                principal_id=uuid.UUID(payload["principal_id"]),
+                request_id=str(payload["request_id"]),
+                correlation_id=str(payload["correlation_id"]),
+                trace_id=payload["trace_id"],
+                issued_at=issued_at,
+                signature=signature,
+            )
+        except (KeyError, ValueError, TypeError) as exc:
+            raise InvalidToken("invalid envelope payload") from exc
+        now = self._clock.now()
+        if issued_at - now > timedelta(seconds=60):
+            raise InvalidToken("envelope issued in the future")
+        if now - issued_at > self._ttl:
+            raise ExpiredToken("envelope expired")
+        return envelope
+
+
+def _b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def _unb64(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
