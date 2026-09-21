@@ -7,7 +7,7 @@ Conventions:
 
 - PostgreSQL 15+; identifiers snake_case; table names plural.
 - All timestamps `timestamptz`, stored UTC.
-- `id` columns are UUIDv7 (via `uuid-utils`), application-generated.
+- `id` columns are UUIDv7 (`jdlib._uuid.uuid7`), application-generated.
 - Tenant-scoped tables: `PK (tenant_id, id)`; every FK to another tenant-scoped
   table is composite and includes `tenant_id`.
 - Control-plane tables never have FKs to tenant-plane tables; tenant-plane

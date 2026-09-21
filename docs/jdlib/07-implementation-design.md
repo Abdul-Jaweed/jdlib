@@ -59,6 +59,7 @@ src/jdlib/
 ├── __init__.py                 # public API re-exports only
 ├── config.py                   # TenancyConfig + sub-models
 ├── errors.py                   # exception hierarchy
+├── lint.py                     # metadata lint L1-L19
 ├── context.py                  # Principal, TenantContext, PrivilegeContext,
 │                               #   ContextFactory, current_*, scoped_key, envelope
 ├── control/
@@ -242,7 +243,8 @@ convention = {"ix": "ix_%(table_name)s_%(column_0_N_name)s",
               "pk": "pk_%(table_name)s"}
 ```
 
-Typed mappings (`Mapped[...]` + `mapped_column`). UUIDv7 via `uuid-utils`,
+Typed mappings (`Mapped[...]` + `mapped_column`). UUIDv7 via `jdlib._uuid.uuid7`
+(RFC 9562, generated in-process; no UUID dependency),
 client-side default. All datetimes timezone-aware UTC.
 
 ### 6.2 Mixins (tenant plane)
