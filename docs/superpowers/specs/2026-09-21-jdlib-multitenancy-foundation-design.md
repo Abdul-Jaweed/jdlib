@@ -1,17 +1,19 @@
 # jdlib — Multi-Tenancy Foundation: Design
 
-Date: 2026-09-21
-Status: Approved (design), pending implementation plan
+Date: 2026-09-21 (rev 2: incorporates external design review)
+Status: Approved (design rev 2), pending implementation plan
 Package: `jdlib` (Python 3.12+, async-first)
+Detail contracts: `docs/jdlib/02-relational-schema.md`, `03-isolation-invariants.md`,
+`04-authorization-model.md`, `05-tenant-lifecycle.md`, `06-strategy-matrix.md`
 
 ## 1. Purpose
 
-A reusable, production-grade multi-tenancy foundation that different applications
-(SaaS products, services, internal platforms) can build on. It provides tenant
-management, tenant context and resolution, authentication, scoped RBAC
-authorization, tenant-aware data access, data isolation, schema/database routing,
-resource ownership, cross-tenant access prevention, tenant-aware sessions and
-transactions, auditing, and configuration for multiple isolation strategies.
+A reusable, production-grade multi-tenancy foundation for SaaS products, services,
+and internal platforms. It provides tenant management, tenant context and
+resolution, authentication, scoped RBAC authorization, tenant-aware data access,
+isolation enforcement, schema/database routing, resource ownership, cross-tenant
+access prevention, tenant-aware sessions and transactions, auditing, and
+configuration for multiple isolation strategies.
 
 The central property: **tenancy is an infrastructure concern**. The same
 application code and the same logical data model run under shared-schema,
@@ -21,491 +23,383 @@ domain-model changes. Strategy is deployment configuration, not business logic.
 ### 1.1 Design principles
 
 1. **Single-tenant is multi-tenant with one tenant.** A `Tenant` row is seeded at
-   install and every tenant-owned table carries `tenant_id` from day one. Turning
+   install; every tenant-scoped table carries `tenant_id` from day one. Turning
    multi-tenancy on adds routing and policy, never schema restructuring.
-2. **Fail closed.** No tenant context means no tenant-owned data access. No
-   matching identity means no request. No allow rule means deny.
+2. **Fail closed.** No tenant context means no tenant data access. No matching
+   identity means no request. No allow rule means deny. No active states in the
+   precedence chain means deny.
 3. **One enforcement point per concern.** Tenant scoping lives in the session
    layer; authorization lives in one evaluator; strategy lives behind one
-   interface. Application code cannot forget a filter it never writes.
-4. **Additive, allow-only authorization.** Effective permissions are the union of
+   interface; lifecycle transitions live in one registry service.
+4. **Control plane is not tenant data.** Identity, access control, and deployment
+   metadata live in a single platform control plane. It is never routed, never
+   moved per tenant, and never foreign-keyed from tenant data.
+5. **Composite tenant identity.** Tenant-scoped rows are identified by
+   `(tenant_id, id)`; tenant-scoped foreign keys include `tenant_id`, making
+   cross-tenant references unrepresentable at the database level.
+6. **Additive, allow-only authorization.** Effective permissions are the union of
    applicable bindings and grants; there are no deny rules in v1.
-5. **Uniform code paths beat micro-optimization.** `tenant_id` predicates and
+7. **Uniform code paths beat micro-optimization.** `tenant_id` predicates and
    stamps are applied in every strategy, even where a physical boundary makes
-   them redundant, so behavior is identical and auditable everywhere.
-6. **YAGNI with documented seams.** Billing, notifications, policy engines,
-   relocation tooling, and sync execution are explicit extension points, not v1
-   code.
+   them redundant.
+8. **YAGNI with documented seams.** Billing, notifications, policy engines,
+   relocation tooling, and sync execution are explicit extension points.
 
-### 1.2 Decisions already made
+### 1.2 Decisions
 
 | Decision | Choice |
 |---|---|
 | Persistence foundation | SQLAlchemy 2.0 + Pydantic v2, Postgres-first, repository/UoW boundaries |
-| Identity model | Global `User` + `Membership` per tenant |
-| Internal hierarchy | Tenant → Organization(s) → Team → Resource |
-| Authorization | Scoped RBAC + per-resource ACL (allow-only) |
-| Strategy support | Config-driven adapters, hybrid placement capable |
+| Identity model | Global `User` + `Membership`, both in the control plane |
+| Plane split | Control plane: Tenant/placement/migration state, identity, access control. Tenant plane: Organization, Team, TenantSetting, audit, app resources |
+| Internal hierarchy | Tenant → Organization(s) (tree) → Team (flat per org) → Resource |
+| Authorization | Scoped RBAC + per-resource grants (allow-only) |
+| Strategy support | Config-driven adapters, hybrid placement capable; applies to tenant plane only |
 | Isolation enforcement | App-layer scoping mandatory + optional Postgres RLS |
 | Authentication | External IdP (OIDC/JWT) + API keys; no password storage |
+| Principal kinds | `user`, `service_account` only; platform operators are code-mapped levels |
+| Email policy | `email` nullable, normalized, partially unique; identity authority is `(issuer, subject)`; linking by email only from `email_trusted` IdPs |
 | V1 scope | Async-first, all three strategies, Postgres integration matrix |
 | Architecture | Infrastructure-injected tenancy (contextvars) + optional RLS |
 
-## 2. Canonical single-tenant model
+## 2. Plane model
 
-The model is defined once. Entities split into two planes.
+### 2.1 Planes
 
-### 2.1 Global plane (tenant-independent)
-
-Identity outlives any tenant; these tables never carry `tenant_id`.
-
-| Entity | Why it exists | Key fields / relations |
+| Plane | Lifetime and routing | Contents |
 |---|---|---|
-| `User` | One row per human. Global so one person can belong to several tenants with one login. | `id`, `email` (unique), `display_name`, `status`, `locale`, timestamps |
-| `IdentityLink` | Authentication is external; maps an IdP subject to a user. One user may have several links (e.g. Google + Entra). | `issuer`, `subject`, `user_id`; unique `(issuer, subject)` |
-| `Permission` | Not a table. A code-defined catalog of `resource:action` strings (`invoice:approve`). Grants reference it; unknown names fail at startup. | constants + registration API |
-| `PlatformOperator` | Platform staff, deliberately outside all tenants. | `user_id`, `level` |
+| **Control plane** | One physical location; never moved, never strategy-routed; its own schema/database and `MetaData` | `Tenant`, `TenantPlacement`, `TenantMigrationState`, `User`, `IdentityLink`, `PlatformOperator`, `ServiceAccount`, `ApiKey`, `Membership`, `Invitation`, `Role`, `RolePermission`, `RoleBinding`, `ResourceGrant`, `PlatformAuditEvent` |
+| **Tenant plane** | Routed per tenant by the isolation strategy | `Organization`, `Team`, `TenantSetting`, `AuditEvent` |
+| **Application plane** | Same routing as tenant plane; owned by consuming applications | Concrete resources (`Invoice`, `Project`, …) built on `TenantOwned` mixins |
 
-### 2.2 Tenant plane (tenant-specific)
+### 2.2 Plane interaction rules
 
-Everything that can behave differently per customer carries `tenant_id`.
+1. **No foreign keys cross planes, ever.** `Membership.user_id → User` is a real
+   FK (control→control); `AuditEvent.actor_id`, `RoleBinding.scope_id`,
+   `ResourceGrant.resource_id` are logical references validated by the framework.
+   This is what keeps database-per-tenant possible.
+2. **No tenant context is required to read control-plane data**, but only
+   framework services may do so. Application code never receives a
+   control-plane session.
+3. **Tenant-plane access always requires an active `TenantContext`** and is
+   scoped by `TenantSession`.
+4. **Why access control is control-plane:** login-time tenant discovery
+   ("which tenants does this user belong to"), membership verification, API-key
+   lookup (which happens before tenant resolution), and role/binding evaluation
+   must all work before or across tenant boundaries. Per-tenant access-control
+   tables cannot provide this without a mirrored directory.
+5. **Scope references are polymorphic by design** (`scope_type` + `scope_id`),
+   as accepted in the design review; existence and tenant consistency are
+   enforced by the access-control service, not by FKs.
+6. **Two session types:** `ControlPlaneSession` (framework-internal only,
+   explicit filtering in service code) and `TenantSession` (auto-scoped,
+   rule-enforced, provided to application code).
 
-| Entity | Why it exists | Key fields / relations |
+## 3. Control-plane model
+
+| Entity | Why it exists | Identity / constraints |
 |---|---|---|
-| `Tenant` | The customer/account and the isolation boundary. In single-tenant mode exactly one seeded row. Stored in the platform-owned registry. | `id` (UUIDv7), `slug` (unique), `name`, `status`, `placement`, `parent_tenant_id` (reserved), timestamps |
-| `Organization` | Business unit / department / subsidiary. Optional tree. | `tenant_id`, `parent_organization_id`, `name` |
-| `Team` | Collaboration and ownership unit where resources live; groups people without inventing permissions. | `tenant_id`, `organization_id`, `name` |
-| `Membership` | A global user joins a tenant. Tenant-scoped profile/status lives here, not on `User`. | `tenant_id`, `user_id`, `status`, `joined_at`; unique `(tenant_id, user_id)` |
-| `Role` | Named permission bundle. Built-in templates seeded per tenant (owner/admin/member/viewer) plus custom roles. | `tenant_id`, `name`, `permissions[]` (catalog-validated) |
-| `RoleBinding` | The single authorization link: role granted to a principal at a scope. "Team member" is a binding with `scope=team`. | `tenant_id`, `role_id`, `principal_type`, `principal_id`, `scope_type` (`tenant|org|team`), `scope_id` |
-| `Resource` (abstract) | Framework provides mixins; applications define concrete tables (`Invoice`, `Project`, …). | `tenant_id` mandatory; optional `organization_id`, `team_id`; `created_by`, `updated_by` |
-| `ResourceGrant` | Per-resource ACL for sharing beyond scope defaults. Allow-only, additive. | `tenant_id`, `resource_type`, `resource_id`, `principal_type`, `principal_id`, `permission` |
-| `Invitation` | Onboarding: invite email → user joins tenant/org/team with a role. | `tenant_id`, `email`, `scope_type`, `scope_id`, `role_id`, `token_hash`, `expires_at`, `invited_by` |
-| `AuditEvent` | Append-only security trail. Platform events have `tenant_id = NULL` and are visible only to operators. | `tenant_id?`, `actor_type`, `actor_id`, `action`, `target_type`, `target_id`, `metadata`, `ip`, `correlation_id`, `occurred_at` |
-| `TenantSetting` | Per-tenant configuration and feature flags. | `tenant_id`, `key`, `value`; unique `(tenant_id, key)` |
+| `Tenant` | Customer/account and isolation boundary. Single-tenant mode seeds exactly one. | `PK(id)`, `UNIQUE(slug)`, self-FK `parent_tenant_id` (reserved: delegation only, never data access) |
+| `TenantPlacement` | Where this tenant's data lives. The strategy switch. | `PK(tenant_id)`, `strategy ∈ {shared, schema, database}`, `target_handle` (opaque; resolved via secret provider), `region` |
+| `TenantMigrationState` | Per-tenant migration position and health. | `PK(tenant_id)`, `current_version`, `desired_version`, `status` |
+| `User` | One row per human; global so one login serves many tenants. | `PK(id)`, `email` nullable/normalized/partial-unique |
+| `IdentityLink` | Maps external IdP subject to user; one user may have several. | `PK(id)`, `UNIQUE(issuer, subject)`, `FK(user_id)` |
+| `PlatformOperator` | Platform staff, outside all tenants. | `PK(user_id)`, `level ∈ {support, operator, admin}`; capabilities mapped in code |
+| `ServiceAccount` | Tenant-owned machine principal referenced by bindings and keys. | `PK(tenant_id, id)`, `UNIQUE(tenant_id, name)` |
+| `ApiKey` | Machine credential; verified before tenant resolution. | `PK(tenant_id, id)`, `UNIQUE(key_prefix)`, Argon2id `key_hash`, pinned `(tenant_id, service_account_id)` |
+| `Membership` | User joins tenant; tenant-scoped profile and status. | `PK(tenant_id, id)`, `UNIQUE(tenant_id, user_id)`, `FK(user_id)` |
+| `Invitation` | Onboarding into tenant/org/team with a role. | `PK(tenant_id, id)`, single-use hashed token, `status ∈ {pending, accepted, expired, revoked}` |
+| `Role` | Named permission bundle; built-ins seeded per tenant, custom allowed. | `PK(tenant_id, id)`, `UNIQUE(tenant_id, name)` |
+| `RolePermission` | Relational composition of a role. | `PK(tenant_id, role_id, permission_code)`, `FK` to `Role`; code validated against catalog |
+| `RoleBinding` | The single authorization link: role → principal at scope. | `PK(tenant_id, id)`, `UNIQUE(tenant_id, role_id, principal_type, principal_id, scope_type, scope_id)`, `principal_type ∈ {user, service_account}`, `scope_type ∈ {tenant, org, team}` |
+| `ResourceGrant` | Per-resource exception, allow-only. | `PK(tenant_id, id)`, `UNIQUE(tenant_id, resource_type, resource_id, principal_type, principal_id, permission_code)` |
+| `PlatformAuditEvent` | Security/operational audit for pre-transaction events. | `PK(id)`, nullable `tenant_id`, append-only |
 
-### 2.3 Mixins for application models
+The permission catalog itself is code (`resource:action` strings registered at
+startup); no `Permission` table is needed.
 
-- `TenantOwned` — adds `tenant_id` (FK to registry, indexed, immutable) and
-  participates in automatic scoping/stamping. Mandatory for every app table
-  holding customer data.
-- `Timestamped` — `created_at`, `updated_at` maintained by session events.
-- `SoftDelete` — `deleted_at`; scoped queries exclude soft-deleted rows by default.
-- Ownership — optional `organization_id` / `team_id` FKs on resources that need
-  hierarchy ownership. Explicit FKs, not polymorphic owners.
-- `created_by` / `updated_by` reference the global `User`.
+## 4. Tenant-plane model
 
-### 2.4 Relationships in one view
+| Entity | Why it exists | Identity / constraints |
+|---|---|---|
+| `Organization` | Business unit tree; scope for authorization. | `PK(tenant_id, id)`, self-FK `(tenant_id, parent_organization_id)`, `UNIQUE(tenant_id, slug)` partial on soft-delete |
+| `Team` | Flat collaboration/ownership unit inside one organization. | `PK(tenant_id, id)`, composite FK to organization, `UNIQUE(tenant_id, organization_id, slug)` partial |
+| `TenantSetting` | Business configuration and feature flags. Not a JSON dumping ground; platform config lives on the control plane. | `PK(tenant_id, key)`, value `jsonb` |
+| `AuditEvent` | Transactional audit written in the same transaction as the mutation. Actor from context, never an argument. | `PK(tenant_id, id)`, indexes on `(tenant_id, occurred_at)` and `(tenant_id, target_type, target_id)` |
 
-```
-PlatformOperator ── User ── IdentityLink (issuer, subject)
-                     │
-                     │ Membership (status, joined_at)
-                     ▼
-                  Tenant ──────────────── TenantSetting
-                     │  role bindings            AuditEvent (tenant or platform)
-        ┌────────────┼───────────────┐
-        ▼            ▼               ▼
- Organization ──▶ Team ────────▶ Resource (app-defined; tenant_id mandatory)
-        │            │               │
-   RoleBinding   RoleBinding     ResourceGrant (per-resource exception,
-   (scope=org)   (scope=team)     references a catalog permission)
-        └────────── Role
-             (tenant-owned data; permissions come from the code catalog)
-ServiceAccount ── ApiKey              Invitation ──▶ Membership + RoleBinding
-   (tenant-owned)
-```
+Applications define resources with the mixins:
 
-### 2.5 Boundaries
+- `TenantOwned` — `tenant_id` in PK and every relationship; mandatory.
+- `Timestamped` — `created_at`, `updated_at` (UTC `timestamptz`).
+- `SoftDelete` — `deleted_at`; normal queries exclude deleted rows; partial
+  unique indexes exclude them.
+- `OwnableByOrg` / `OwnableByTeam` — optional composite ownership FKs enabling
+  scope-based authorization.
+- `created_by` / `updated_by` — logical `User.id` references (cross-plane).
 
-- Identity (`User`, `IdentityLink`) is global. Everything behaviorally
-  tenant-specific is tenant-owned.
-- The permission **catalog** is code; role **composition** is data. Tenants can
-  customize roles without redeploying; they cannot invent permissions.
-- `RoleBinding` replaces parallel membership tables for tenant admins, org
-  managers, and team members.
-- `AuditEvent` references targets by `(type, id)` and never by FK — the audit log
-  does not couple to application schemas.
-- The framework owns registry, org/team, membership, roles, bindings, grants,
-  invitations, audit, settings. Applications own concrete resources and workflows.
+## 5. Tenancy overlay
 
-## 3. Tenancy overlay
+### 5.1 Tenant context
 
-### 3.1 Tenant entity
+`TenantContext(tenant_id, strategy, principal, request_id, correlation_id,
+trace_id, privileged)` in a `contextvars.ContextVar`.
 
-The registry is the only platform-owned table about customers. Its `placement`
-field is the strategy switch:
+- **Created only by the framework's `ContextFactory`**, which performs the full
+  authoritative flow: authenticated principal → resolved tenant → membership or
+  operator validation → context. The constructor is private.
+- **Privileged contexts require an internal capability token** held by the
+  factory (`operator` after validating `PlatformOperator`; `system` for
+  provisioning/migrations; `test`). Application code cannot obtain one through
+  public API; any privileged context use produces a platform audit event.
+- **Fail closed:** tenant-plane access without a context raises
+  `MissingTenantContext`. There is no default tenant.
+- **Immutable for the session lifetime**: a session is bound to exactly one
+  context; switching tenants requires a new context and session.
+- Contextvars are execution state, not a security boundary; the security
+  boundary is the factory flow plus session scoping.
 
-```
-placement = { strategy: "shared" | "schema" | "database", target: <handle> }
-```
+### 5.2 Cross-boundary propagation
 
-- `shared` → single database/schema, target is the default handle.
-- `schema` → one database, target is the schema name.
-- `database` → target is a connection handle (DSN reference).
+Every asynchronous boundary (HTTP, background task, queue message, scheduled
+job, CLI, worker) is an explicit propagation boundary. The framework serializes
+`TenantContextEnvelope` (`tenant_id`, `principal_type`, `principal_id`,
+`request_id`, `correlation_id`, `trace_id`, `issued_at`, HMAC signature using a
+configured framework secret). On the receiving side the envelope is verified
+(signature + TTL), then statuses and bindings are **reloaded**, and authorization
+is **re-evaluated at execution time**. Envelopes never carry permissions, and a
+context object supplied by a caller is never trusted.
 
-Business tables never contain strategy hints. Placement is read by the
-`SessionRouter` and the migration runner only.
+### 5.3 Tenant resolution
 
-Lifecycle: `provisioning → active → suspended → archived`. Status gates every
-framework operation; suspension rejects all requests into the tenant without
-deleting data.
+Configurable `TenantResolver` chain: JWT claim (`tid`) → subdomain → path prefix
+→ header → API-key binding. Resolution is identification only; the factory then
+verifies Membership or operator status. Unknown and unauthorized tenants both
+return 404 to non-operators; reasons go to logs and audit only.
 
-`parent_tenant_id` is reserved and nullable. Its semantics are delegated
-**administration, billing, and invitations only** — never data visibility across
-the tenant boundary. Enforcement logic is v2; the field exists now so the schema
-does not change later.
-
-### 3.2 Tenant context
-
-`TenantContext(tenant_id, strategy, principal, request_meta, privileged)` is held
-in a `contextvars.ContextVar`.
-
-- Set by entry points: ASGI middleware, job/worker decorator, CLI wrapper.
-  Cleared in `finally`.
-- **Fail closed:** any access to tenant-owned models without a context raises
-  `MissingTenantContext`. There is no implicit default tenant.
-- Privileged (cross-tenant) context requires a `PlatformOperator` principal, an
-  explicit system context (provisioning, migrations), or a test context. All
-  privileged use is audited.
-- Background tasks receive an explicit snapshot of the context; context is never
-  assumed to leak into new tasks.
-
-### 3.3 Tenant resolution
-
-A configurable chain of `TenantResolver`s runs at the request boundary:
-
-1. JWT claim (`tid`)
-2. Subdomain (`acme.app.example.com`)
-3. Path prefix (`/t/{slug}/...`)
-4. Header (`X-Tenant-Slug`)
-5. API-key binding (service accounts are pinned to one tenant)
-
-Resolution is identification only. The framework then verifies the principal may
-act in that tenant (active `Membership`, or `PlatformOperator`) and fails with
-`TenantAccessDenied`. New resolvers are registered through the interface.
-
-### 3.4 Ownership and hierarchy
-
-Three distinct relationships, never conflated:
+### 5.4 Ownership and hierarchy
 
 | Relationship | Semantics | Enforcement |
 |---|---|---|
-| Platform → Tenant | Registry owns lifecycle | Platform operators only |
-| Tenant → Org → Team → Resource | Intra-tenant ownership | Bindings at ancestor scope inherit downward, additively; no deny rules in v1 |
-| Tenant → Tenant (`parent_tenant_id`) | Delegated administration/billing only | Never grants data access; v2 |
+| Platform → Tenant | Lifecycle ownership | Operators with `platform.tenant.manage` |
+| Tenant → Org → Team → Resource | Authorization inheritance downward, additive | Evaluated against current hierarchy (04) |
+| Tenant → Tenant (`parent_tenant_id`) | Delegated administration/billing only | Never grants data access; no query may implement `tenant_id = X OR parent_tenant_id = X` |
 
-### 3.5 Membership lifecycle
+### 5.5 Membership lifecycle
 
-`Invitation` → match existing global `User` by verified email or create one →
-`Membership` + `RoleBinding`(s) created atomically in one transaction → audit
-event. Suspension at tenant, membership, or user level narrows access without
-deleting anything.
+Invitation (pending) → acceptance by an authenticated principal whose verified
+email matches, or whose `(issuer, subject)` is already linked → `Membership` +
+initial `RoleBinding` created atomically in the control plane → audit event.
+Suspension at any level denies access without deleting data (precedence chain in
+04). Invitation tokens are single-use, short-lived, cryptographically random,
+stored hashed, and grant nothing until acceptance.
 
-### 3.6 Cross-tenant access prevention
+## 6. Isolation architecture
 
-Three layers:
-
-1. Resolution must match the principal's memberships or operator status.
-2. Reads get automatic tenant predicates; writes are auto-stamped and validated.
-   A write referencing another tenant's entity raises `CrossTenantReferenceError`
-   (composite constraints in shared/schema modes, context validation in
-   database-per-tenant mode).
-3. Optional Postgres RLS as a database-enforced wall (shared-schema only).
-
-Unknown tenant and known-but-unauthorized tenant both return 404 to
-non-operators; the real reason goes only to logs and audit.
-
-## 4. Isolation architecture
-
-### 4.1 Strategy interface
+### 6.1 Strategy interface
 
 ```python
 class IsolationStrategy(Protocol):
-    name: str                                # "shared" | "schema" | "database"
-    capabilities: StrategyCapabilities       # supports_rls, supports_ddl, ...
+    name: str
+    capabilities: StrategyCapabilities
     def session(self, tenant) -> TenantSession
     async def provision(self, tenant) -> None
     async def migrate(self, tenant) -> None
-    async def deprovision(self, tenant, mode) -> None   # archive | drop | soft
+    async def deprovision(self, tenant, mode) -> None
 ```
 
-### 4.2 Adapters
+Three adapters: `shared` (one schema + `tenant_id` predicate + optional RLS),
+`schema` (one database, N schemas, `search_path` set by the framework from the
+registry-validated identifier), `database` (per-tenant DSN resolved from an
+opaque `target_handle` through the secret provider). Hybrid is per-tenant
+placement, never a fourth strategy.
 
-| | Shared schema | Schema per tenant | Database per tenant |
-|---|---|---|---|
-| Physical layout | one schema, `tenant_id` predicate | one database, N schemas | N databases |
-| `session()` | shared engine, context set | engine + `search_path` | connection routed to tenant DSN |
-| `provision()` | registry row + seed | `CREATE SCHEMA` + DDL + seed | `CREATE DATABASE` (+ template) + DDL + seed |
-| `migrate()` | once | per schema | per database |
-| Isolation | logical (app scoping; optional RLS) | schema boundary | physical boundary |
-| Ceiling | noisy neighbors, shared pool | shared server resources | ops cost per tenant |
-| Best for | many small tenants, self-serve | mid-market, moderate count | enterprise, compliance, residency |
+### 6.2 Uniform model and composite identity
 
-### 4.3 Routing
+One `MetaData` per plane, one migration chain. In every strategy:
+`PK(tenant_id, id)` for tenant-scoped tables, composite FKs between them, and a
+metadata lint test that fails if any tenant-scoped FK omits `tenant_id`. In
+database-per-tenant mode the physical boundary is additional; logical
+constraints remain, so code paths and tests are identical. Details and exact
+table contracts: `02-relational-schema.md`.
 
-```
-request → resolve tenant → TenantContext → SessionRouter
-                                              │
-                              registry.placement{strategy,target}
-                                              │
-              ┌───────────────┬───────────────┴───────────────┐
-              ▼               ▼                               ▼
-        shared engine    engine + search_path          tenant DSN pool
-        (tenant_id pred) (schema-qualified metadata)   (tenant_id predicate
-                                                         still applied)
-```
+### 6.3 Scoping enforcement
 
-`SessionRouter` caches connection pools per target, creates them lazily, and
-enforces a maximum-pool guard so hybrid deployments cannot exhaust connections.
-Placement is per-tenant data; moving a tenant is an operational procedure
-(`provision` → copy → flip registry record → deprovision old), never an
-application change.
+`TenantSession` (the only session application code sees):
 
-### 4.4 Uniform model across strategies
-
-One `MetaData`, one migration chain. Tenant-owned tables carry `tenant_id` in all
-modes. Composite constraints `(tenant_id, id)` and composite FKs make
-cross-tenant references impossible in shared and schema modes; the physical
-boundary plus context validation covers database-per-tenant mode.
-
-### 4.5 Scoping enforcement
-
-Inside `TenantSession`:
-
-- **Reads:** a SQLAlchemy `with_loader_criteria` session event automatically adds
-  `tenant_id = ctx.tenant_id` to every tenant-owned SELECT/UPDATE/DELETE.
-  Application code never writes the predicate, so it cannot be forgotten.
-- **Writes:** a `before_flush` hook stamps `tenant_id` and validates that
-  referenced entities belong to the same tenant; violations raise
+- **Reads:** `with_loader_criteria` adds `tenant_id = ctx.tenant_id` to every
+  tenant-scoped ORM statement, including relationship loads.
+- **Writes:** `before_flush` stamps `tenant_id`, maintains timestamps and
+  soft-delete state, and validates composite references; violations raise
   `CrossTenantReferenceError`.
-- **Escape hatches:** only through a privileged context, and always audited.
+- **Bulk operations:** dedicated scoped helpers (`update_where`, `delete_where`)
+  inject the predicate. Arbitrary `session.execute(update/delete/text)` on
+  tenant-scoped models is outside the supported API; raw SQL must go through
+  `TenantSession.raw_sql(...)`, which requires the statement to reference the
+  tenant boundary or a privileged context, and is audited.
+- **Control plane:** `ControlPlaneSession` is framework-internal; service code
+  applies explicit tenant filters, and cross-tenant paths require operator or
+  system authority. Application code never holds one.
 
-### 4.6 Migrations and provisioning
+### 6.4 Migrations, provisioning, RLS
 
-Alembic is invoked programmatically by the migration runner, not as a developer
-CLI workflow. The strategy adapter distributes the same chain: once for shared,
-per schema for schema mode, per database for database mode. Version tracking
-lives naturally per target (`alembic_version` in each schema/database), with
-per-tenant migration status recorded in the registry.
+Programmatic Alembic runner distributes the same chain per target; each target
+tracks `alembic_version` locally and the registry tracks
+`TenantMigrationState` (`pending → running → success | failed | blocked`). A
+tenant becomes `active` only after create → migrate → seed → health check →
+invariants pass. Provisioning, migration, seeding, and deprovisioning are
+idempotent or safely resumable; lifecycle operations are serialized per tenant
+with a Postgres advisory lock. RLS is opt-in, shared-schema only: `FORCE ROW
+LEVEL SECURITY`, `NOBYPASSRLS` runtime role, `SET LOCAL app.tenant_id` per
+transaction, and pool-leakage tests. Details: `05-tenant-lifecycle.md`,
+`06-strategy-matrix.md`.
 
-`provision()` = create place → run migration chain → seed built-in roles and
-default settings → flip status to `active` → run `TenantLifecycleHook`s.
+### 6.5 Strategy-independent vs strategy-specific
 
-### 4.7 Optional RLS
-
-Shared-schema only, enabled by config. Migrations emit policies
-`USING (tenant_id = current_setting('app.tenant_id')::uuid)`; each transaction
-begins with `SET LOCAL app.tenant_id` under an application role with
-`NOBYPASSRLS`. The integration matrix runs with RLS on and off. Requesting RLS
-under a non-shared strategy raises `StrategyCapabilityError` at startup.
-
-### 4.8 Strategy-independent vs strategy-specific
-
-| Strategy-independent (never changes) | Strategy-specific (adapter internals) |
+| Strategy-independent | Strategy-specific |
 |---|---|
-| Domain models and mixins | Connection/pool management and routing |
+| Domain models, mixins, composite identity | Pool management and routing |
 | `TenantContext`, resolution, `TenantSession` API | DDL, provisioning, migration distribution |
-| AuthN/AuthZ, roles, PDP, audit | RLS emission and session setting |
-| Application services and business logic | Placement decisions, deprovisioning mode |
+| AuthN/AuthZ, roles, PDP, auditing | RLS emission and session setting |
+| Application services and business logic | Placement decisions, deprovision mode |
 
-## 5. Authentication and authorization integration
+## 7. Authentication and authorization
 
-### 5.1 Principals
+### 7.1 Authentication
 
-| Principal | Plane | Identity source | Bound to tenant |
-|---|---|---|---|
-| `User` | global | OIDC `(iss, sub)` → `IdentityLink` → `User` | via `Membership` |
-| `ServiceAccount` | tenant | API key | yes, pinned |
-| `PlatformOperator` | platform | OIDC + operator flag | no; privileged context |
+- **OIDC/JWT:** JWKS with rotation-aware cache; issuer/audience/algorithm/clock
+  skew config. Login linking algorithm: `(issuer, subject)` match → existing
+  user; else if the IdP is `email_trusted` and the verified email matches an
+  existing user → link; else create a user. No unverified email is ever trusted;
+  no silent auto-provisioning outside this algorithm.
+- **API keys:** `prefix.keyid.secret`; Argon2id hash at rest; prefix lookup in
+  the control plane (works before tenant resolution); optional narrowing scopes;
+  `last_used_at`; pinned to one tenant and service account; revocable.
+- The package verifies credentials; it never issues passwords or sessions.
 
-Authorization evaluates a `Principal`; no downstream component cares which kind.
+### 7.2 Authorization
 
-### 5.2 Authentication (verification, never issuance)
-
-- **OIDC/JWT:** JWKS fetch with rotation-aware cache; configurable issuer,
-  audience, algorithms, clock skew; claims resolve to a `User` through
-  `IdentityLink`. No link and no pending invitation ⇒ deny. There is no silent
-  auto-provisioning; invitations match on the verified email claim.
-- **API keys:** format `prefix.keyid.secret`; only an Argon2id hash is stored;
-  the prefix enables lookup; optional per-key scopes; `last_used_at` tracked;
-  revocation supported; each key is pinned to one tenant and one service account.
-- Browser sessions and login UI remain the host application's concern. The
-  package authenticates requests; it does not mint or store user credentials.
-
-### 5.3 Authorization
+One evaluator (`PDP`), one traversal algorithm, additive and allow-only:
 
 ```
-authenticate            →  Principal
-resolve tenant          →  Tenant (claim | subdomain | path | header | key)
-verify principal↔tenant →  Membership? PlatformOperator? else 404
-build TenantContext     →  session, strategy, actor
-authorize(permission, scope_or_resource)
-   ├─ union of RoleBindings at scope and ancestors (team → org → tenant)
-   ├─ plus ResourceGrants on that resource
-   └─ additive, allow-only; absence of allow = deny
+authenticate → Principal (user | service_account | platform operator)
+principal + tenant must be active → Membership active (or operator capability)
+effective_permissions(principal, target) =
+    bindings at target scope and its ancestors (team → org → tenant)
+  ∪ resource grants for that exact resource
 ```
 
-- Permission catalog is code: namespaced `resource:action`; modules register
-  theirs at startup; unknown names fail fast.
-- Roles are tenant-owned data composed from the catalog, so customization cannot
-  escalate beyond what the code defines.
-- PDP interface: `can(principal, permission, target) → Decision(allowed, reason,
-  matched_rules)`. The built-in evaluator is the v1 implementation; decisions
-  carry their reasoning for audit. Effective-permission resolution is cached for
-  the duration of a request only; any longer-lived cache introduced later must
-  be invalidated on role and binding changes.
-- Anti-escalation: a non-owner may only assign roles whose permissions they hold;
-  owners are bounded by the catalog. Enforced in the evaluator, not per endpoint.
-- Enforcement points: declarative `@requires("invoice:approve", scope=resource)`
-  for endpoints and explicit `authorize()` for jobs and CLI — one evaluator
-  behind both.
-- Cross-tenant operations require `PlatformOperator` plus privileged context and
-  always write a platform audit event.
-- Unknown tenant and unauthorized tenant both return 404 to non-operators.
+Precedence chain (all must hold): `Principal status → Tenant status →
+Membership status → RoleBinding validity → Permission granted`. Exact algorithm,
+anti-escalation rule, ownership transfer semantics, and the role × action matrix:
+`04-authorization-model.md`.
 
-## 6. Package architecture
+Platform operator levels are code-mapped capabilities
+(`support/operator/admin`), are never a blanket bypass, and tenant data access
+by an operator is a separate, time-boxed, audited capability distinct from
+tenant administration.
 
-`src/` layout, package `jdlib`, Python 3.12+, async-first.
+## 8. Package architecture
 
 ```
 src/jdlib/
-├── config.py            # TenancyConfig (pydantic-settings)
-├── context.py           # TenantContext, contextvar, fail-closed accessors
-├── errors.py            # exception hierarchy
-├── models/
-│   ├── base.py          # DeclarativeBase + mixins (TenantOwned, Timestamped, SoftDelete)
-│   ├── registry.py      # Tenant, TenantPlacement, TenantSetting
-│   ├── identity.py      # User, IdentityLink, ServiceAccount, ApiKey
-│   ├── org.py           # Organization, Team
-│   ├── access.py        # Membership, Role, RoleBinding, ResourceGrant, Invitation
-│   └── audit.py         # AuditEvent
-├── authn/               # Authenticator protocol, oidc.py, apikey.py
-├── authz/
-│   ├── permissions.py   # code catalog + module registration
-│   ├── scopes.py        # scope lookup + ancestor inheritance
-│   ├── pdp.py           # PolicyDecisionPoint protocol + built-in evaluator + cache
-│   └── guards.py        # requires() / authorize()
-├── tenancy/
-│   ├── resolution.py    # resolver chain + built-ins
-│   ├── registry.py      # TenantRegistry lifecycle service
-│   ├── provisioning.py  # provision/deprovision orchestration + lifecycle hooks
-│   └── middleware.py    # ASGI middleware, job/CLI decorators
+├── config.py             # TenancyConfig (pydantic-settings)
+├── context.py            # TenantContext, ContextFactory, envelope, fail-closed accessors
+├── errors.py             # exception hierarchy
+├── control/              # platform control plane (own MetaData, never routed)
+│   ├── models.py         # Tenant, TenantPlacement, TenantMigrationState, User, IdentityLink,
+│   │                     #   PlatformOperator, ServiceAccount, ApiKey, Membership, Role,
+│   │                     #   RolePermission, RoleBinding, ResourceGrant, Invitation, audit
+│   ├── session.py        # ControlPlaneSession (framework-internal)
+│   ├── registry.py       # TenantRegistry: lifecycle, locks, migration state
+│   └── access.py         # AccessControl: invite, bind, grant, revoke, transfer ownership
+├── models/               # tenant plane (routed)
+│   ├── base.py           # DeclarativeBase + mixins (TenantOwned, Timestamped, SoftDelete, …)
+│   ├── org.py            # Organization, Team
+│   ├── settings.py       # TenantSetting
+│   └── audit.py          # AuditEvent
+├── authn/                # Authenticator protocol · oidc.py · apikey.py
+├── authz/                # permissions.py · scopes.py · pdp.py · guards.py
+├── tenancy/              # resolution.py · middleware.py (ASGI, job/CLI decorators)
 ├── persistence/
-│   ├── session.py       # TenantSession: scoping events, stamping, validation
-│   ├── router.py        # SessionRouter: target resolution, pool cache and caps
-│   ├── uow.py           # UnitOfWork transaction boundaries
-│   ├── repository.py    # TenantRepository base
-│   └── strategies/      # base.py, shared.py, schema.py, database.py, rls.py
-├── audit/               # AuditSink protocol + DB sink
-├── migrations/          # programmatic Alembic runner + template env
-├── testing/             # pytest fixtures, strategy matrix, isolation assertion kit
-└── integrations/
-    ├── fastapi.py       # middleware + dependencies (optional extra)
-    └── cli.py           # ops commands (optional extra)
+│   ├── session.py        # TenantSession: scoping, stamping, validation, raw_sql
+│   ├── router.py         # SessionRouter: target resolution, pool cache and caps
+│   ├── uow.py            # UnitOfWork
+│   ├── repository.py     # TenantRepository base
+│   └── strategies/       # base.py, shared.py, schema.py, database.py, rls.py
+├── audit/                # AuditSink protocol + control/tenant sinks
+├── migrations/           # programmatic Alembic runner + template env
+├── testing/              # pytest fixtures, strategy matrix, isolation assertion kit
+└── integrations/         # fastapi.py, cli.py (optional extras)
 ```
 
-Dependency direction, enforced by imports:
+Dependency direction: `config → errors → context → {control, models} → authz →
+persistence → authn → tenancy → integrations`. `control` and `models` never
+import `persistence`; applications import `models`, the persistence API,
+`authz` guards, `context`, and framework services — never a concrete strategy.
 
-```
-config → errors → context → models → authz
-                              ↑
-        persistence (strategies) → authn → tenancy → integrations
-```
+Public API: `TenancyConfig`, `TenantContext`, `current_tenant`,
+`current_principal`, `UnitOfWork`, `TenantRepository`, `requires`, `authorize`,
+`TenantRegistry`, `AccessControl`.
 
-`models` imports nothing from `persistence`, `authn`, or `tenancy`. Applications
-depend on `models`, the persistence API (session/UoW/repository), `authz` guards,
-and `context` — never on a concrete strategy.
+Extension points: `IsolationStrategy`, `TenantResolver`, `Authenticator`,
+`PolicyDecisionPoint`, `AuditSink`, `RoleTemplateProvider`,
+`PermissionProvider`, `TenantLifecycleHook`, ORM mixins. Dependencies:
+SQLAlchemy 2.0, Pydantic v2 + pydantic-settings, Alembic, PyJWT + httpx,
+argon2-cffi; extras `[fastapi]`, `[postgres]`, `[cli]`.
 
-Public API (re-exported from `jdlib/__init__.py`): `TenancyConfig`,
-`TenantContext`, `current_tenant`, `UnitOfWork`, `TenantRepository`, `requires`,
-`authorize`, `TenantRegistry`. Everything else is reachable by module path for
-extension authors.
+## 9. Errors, auditing, external state
 
-### 6.1 Dependencies
+Exception hierarchy (one root): `MissingTenantContext`;
+`TenantNotFound`/`TenantAccessDenied`/`TenantSuspended`; `CrossTenantReferenceError`;
+`AuthenticationError` (`InvalidToken`, `ExpiredToken`, `UnknownPrincipal`);
+`AuthorizationError` (`PermissionDenied`, `RoleEscalationBlocked`);
+`StrategyCapabilityError`; `ProvisioningError`/`MigrationError`. HTTP mapping:
+401 / 403 / 404 / 423 / 409 as before.
 
-Required: SQLAlchemy 2.0, Pydantic v2 + pydantic-settings, Alembic, PyJWT +
-httpx (JWKS), argon2-cffi. Optional extras: `[fastapi]`, `[postgres]`
-(asyncpg), `[cli]` (typer). No DI framework, no policy engine, no ORM
-abstraction layer; extension points are plain `Protocol`s.
+Audit splits into **platform audit** (authn failures, resolution failures,
+privileged use, operator actions, lifecycle and migration events; written via
+`AuditSink`, may precede any transaction) and **tenant transactional audit**
+(same transaction as the mutation; actor from context). Both are append-only;
+runtime roles hold `INSERT`/`SELECT` only; retention/export is an `AuditSink`
+extension.
 
-### 6.2 Extension points
+External state (caches, queues, object storage, search/vector stores) is never
+allowed to cross tenants: framework-provided `scoped_key(prefix, *parts)`
+produces `{tenant_id}:{...}` keys, events carry the tenant envelope, and the
+convention is documented as an invariant (I8).
 
-| Interface | Default | Replaced when |
-|---|---|---|
-| `IsolationStrategy` | shared / schema / database | new physical model (sharding, Aurora-per-tenant) |
-| `TenantResolver` | claim, subdomain, path, header, key | new channel (mTLS CN, gateway header) |
-| `Authenticator` | OIDC/JWT, API key | mTLS, HMAC webhooks, legacy tokens |
-| `PolicyDecisionPoint` | built-in evaluator | Casbin/OPA/Cedar escalation |
-| `AuditSink` | DB table | SIEM/webhook fan-out |
-| `RoleTemplateProvider` | owner/admin/member/viewer | industry-specific seed roles |
-| `PermissionProvider` | app registration hook | dynamic module catalogs |
-| `TenantLifecycleHook` | none | per-tenant buckets, indexes, caches |
-| ORM mixins | `TenantOwned`, ownership FKs | custom ownership columns |
+## 10. Testing strategy
 
-## 7. Errors and auditing
+- Unit: context factory and fail-closed behavior, envelope verification,
+  resolver chain, catalog validation, PDP truth tables, precedence chain,
+  scoping/stamping/composite validation, anti-escalation.
+- Integration matrix (dockerized Postgres): `{shared, schema, database} × {rls
+  on, off}` executing the same behavioral suite — the proof of
+  strategy-independence. Includes connection-pool tenant-leakage tests, bulk-op
+  coverage, relationship-loading coverage, and migration-state failure tests.
+- `jdlib.testing`: fixtures for consumers to assert I1–I10 against their own
+  models under each deployed strategy.
 
-### 7.1 Exception hierarchy
+## 11. Out of scope for v1
 
-```
-JdlibError
-├── MissingTenantContext
-├── TenantNotFound / TenantAccessDenied / TenantSuspended
-├── CrossTenantReferenceError
-├── AuthenticationError        # InvalidToken, ExpiredToken, UnknownPrincipal
-├── AuthorizationError         # PermissionDenied, RoleEscalationBlocked
-├── StrategyCapabilityError
-└── ProvisioningError / MigrationError
-```
+Password auth, MFA, reset flows; billing/quota/usage and `Subscription`; email
+delivery and notification templates; file storage; tenant self-service admin UI;
+automated tenant relocation; external policy engines; deny rules; arbitrary
+resource trees; multi-region routing; sync SQLAlchemy execution. Each has a
+documented seam.
 
-FastAPI integration maps: `AuthenticationError → 401`, `AuthorizationError →
-403`, `TenantNotFound`/`TenantAccessDenied → 404`, `TenantSuspended → 423`,
-`CrossTenantReferenceError → 409`. Non-HTTP callers receive the typed exceptions.
-
-### 7.2 Auditing rules
-
-- Every mutation writes its `AuditEvent` in the same transaction; if the audit
-  write fails, the mutation rolls back.
-- The actor is taken from `TenantContext`, never passed as an argument.
-- Authentication failures, resolution failures, privileged-context use, role
-  binding changes, and membership changes are always audited; platform-scope
-  events have `tenant_id = NULL`.
-- Append-only: under RLS the runtime role has no `UPDATE`/`DELETE` on the audit
-  table. Retention/export is an `AuditSink` extension.
-
-## 8. Testing strategy
-
-- **Unit:** context propagation and fail-closed behavior; resolver chain;
-  permission catalog validation; PDP truth tables; stamping and scoping events;
-  anti-escalation rules.
-- **Integration matrix** (dockerized Postgres):
-  `{shared, schema, database} × {rls on, off}` runs the same behavioral suite
-  through one parametrized fixture. This suite is the proof of the
-  strategy-independence claim.
-- **Consumer kit:** `jdlib.testing` ships pytest fixtures that let consuming
-  applications assert isolation over their own models: cross-tenant read denial,
-  cross-tenant reference rejection, automatic stamping, and 404-on-unauthorized,
-  under each deployed strategy.
-
-## 9. Out of scope for v1
-
-Password auth, MFA, password reset; billing/quota/usage metering; email delivery
-and notification templates; file storage; tenant self-service admin UI;
-automated tenant relocation (documented manual procedure only); external policy
-engines; deny-based policies; arbitrary-depth resource trees; multi-region
-routing; synchronous SQLAlchemy execution path. The design accommodates each
-without structural change.
-
-## 10. Implementation phases
+## 12. Implementation phases
 
 | Phase | Delivers | Gate |
 |---|---|---|
-| 0 | Scaffold, config, errors, context | context fail-closed tests |
-| 1 | Models, mixins, baseline migration, `TenantRegistry` | schema tests; single-tenant usable |
-| 2 | `TenantSession` scoping/stamping, router, UoW, repository, strategy interface + shared adapter | isolation unit tests |
-| 3 | AuthN (OIDC + API keys), permission catalog, PDP, guards, membership/roles | PDP truth tables; auth matrix |
-| 4 | Schema and database adapters, provisioning, migration distribution, RLS | full strategy × RLS integration matrix |
-| 5 | Audit, `jdlib.testing` kit, FastAPI/CLI integrations, docs | consumer acceptance test |
-
-Business applications can start on shared-schema after Phase 3 and become
-strategy-portable when Phase 4 lands.
+| 0 | Design contracts (`docs/jdlib/02`–`06`) and revision of this spec | review sign-off |
+| 1 | Control-plane and tenant-plane models, mixins, baseline migrations, metadata lint | schema tests; single-tenant usable |
+| 2 | `ContextFactory`, fail-closed context, envelope, resolution chain | context and envelope tests |
+| 3 | `TenantSession` scoping/stamping/composite validation, router, UoW, repository | isolation unit tests |
+| 4 | Shared strategy end-to-end | first working deployment |
+| 5 | Authorization: catalog, PDP, guards, `AccessControl`, membership/roles | PDP truth tables; authz matrix |
+| 6 | Authentication adapters: OIDC + API keys | auth matrix; linking algorithm tests |
+| 7 | Schema-per-tenant adapter, provisioning, migration distribution | strategy matrix: schema |
+| 8 | Database-per-tenant adapter, secret-provider handles | strategy matrix: database |
+| 9 | RLS adapter and pool-safety tests | strategy matrix: shared × RLS |
+| 10 | Audit sinks, `jdlib.testing` kit, FastAPI/CLI integrations, docs | consumer acceptance test |
