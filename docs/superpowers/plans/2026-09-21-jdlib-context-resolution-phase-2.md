@@ -16,6 +16,7 @@
 - `TenantContext`, `Principal`, `PrivilegeContext` are frozen (`dataclass(frozen=True, slots=True)`); the contextvar is the only module state and is fail-closed.
 - Envelopes are signed with HMAC-SHA256 using `context.signing_key`; they never carry permissions or scopes.
 - Context creation is only possible through `ContextFactory`; privileged creation requires the internal `_PrivilegeIssuer` capability and a `PrivilegeAudit` record.
+- Principal kinds: `jdlib.context.PrincipalKind` = `user | service_account | platform_operator`. `jdlib.control.enums.PrincipalType` = `user | service_account` and is only for binding/grant rows; never use it for `Principal.kind`.
 - HTTP error mapping is frozen: `AuthenticationError→401`, `AuthorizationError→403`, `TenantNotFound`/`TenantAccessDenied→404`, `TenantSuspended`/`TenantNotWritable→423`, `CrossTenantReferenceError→409`, other `JdlibError→500`.
 - Ports are `typing.Protocol`s; no service may import `persistence`, `authn`, or concrete strategies.
 - Commands: `.venv/Scripts/python -m pytest ...`, `.venv/Scripts/python -m ruff check .`, `.venv/Scripts/python -m mypy src/jdlib`.
@@ -161,8 +162,8 @@ git commit -m "feat: tenancy configuration (context, resolvers)"
 - Create: `tests/unit/test_context_values.py`
 
 **Interfaces:**
-- Consumes: `jdlib.errors.MissingTenantContext`; enums from `jdlib.control.enums` (`PrincipalType`, `PlacementStrategy`, `TenantStatus`, `OperatorLevel`).
-- Produces: `Principal`, `PrivilegeContext`, `PrivilegeKind`, `TenantContext`, `TenantRef`, `TenantRecord`, `Clock`, `SystemClock`, `current_tenant()`, `current_principal()`, `current_privilege()`, `context_scope()`, `scoped_key()`.
+- Consumes: `jdlib.errors.MissingTenantContext`; `PlacementStrategy`, `TenantStatus`, `OperatorLevel` from `jdlib.control.enums`.
+- Produces: `PrincipalKind` (`user`, `service_account`, `platform_operator` — distinct from `control.enums.PrincipalType`, which is the binding-only pair `user`/`service_account`), `Principal`, `PrivilegeContext`, `PrivilegeKind`, `TenantContext`, `TenantRef`, `TenantRecord`, `Clock`, `SystemClock`, `current_tenant()`, `current_principal()`, `current_privilege()`, `context_scope()`, `scoped_key()`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -174,9 +175,10 @@ import uuid
 
 import pytest
 
-from jdlib.control.enums import PlacementStrategy, PrincipalType, TenantStatus
+from jdlib.control.enums import PlacementStrategy, TenantStatus
 from jdlib.context import (
     Principal,
+    PrincipalKind,
     TenantContext,
     TenantRecord,
     TenantRef,
@@ -194,7 +196,7 @@ def _context() -> TenantContext:
         tenant_id=uuid.UUID("00000000-0000-0000-0000-0000000000aa"),
         tenant_slug="acme",
         strategy=PlacementStrategy.SHARED,
-        principal=Principal(kind=PrincipalType.USER, id=uuid.uuid4()),
+        principal=Principal(kind=PrincipalKind.USER, id=uuid.uuid4()),
         request_id="req-1",
         correlation_id="corr-1",
     )
@@ -226,7 +228,7 @@ def test_value_objects_are_frozen():
     with pytest.raises(dataclasses.FrozenInstanceError):
         context.tenant_id = uuid.uuid4()  # type: ignore[misc]
     with pytest.raises(dataclasses.FrozenInstanceError):
-        context.principal.kind = PrincipalType.SERVICE_ACCOUNT  # type: ignore[misc]
+        context.principal.kind = PrincipalKind.SERVICE_ACCOUNT  # type: ignore[misc]
 
 
 def test_scoped_key_is_versioned_and_encoded():
@@ -268,8 +270,14 @@ from enum import StrEnum
 from typing import Protocol
 from urllib.parse import quote
 
-from jdlib.control.enums import OperatorLevel, PlacementStrategy, PrincipalType, TenantStatus
+from jdlib.control.enums import OperatorLevel, PlacementStrategy, TenantStatus
 from jdlib.errors import MissingTenantContext
+
+
+class PrincipalKind(StrEnum):
+    USER = "user"
+    SERVICE_ACCOUNT = "service_account"
+    PLATFORM_OPERATOR = "platform_operator"
 
 
 class PrivilegeKind(StrEnum):
@@ -280,7 +288,7 @@ class PrivilegeKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Principal:
-    kind: PrincipalType
+    kind: PrincipalKind
     id: uuid.UUID
     user_id: uuid.UUID | None = None
     tenant_id: uuid.UUID | None = None
@@ -511,8 +519,15 @@ import uuid
 import pytest
 
 from jdlib.config import ContextConfig
-from jdlib.context import ContextFactory, Principal, PrivilegeKind, TenantRecord, TenantRef
-from jdlib.control.enums import OperatorLevel, PlacementStrategy, PrincipalType, TenantStatus
+from jdlib.context import (
+    ContextFactory,
+    Principal,
+    PrincipalKind,
+    PrivilegeKind,
+    TenantRecord,
+    TenantRef,
+)
+from jdlib.control.enums import OperatorLevel, PlacementStrategy, TenantStatus
 from jdlib.errors import (
     AuthorizationError,
     MissingTenantContext,
@@ -555,10 +570,12 @@ def _factory(
         config=ContextConfig(
             signing_key="test-key", allow_test_contexts=allow_test
         ),
-        principals=StaticPrincipals(active or {USER_ID, OPERATOR_ID}),
+        principals=StaticPrincipals(active if active is not None else {USER_ID, OPERATOR_ID}),
         tenants=DictTenants([_record()]),
         servability=ServabilityStub(suspended),
-        entitlements=EntitlementsStub(allowed or {(USER_ID, TENANT_ID)}),
+        entitlements=EntitlementsStub(
+            allowed if allowed is not None else {(USER_ID, TENANT_ID)}
+        ),
         operators=OperatorsStub(capabilities or set()),
         audit=audit,
         clock=FrozenClock(),
@@ -567,7 +584,7 @@ def _factory(
 
 
 def _user() -> Principal:
-    return Principal(kind=PrincipalType.USER, id=USER_ID, user_id=USER_ID)
+    return Principal(kind=PrincipalKind.USER, id=USER_ID, user_id=USER_ID)
 
 
 async def test_for_principal_happy_path():
@@ -606,7 +623,7 @@ async def test_for_principal_rejects_unentitled_principal():
 
 async def test_for_operator_requires_platform_operator_kind():
     factory, _ = _factory()
-    operator = Principal(kind=PrincipalType.USER, id=OPERATOR_ID)
+    operator = Principal(kind=PrincipalKind.USER, id=OPERATOR_ID)
     with pytest.raises(AuthorizationError):
         await factory.for_operator(
             operator, TenantRef(slug="acme"), "platform.tenant.access",
@@ -617,7 +634,7 @@ async def test_for_operator_requires_platform_operator_kind():
 async def test_for_operator_requires_justification_and_capability():
     factory, _ = _factory()
     operator = Principal(
-        kind=PrincipalType.PLATFORM_OPERATOR, id=OPERATOR_ID, operator_level=OperatorLevel.OPERATOR
+        kind=PrincipalKind.PLATFORM_OPERATOR, id=OPERATOR_ID, operator_level=OperatorLevel.OPERATOR
     )
     with pytest.raises(AuthorizationError):
         await factory.for_operator(
@@ -634,7 +651,7 @@ async def test_for_operator_requires_justification_and_capability():
 async def test_for_operator_creates_audited_expiring_privilege():
     factory, audit = _factory(capabilities={"platform.tenant.access"})
     operator = Principal(
-        kind=PrincipalType.PLATFORM_OPERATOR, id=OPERATOR_ID, operator_level=OperatorLevel.OPERATOR
+        kind=PrincipalKind.PLATFORM_OPERATOR, id=OPERATOR_ID, operator_level=OperatorLevel.OPERATOR
     )
     context = await factory.for_operator(
         operator, TenantRef(slug="acme"), "platform.tenant.access",
@@ -658,7 +675,7 @@ async def test_for_operator_creates_audited_expiring_privilege():
 async def test_for_operator_rejects_ttl_above_maximum():
     factory, _ = _factory(capabilities={"platform.tenant.access"})
     operator = Principal(
-        kind=PrincipalType.PLATFORM_OPERATOR, id=OPERATOR_ID, operator_level=OperatorLevel.OPERATOR
+        kind=PrincipalKind.PLATFORM_OPERATOR, id=OPERATOR_ID, operator_level=OperatorLevel.OPERATOR
     )
     from datetime import timedelta
 
@@ -829,7 +846,7 @@ class ContextFactory:
         correlation_id: str | None = None,
         trace_id: str | None = None,
     ) -> TenantContext:
-        if operator.kind is not PrincipalType.PLATFORM_OPERATOR:
+        if operator.kind is not PrincipalKind.PLATFORM_OPERATOR:
             raise AuthorizationError("operator context requires a platform operator principal")
         if not justification.strip():
             raise AuthorizationError("operator context requires a justification")
@@ -879,7 +896,7 @@ class ContextFactory:
             kind=PrivilegeKind.SYSTEM,
             capability=purpose,
             justification=None,
-            actor=Principal(kind=PrincipalType.PLATFORM_OPERATOR, id=uuid.uuid4()),
+            actor=Principal(kind=PrincipalKind.PLATFORM_OPERATOR, id=uuid.uuid4()),
             issued_at=now,
             expires_at=None,
         )
@@ -922,7 +939,7 @@ class ContextFactory:
         )
 ```
 
-Note: the system context's actor uses `PrincipalType.PLATFORM_OPERATOR` with
+Note: the system context's actor uses `PrincipalKind.PLATFORM_OPERATOR` with
 `operator_level=None`; `PrivilegeKind.SYSTEM` is what distinguishes it.
 
 - [ ] **Step 5: Run tests to verify they pass**
@@ -964,8 +981,8 @@ from datetime import timedelta
 import pytest
 
 from jdlib.config import ContextConfig
-from jdlib.context import EnvelopeCodec, Principal, TenantContext
-from jdlib.control.enums import PlacementStrategy, PrincipalType
+from jdlib.context import EnvelopeCodec, Principal, PrincipalKind, TenantContext
+from jdlib.control.enums import PlacementStrategy
 from jdlib.errors import ExpiredToken, InvalidToken
 from tests.support.context_fakes import FrozenClock
 
@@ -977,7 +994,7 @@ def _context() -> TenantContext:
         tenant_id=TENANT_ID,
         tenant_slug="acme",
         strategy=PlacementStrategy.SHARED,
-        principal=Principal(kind=PrincipalType.USER, id=uuid.uuid4(), scopes=frozenset({"x"})),
+        principal=Principal(kind=PrincipalKind.USER, id=uuid.uuid4(), scopes=frozenset({"x"})),
         request_id="req-1",
         correlation_id="corr-1",
         trace_id="trace-1",
@@ -994,7 +1011,7 @@ def test_roundtrip_preserves_identity_fields_only():
     codec = _codec()
     envelope = codec.decode(codec.encode(_context()))
     assert envelope.tenant_id == TENANT_ID
-    assert envelope.principal_type is PrincipalType.USER
+    assert envelope.principal_type is PrincipalKind.USER
     assert envelope.request_id == "req-1"
     assert envelope.correlation_id == "corr-1"
     assert envelope.trace_id == "trace-1"
@@ -1062,7 +1079,7 @@ Add imports: `import base64`, `import hashlib`, `import hmac`, `import json`.
 @dataclass(frozen=True, slots=True)
 class TenantContextEnvelope:
     tenant_id: uuid.UUID
-    principal_type: PrincipalType
+    principal_type: PrincipalKind
     principal_id: uuid.UUID
     request_id: str
     correlation_id: str
@@ -1107,7 +1124,7 @@ class EnvelopeCodec:
             issued_at = datetime.fromisoformat(payload["issued_at"])
             envelope = TenantContextEnvelope(
                 tenant_id=uuid.UUID(payload["tenant_id"]),
-                principal_type=PrincipalType(payload["principal_type"]),
+                principal_type=PrincipalKind(payload["principal_type"]),
                 principal_id=uuid.UUID(payload["principal_id"]),
                 request_id=str(payload["request_id"]),
                 correlation_id=str(payload["correlation_id"]),
@@ -1169,8 +1186,7 @@ git commit -m "feat: signed tenant context envelope"
 import uuid
 
 from jdlib.config import ResolverConfig, ResolverName
-from jdlib.context import Principal, TenantRef
-from jdlib.control.enums import PrincipalType
+from jdlib.context import Principal, PrincipalKind, TenantRef
 from jdlib.tenancy.resolution import (
     ApiKeyResolver,
     HeaderResolver,
@@ -1232,12 +1248,12 @@ async def test_header_resolver_is_case_insensitive():
 
 async def test_api_key_resolver_uses_pinned_tenant():
     resolver = ApiKeyResolver()
-    pinned = Principal(kind=PrincipalType.SERVICE_ACCOUNT, id=uuid.uuid4(), tenant_id=TENANT_ID)
+    pinned = Principal(kind=PrincipalKind.SERVICE_ACCOUNT, id=uuid.uuid4(), tenant_id=TENANT_ID)
     assert await resolver.resolve(_request(), pinned) == TenantRef(id=TENANT_ID)
     assert await resolver.resolve(_request(), None) is None
     assert (
         await resolver.resolve(
-            _request(), Principal(kind=PrincipalType.USER, id=uuid.uuid4())
+            _request(), Principal(kind=PrincipalKind.USER, id=uuid.uuid4())
         )
         is None
     )
@@ -1280,8 +1296,7 @@ from collections.abc import Mapping, Sequence
 from typing import NamedTuple, Protocol
 
 from jdlib.config import ResolverConfig, ResolverName
-from jdlib.context import Principal, TenantRef
-from jdlib.control.enums import PrincipalType
+from jdlib.context import Principal, PrincipalKind, TenantRef
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 
@@ -1364,7 +1379,7 @@ class HeaderResolver:
 
 class ApiKeyResolver:
     async def resolve(self, request: RequestInfo, principal: Principal | None) -> TenantRef | None:
-        if principal is None or principal.kind is not PrincipalType.SERVICE_ACCOUNT:
+        if principal is None or principal.kind is not PrincipalKind.SERVICE_ACCOUNT:
             return None
         if principal.tenant_id is None:
             return None
@@ -1450,11 +1465,12 @@ from jdlib.context import (
     ContextPropagator,
     EnvelopeCodec,
     Principal,
+    PrincipalKind,
     TenantContext,
     TenantRecord,
     current_tenant,
 )
-from jdlib.control.enums import PlacementStrategy, PrincipalType, TenantStatus
+from jdlib.control.enums import PlacementStrategy, TenantStatus
 from jdlib.errors import (
     InvalidToken,
     MissingTenantContext,
@@ -1486,7 +1502,7 @@ def _context() -> TenantContext:
         tenant_id=TENANT_ID,
         tenant_slug="acme",
         strategy=PlacementStrategy.SHARED,
-        principal=Principal(kind=PrincipalType.USER, id=USER_ID),
+        principal=Principal(kind=PrincipalKind.USER, id=USER_ID),
         request_id="req-1",
         correlation_id="corr-1",
     )
@@ -1513,7 +1529,7 @@ async def test_reconstruct_rebuilds_context_without_privilege():
     propagator, codec = _propagator()
     context = await propagator.reconstruct(codec.encode(_context()))
     assert context.tenant_id == TENANT_ID
-    assert context.principal.kind is PrincipalType.USER
+    assert context.principal.kind is PrincipalKind.USER
     assert context.principal.id == USER_ID
     assert context.privilege is None
     assert context.request_id == "req-1"
@@ -1694,8 +1710,8 @@ import uuid
 import pytest
 
 from jdlib.config import ContextConfig
-from jdlib.context import ContextFactory, Principal, TenantRecord
-from jdlib.control.enums import PlacementStrategy, PrincipalType, TenantStatus
+from jdlib.context import ContextFactory, Principal, PrincipalKind, TenantRecord
+from jdlib.control.enums import PlacementStrategy, TenantStatus
 from jdlib.errors import (
     AuthenticationError,
     AuthorizationError,
@@ -1801,7 +1817,7 @@ async def test_happy_path_installs_context_for_inner_app():
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"ok"})
 
-    middleware = _middleware(_Provider(Principal(kind=PrincipalType.USER, id=USER_ID)), inner)
+    middleware = _middleware(_Provider(Principal(kind=PrincipalKind.USER, id=USER_ID)), inner)
     result = await _run(middleware, [(b"x-tenant-slug", b"acme")])
     assert result["status"] == 200
     assert seen == ["acme"]
@@ -1821,7 +1837,7 @@ async def test_unresolved_tenant_is_404():
     async def inner(scope, receive, send):
         raise AssertionError("must not run")
 
-    middleware = _middleware(_Provider(Principal(kind=PrincipalType.USER, id=USER_ID)), inner)
+    middleware = _middleware(_Provider(Principal(kind=PrincipalKind.USER, id=USER_ID)), inner)
     result = await _run(middleware, [])
     assert result["status"] == 404
 
@@ -1832,7 +1848,7 @@ async def test_denied_principal_is_404():
 
     other_user = uuid.uuid4()
     middleware = _middleware(
-        _Provider(Principal(kind=PrincipalType.USER, id=other_user)), inner, active={other_user}
+        _Provider(Principal(kind=PrincipalKind.USER, id=other_user)), inner, active={other_user}
     )
     result = await _run(middleware, [(b"x-tenant-slug", b"acme")])
     assert result["status"] == 404
@@ -1843,7 +1859,7 @@ async def test_context_is_cleared_after_request():
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b""})
 
-    middleware = _middleware(_Provider(Principal(kind=PrincipalType.USER, id=USER_ID)), inner)
+    middleware = _middleware(_Provider(Principal(kind=PrincipalKind.USER, id=USER_ID)), inner)
     await _run(middleware, [(b"x-tenant-slug", b"acme")])
     from jdlib.context import current_tenant
     from jdlib.errors import MissingTenantContext
