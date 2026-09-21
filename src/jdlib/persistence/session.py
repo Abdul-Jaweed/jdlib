@@ -6,6 +6,7 @@ from typing import Any, Protocol, cast
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import visitors
 
 from jdlib.context import TenantContext
 from jdlib.errors import (
@@ -55,8 +56,6 @@ def _register_events(session: Session) -> None:
         if state.is_select:
             tenant_id = context.tenant_id
             mappers = list(state.all_mappers)
-            if not mappers and state.bind_mapper is not None:
-                mappers = [state.bind_mapper]
             if not mappers:
                 get_final_froms = getattr(state.statement, "get_final_froms", None)
                 froms = (
@@ -64,7 +63,19 @@ def _register_events(session: Session) -> None:
                     if get_final_froms is not None
                     else getattr(state.statement, "froms", ())
                 )
-                if any(getattr(from_, "name", None) in tables for from_ in froms):
+                direct = {from_.name for from_ in froms if isinstance(from_, sa.Table)}
+                if (
+                    state.bind_mapper is not None
+                    and getattr(state.bind_mapper.local_table, "name", None) in direct
+                ):
+                    mappers = [state.bind_mapper]
+            if not mappers:
+                tenant_tables = {
+                    element.name
+                    for element in visitors.iterate(cast(Any, state.statement))
+                    if isinstance(element, sa.Table)
+                } & set(tables)
+                if tenant_tables:
                     raise UnscopedRawSql(
                         "table-level statements on tenant tables must use raw_sql"
                     )

@@ -84,6 +84,14 @@ async def test_table_level_select_rejected(session_factory):
             await session.execute(sa.select(Invoice.__table__))
 
 
+async def test_subquery_table_level_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(
+                sa.select(sa.func.count()).select_from(sa.select(Invoice.id).subquery())
+            )
+
+
 async def test_cross_tenant_get_returns_none(session_factory):
     other_id = uuid.uuid4()
     async with await _session(session_factory, TENANT_B) as session:

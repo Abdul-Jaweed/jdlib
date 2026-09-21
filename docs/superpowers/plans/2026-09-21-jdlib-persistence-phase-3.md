@@ -770,7 +770,7 @@ git commit -m "feat: structural raw SQL validator"
 **Interfaces:**
 - Consumes: Task 1–2; `TenantContext`; `TenantRouted`, `SoftDelete`; errors.
 - Produces: `TenantSession` with `context`, `raw_sql(statement, params, *, mode)`, `execute(statement)`, `get(model, id)`, `add(obj)`, `flush()`, `update_where(model, values, *criteria)`, `delete_where(model, *criteria)`; `RawSqlAuditor` protocol.
-- Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set, including DML wrapped in `select(...).from_statement(...)` (table resolved from the statement's `element`); entity-less ORM selects (e.g. `select(func.count()).select_from(Model)`) are scoped via the statement's bind mapper; SELECTs with no ORM mapper that reference a tenant table (`select(Model.__table__)`) are refused as `UnscopedRawSql`; `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar).
+- Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set, including DML wrapped in `select(...).from_statement(...)` (table resolved from the statement's `element`); entity-less ORM selects (e.g. `select(func.count()).select_from(Model)`) are scoped via the statement's bind mapper only when its table is a direct FROM; SELECTs that reference a tenant table anywhere in the statement tree without such a scopable bind mapper (`select(Model.__table__)`, or a tenant table buried in a subquery) are refused as `UnscopedRawSql`; `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar).
 
 - [ ] **Step 1: Add async fixtures to `tests/integration/conftest.py`**
 
@@ -896,6 +896,14 @@ async def test_table_level_select_rejected(session_factory):
     async with await _session(session_factory, TENANT_A) as session:
         with pytest.raises(UnscopedRawSql, match="table-level statements"):
             await session.execute(sa.select(Invoice.__table__))
+
+
+async def test_subquery_table_level_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(
+                sa.select(sa.func.count()).select_from(sa.select(Invoice.id).subquery())
+            )
 
 
 async def test_cross_tenant_get_returns_none(session_factory):
@@ -1106,6 +1114,7 @@ from typing import Any, Protocol, cast
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import visitors
 
 from jdlib.context import TenantContext
 from jdlib.errors import (
@@ -1155,8 +1164,6 @@ def _register_events(session: Session) -> None:
         if state.is_select:
             tenant_id = context.tenant_id
             mappers = list(state.all_mappers)
-            if not mappers and state.bind_mapper is not None:
-                mappers = [state.bind_mapper]
             if not mappers:
                 get_final_froms = getattr(state.statement, "get_final_froms", None)
                 froms = (
@@ -1164,7 +1171,19 @@ def _register_events(session: Session) -> None:
                     if get_final_froms is not None
                     else getattr(state.statement, "froms", ())
                 )
-                if any(getattr(from_, "name", None) in tables for from_ in froms):
+                direct = {from_.name for from_ in froms if isinstance(from_, sa.Table)}
+                if (
+                    state.bind_mapper is not None
+                    and getattr(state.bind_mapper.local_table, "name", None) in direct
+                ):
+                    mappers = [state.bind_mapper]
+            if not mappers:
+                tenant_tables = {
+                    element.name
+                    for element in visitors.iterate(cast(Any, state.statement))
+                    if isinstance(element, sa.Table)
+                } & set(tables)
+                if tenant_tables:
                     raise UnscopedRawSql(
                         "table-level statements on tenant tables must use raw_sql"
                     )
@@ -1336,13 +1355,13 @@ future version, adapt minimally.
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_session_isolation.py tests/unit/test_session.py -v`
-Expected: PASS (17 passed: 14 integration + 3 unit)
+Expected: PASS (18 passed: 15 integration + 3 unit)
 
 - [ ] **Step 6: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
-Expected: `155 passed`; `All checks passed!`; `Success: no issues found in 27 source files`.
+Expected: `156 passed`; `All checks passed!`; `Success: no issues found in 27 source files`.
 Note: the pre-existing unraisable `ResourceWarning` under `-W error` (undisposed engines in
 `tests/integration/test_migrations.py` / `test_tenant_models.py`) has been fixed by disposing
 those engines; the full suite is green under `-W error`.
