@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -13,10 +14,12 @@ from pglast.ast import (
     DeleteStmt,
     InsertStmt,
     JoinExpr,
+    Node,
     ParamRef,
     RangeSubselect,
     RangeVar,
     SelectStmt,
+    SubLink,
     UpdateStmt,
 )
 from pglast.enums import BoolExprType
@@ -88,6 +91,25 @@ def _conjuncts(where: object) -> list[object]:
     return [where]
 
 
+def _descendants(node: object) -> Iterator[Node]:
+    if isinstance(node, Node):
+        yield node
+        for field in node:
+            yield from _descendants(getattr(node, field))
+    elif isinstance(node, (tuple, list)):
+        for item in node:
+            yield from _descendants(item)
+
+
+def _scan_expression_tree(stmt: Node, relations: list[RangeVar]) -> None:
+    allowed = {id(relation) for relation in relations}
+    for node in _descendants(stmt):
+        if isinstance(node, SubLink):
+            raise UnscopedRawSql("subqueries are not allowed in tenant-bound SQL")
+        if isinstance(node, RangeVar) and id(node) not in allowed:
+            raise UnscopedRawSql(f"relation outside FROM clause not allowed: {node.relname}")
+
+
 def _relations(node: object) -> list[RangeVar]:
     if node is None:
         return []
@@ -116,28 +138,48 @@ class RawSqlValidator:
     def compile(
         statement: sa.TextClause, dialect: sa.Dialect, params: dict[str, object]
     ) -> CompiledRawSql:
-        compiled = statement.compile(dialect=dialect)
-        ordered_names = list(getattr(compiled, "positiontup", None) or params)
-        binds = tuple(params[name] for name in ordered_names)
+        try:
+            compiled = statement.compile(dialect=dialect)
+            ordered_names = list(getattr(compiled, "positiontup", None) or params)
+            binds = tuple(params[name] for name in ordered_names)
+        except Exception as exc:
+            raise UnscopedRawSql("raw SQL could not be compiled") from exc
         return CompiledRawSql(sql=str(compiled), binds=binds)
 
-    def _parse(self, compiled: CompiledRawSql) -> object:
-        statements = parse_sql(compiled.sql)
+    @staticmethod
+    def _reject_cte(stmt: Node, message: str) -> None:
+        if (
+            isinstance(stmt, (SelectStmt, InsertStmt, UpdateStmt, DeleteStmt))
+            and stmt.withClause is not None
+        ):
+            raise UnscopedRawSql(message)
+
+    def _parse(self, compiled: CompiledRawSql) -> Node:
+        try:
+            statements = parse_sql(compiled.sql)
+        except Exception as exc:
+            raise UnscopedRawSql("raw SQL could not be parsed") from exc
         if len(statements) != 1:
             raise UnscopedRawSql("exactly one statement is allowed")
         return statements[0].stmt
 
     def validate_tenant_bound(self, compiled: CompiledRawSql, tenant_id: uuid.UUID) -> None:
         stmt = self._parse(compiled)
-        if getattr(stmt, "withClause", None) is not None:
-            raise UnscopedRawSql("CTEs are not allowed in tenant-bound SQL")
+        self._reject_cte(stmt, "CTEs are not allowed in tenant-bound SQL")
         if isinstance(stmt, SelectStmt):
             relations = []
             for node in stmt.fromClause or ():
                 relations.extend(_relations(node))
             where = stmt.whereClause
-        elif isinstance(stmt, (UpdateStmt, DeleteStmt)):
+        elif isinstance(stmt, UpdateStmt):
             relations = _relations(stmt.relation)
+            for node in stmt.fromClause or ():
+                relations.extend(_relations(node))
+            where = stmt.whereClause
+        elif isinstance(stmt, DeleteStmt):
+            relations = _relations(stmt.relation)
+            for node in stmt.usingClause or ():
+                relations.extend(_relations(node))
             where = stmt.whereClause
         elif isinstance(stmt, InsertStmt):
             self._validate_insert(stmt, compiled, tenant_id)
@@ -148,6 +190,7 @@ class RawSqlValidator:
             raise UnscopedRawSql("tenant-bound statement requires a WHERE clause")
         conjuncts = _conjuncts(where)
         names = [_check_relation(relation, self._tables) for relation in relations]
+        _scan_expression_tree(stmt, relations)
         for relation, name in zip(relations, names, strict=True):
             qualifiers = {_relation_qualifier(relation)}
             if len(relations) == 1:
@@ -169,20 +212,27 @@ class RawSqlValidator:
             raise UnscopedRawSql("INSERT requires a VALUES list")
         if stmt.selectStmt.fromClause:
             raise UnscopedRawSql("INSERT ... SELECT is not allowed in tenant-bound SQL")
+        _scan_expression_tree(stmt, [relation])
         columns = [getattr(target.name, "sval", target.name) for target in (stmt.cols or ())]
         if "tenant_id" not in columns:
             raise UnscopedRawSql("INSERT must supply tenant_id explicitly")
         index = columns.index("tenant_id")
         values_lists = stmt.selectStmt.valuesLists or ()
-        if not values_lists or index >= len(values_lists[0]):
+        if not values_lists:
             raise UnscopedRawSql("INSERT tenant_id value missing")
-        param = _param_index(values_lists[0][index])
-        if param is None or param > len(compiled.binds) or compiled.binds[param - 1] != tenant_id:
-            raise UnscopedRawSql("INSERT tenant_id value is not bound to the active tenant")
+        for values in values_lists:
+            if index >= len(values):
+                raise UnscopedRawSql("INSERT tenant_id value missing")
+            param = _param_index(values[index])
+            if (
+                param is None
+                or not 1 <= param <= len(compiled.binds)
+                or compiled.binds[param - 1] != tenant_id
+            ):
+                raise UnscopedRawSql("INSERT tenant_id value is not bound to the active tenant")
 
     def validate_privileged(self, compiled: CompiledRawSql) -> None:
         stmt = self._parse(compiled)
-        if getattr(stmt, "withClause", None) is not None:
-            raise UnscopedRawSql("CTEs are not allowed")
+        self._reject_cte(stmt, "CTEs are not allowed")
         if not isinstance(stmt, (SelectStmt, InsertStmt, UpdateStmt, DeleteStmt)):
             raise UnscopedRawSql(f"unsupported statement type {type(stmt).__name__}")

@@ -342,6 +342,106 @@ def test_privileged_mode_still_rejects_ddl(validator):
     validator.validate_privileged(_compiled("SELECT * FROM invoices"))
     with pytest.raises(UnscopedRawSql):
         validator.validate_privileged(_compiled("DROP TABLE invoices"))
+
+
+def test_scalar_subquery_in_target_list_rejected(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "SELECT (SELECT count(*) FROM projects) FROM invoices "
+                "WHERE tenant_id = :tenant_id",
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
+def test_exists_subquery_in_where_rejected(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "SELECT * FROM invoices WHERE tenant_id = :tenant_id "
+                "AND EXISTS (SELECT 1 FROM projects)",
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
+def test_insert_checks_every_values_row(validator):
+    validator.validate_tenant_bound(
+        _compiled(
+            "INSERT INTO invoices (tenant_id, id) VALUES (:tenant_id, :id1), (:tenant_id, :id2)",
+            tenant_id=TENANT_ID,
+            id1=uuid.uuid4(),
+            id2=uuid.uuid4(),
+        ),
+        TENANT_ID,
+    )
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "INSERT INTO invoices (tenant_id, id) VALUES (:tenant_id, :id1), (:other, :id2)",
+                tenant_id=TENANT_ID,
+                other=OTHER_ID,
+                id1=uuid.uuid4(),
+                id2=uuid.uuid4(),
+            ),
+            TENANT_ID,
+        )
+
+
+def test_insert_literal_tenant_value_rejected(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "INSERT INTO invoices (tenant_id, id) VALUES (:tenant_id, :id1), "
+                "('00000000-0000-0000-0000-0000000000bb', :id2)",
+                tenant_id=TENANT_ID,
+                id1=uuid.uuid4(),
+                id2=uuid.uuid4(),
+            ),
+            TENANT_ID,
+        )
+
+
+def test_update_from_requires_predicate_on_every_relation(validator):
+    sql = (
+        "UPDATE invoices SET status = :status FROM projects p "
+        "WHERE invoices.tenant_id = :tenant_id"
+    )
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(sql, status="paid", tenant_id=TENANT_ID), TENANT_ID
+        )
+    sql_ok = (
+        "UPDATE invoices SET status = :status FROM projects p "
+        "WHERE invoices.tenant_id = :tenant_id AND p.tenant_id = :tenant_id"
+    )
+    validator.validate_tenant_bound(
+        _compiled(sql_ok, status="paid", tenant_id=TENANT_ID), TENANT_ID
+    )
+
+
+def test_delete_using_requires_predicate_on_every_relation(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "DELETE FROM invoices USING projects WHERE invoices.tenant_id = :tenant_id",
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
+def test_malformed_sql_raises_unscoped(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(_compiled("SELECT FROM"), TENANT_ID)
+
+
+def test_missing_bind_parameter_raises_unscoped():
+    with pytest.raises(UnscopedRawSql):
+        _compiled("SELECT * FROM invoices WHERE tenant_id = :tenant_id")
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -355,6 +455,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.persistence.raw
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -367,12 +468,15 @@ from pglast.ast import (
     DeleteStmt,
     InsertStmt,
     JoinExpr,
+    Node,
     ParamRef,
     RangeSubselect,
     RangeVar,
     SelectStmt,
+    SubLink,
     UpdateStmt,
 )
+from pglast.enums import BoolExprType
 
 from jdlib.errors import UnscopedRawSql
 from jdlib.persistence.models import tenant_table_map
@@ -390,26 +494,40 @@ class CompiledRawSql:
 
 
 def _operator_name(expr: A_Expr) -> str | None:
-    parts = [getattr(node, "sval", None) for node in expr.name]
+    parts = [getattr(node, "sval", None) for node in (expr.name or ())]
     return "".join(part for part in parts if part)
 
 
-def _column_is_tenant_id(node: object) -> bool:
+def _column_is_tenant_id(node: object, qualifiers: set[str]) -> bool:
     if not isinstance(node, ColumnRef):
         return False
-    names = [getattr(field, "sval", None) for field in node.fields]
-    return bool(names) and names[-1] == "tenant_id"
+    names = [getattr(field, "sval", None) for field in (node.fields or ())]
+    if not names or names[-1] != "tenant_id":
+        return False
+    if len(names) == 1:
+        return "" in qualifiers
+    if len(names) == 2:
+        return names[0] in qualifiers
+    return False
 
 
 def _param_index(node: object) -> int | None:
     return node.number if isinstance(node, ParamRef) else None
 
 
-def _tenant_predicate(expr: object, tenant_id: uuid.UUID, binds: tuple[object, ...]) -> bool:
+def _relation_qualifier(relation: RangeVar) -> str:
+    alias = relation.alias
+    aliasname = getattr(alias, "aliasname", None) if alias is not None else None
+    return aliasname or relation.relname or ""
+
+
+def _tenant_predicate(
+    expr: object, tenant_id: uuid.UUID, binds: tuple[object, ...], qualifiers: set[str]
+) -> bool:
     if not isinstance(expr, A_Expr) or _operator_name(expr) != "=":
         return False
     for column, value in ((expr.lexpr, expr.rexpr), (expr.rexpr, expr.lexpr)):
-        if _column_is_tenant_id(column):
+        if _column_is_tenant_id(column, qualifiers):
             index = _param_index(value)
             if index is not None and 1 <= index <= len(binds) and binds[index - 1] == tenant_id:
                 return True
@@ -418,13 +536,32 @@ def _tenant_predicate(expr: object, tenant_id: uuid.UUID, binds: tuple[object, .
 
 def _conjuncts(where: object) -> list[object]:
     if isinstance(where, BoolExpr):
-        if where.boolop == BoolExpr.OR or where.boolop == BoolExpr.NOT:
+        if where.boolop == BoolExprType.OR_EXPR or where.boolop == BoolExprType.NOT_EXPR:
             raise UnscopedRawSql("OR/NOT predicates are not allowed in tenant-bound SQL")
         collected: list[object] = []
-        for arg in where.args:
+        for arg in where.args or ():
             collected.extend(_conjuncts(arg))
         return collected
     return [where]
+
+
+def _descendants(node: object) -> Iterator[Node]:
+    if isinstance(node, Node):
+        yield node
+        for field in node:
+            yield from _descendants(getattr(node, field))
+    elif isinstance(node, (tuple, list)):
+        for item in node:
+            yield from _descendants(item)
+
+
+def _scan_expression_tree(stmt: Node, relations: list[RangeVar]) -> None:
+    allowed = {id(relation) for relation in relations}
+    for node in _descendants(stmt):
+        if isinstance(node, SubLink):
+            raise UnscopedRawSql("subqueries are not allowed in tenant-bound SQL")
+        if isinstance(node, RangeVar) and id(node) not in allowed:
+            raise UnscopedRawSql(f"relation outside FROM clause not allowed: {node.relname}")
 
 
 def _relations(node: object) -> list[RangeVar]:
@@ -442,7 +579,7 @@ def _relations(node: object) -> list[RangeVar]:
 def _check_relation(relation: RangeVar, tables: dict[str, type]) -> str:
     if relation.schemaname is not None:
         raise UnscopedRawSql(f"schema-qualified relation not allowed: {relation.schemaname}")
-    if relation.relname not in tables:
+    if relation.relname is None or relation.relname not in tables:
         raise UnscopedRawSql(f"unknown relation: {relation.relname}")
     return relation.relname
 
@@ -452,29 +589,51 @@ class RawSqlValidator:
         self._tables = tenant_tables if tenant_tables is not None else tenant_table_map()
 
     @staticmethod
-    def compile(statement: sa.TextClause, dialect: sa.Dialect, params: dict[str, object]) -> CompiledRawSql:
-        compiled = statement.compile(dialect=dialect)
-        ordered_names = list(getattr(compiled, "positiontup", None) or params)
-        binds = tuple(params[name] for name in ordered_names)
+    def compile(
+        statement: sa.TextClause, dialect: sa.Dialect, params: dict[str, object]
+    ) -> CompiledRawSql:
+        try:
+            compiled = statement.compile(dialect=dialect)
+            ordered_names = list(getattr(compiled, "positiontup", None) or params)
+            binds = tuple(params[name] for name in ordered_names)
+        except Exception as exc:
+            raise UnscopedRawSql("raw SQL could not be compiled") from exc
         return CompiledRawSql(sql=str(compiled), binds=binds)
 
-    def _parse(self, compiled: CompiledRawSql):
-        statements = parse_sql(compiled.sql)
+    @staticmethod
+    def _reject_cte(stmt: Node, message: str) -> None:
+        if (
+            isinstance(stmt, (SelectStmt, InsertStmt, UpdateStmt, DeleteStmt))
+            and stmt.withClause is not None
+        ):
+            raise UnscopedRawSql(message)
+
+    def _parse(self, compiled: CompiledRawSql) -> Node:
+        try:
+            statements = parse_sql(compiled.sql)
+        except Exception as exc:
+            raise UnscopedRawSql("raw SQL could not be parsed") from exc
         if len(statements) != 1:
             raise UnscopedRawSql("exactly one statement is allowed")
         return statements[0].stmt
 
     def validate_tenant_bound(self, compiled: CompiledRawSql, tenant_id: uuid.UUID) -> None:
         stmt = self._parse(compiled)
-        if getattr(stmt, "withClause", None) is not None:
-            raise UnscopedRawSql("CTEs are not allowed in tenant-bound SQL")
+        self._reject_cte(stmt, "CTEs are not allowed in tenant-bound SQL")
         if isinstance(stmt, SelectStmt):
             relations = []
             for node in stmt.fromClause or ():
                 relations.extend(_relations(node))
             where = stmt.whereClause
-        elif isinstance(stmt, (UpdateStmt, DeleteStmt)):
+        elif isinstance(stmt, UpdateStmt):
             relations = _relations(stmt.relation)
+            for node in stmt.fromClause or ():
+                relations.extend(_relations(node))
+            where = stmt.whereClause
+        elif isinstance(stmt, DeleteStmt):
+            relations = _relations(stmt.relation)
+            for node in stmt.usingClause or ():
+                relations.extend(_relations(node))
             where = stmt.whereClause
         elif isinstance(stmt, InsertStmt):
             self._validate_insert(stmt, compiled, tenant_id)
@@ -485,44 +644,72 @@ class RawSqlValidator:
             raise UnscopedRawSql("tenant-bound statement requires a WHERE clause")
         conjuncts = _conjuncts(where)
         names = [_check_relation(relation, self._tables) for relation in relations]
-        for name in names:
-            if not any(_tenant_predicate(conjunct, tenant_id, compiled.binds) for conjunct in conjuncts):
+        _scan_expression_tree(stmt, relations)
+        for relation, name in zip(relations, names, strict=True):
+            qualifiers = {_relation_qualifier(relation)}
+            if len(relations) == 1:
+                qualifiers.add("")
+            if not any(
+                _tenant_predicate(conjunct, tenant_id, compiled.binds, qualifiers)
+                for conjunct in conjuncts
+            ):
                 raise UnscopedRawSql(f"missing tenant predicate for relation {name}")
 
     def _validate_insert(
         self, stmt: InsertStmt, compiled: CompiledRawSql, tenant_id: uuid.UUID
     ) -> None:
         relation = stmt.relation
+        if relation is None:
+            raise UnscopedRawSql("INSERT without target relation")
         _check_relation(relation, self._tables)
         if stmt.selectStmt is None or not isinstance(stmt.selectStmt, SelectStmt):
             raise UnscopedRawSql("INSERT requires a VALUES list")
         if stmt.selectStmt.fromClause:
             raise UnscopedRawSql("INSERT ... SELECT is not allowed in tenant-bound SQL")
-        columns = [getattr(target.name, "sval", None) for target in (stmt.cols or ())]
+        _scan_expression_tree(stmt, [relation])
+        columns = [getattr(target.name, "sval", target.name) for target in (stmt.cols or ())]
         if "tenant_id" not in columns:
             raise UnscopedRawSql("INSERT must supply tenant_id explicitly")
         index = columns.index("tenant_id")
         values_lists = stmt.selectStmt.valuesLists or ()
-        if not values_lists or index >= len(values_lists[0]):
+        if not values_lists:
             raise UnscopedRawSql("INSERT tenant_id value missing")
-        param = _param_index(values_lists[0][index])
-        if param is None or param > len(compiled.binds) or compiled.binds[param - 1] != tenant_id:
-            raise UnscopedRawSql("INSERT tenant_id value is not bound to the active tenant")
+        for values in values_lists:
+            if index >= len(values):
+                raise UnscopedRawSql("INSERT tenant_id value missing")
+            param = _param_index(values[index])
+            if (
+                param is None
+                or not 1 <= param <= len(compiled.binds)
+                or compiled.binds[param - 1] != tenant_id
+            ):
+                raise UnscopedRawSql("INSERT tenant_id value is not bound to the active tenant")
 
     def validate_privileged(self, compiled: CompiledRawSql) -> None:
         stmt = self._parse(compiled)
-        if getattr(stmt, "withClause", None) is not None:
-            raise UnscopedRawSql("CTEs are not allowed")
+        self._reject_cte(stmt, "CTEs are not allowed")
         if not isinstance(stmt, (SelectStmt, InsertStmt, UpdateStmt, DeleteStmt)):
             raise UnscopedRawSql(f"unsupported statement type {type(stmt).__name__}")
 ```
 
-Notes for the implementer: `pglast` node attribute names vary slightly by version (e.g. `stmt.withClause` may be `with_clause`). Run the tests; if an attribute is missing, inspect the installed `pglast.ast` node and adjust the accessor, keeping behavior identical, and document the adjustment. `BoolExpr.OR`/`NOT` are class attributes in pglast; if they are not, compare `where.boolop` against the integers from `pglast.ast.BoolExpr.OR_EXPR` equivalents — again, adjust minimally and document.
+Notes for the implementer (updated after review fixes, pglast v8.4 verified):
+- `stmt.withClause` is accessed directly on `SelectStmt`/`InsertStmt`/`UpdateStmt`/`DeleteStmt` via
+  `_reject_cte`; a rename or missing attribute now fails loudly (mypy/runtime) instead of silently
+  disabling CTE rejection. Keep it that way.
+- `UpdateStmt.fromClause` and `DeleteStmt.usingClause` are the v8.4 names for extra DML relations;
+  both are fed through `_relations()` so every relation needs its own tenant predicate.
+- `BoolExpr` has no `OR`/`NOT` class constants in v8.4; compare `where.boolop` against
+  `pglast.enums.BoolExprType.OR_EXPR` / `NOT_EXPR`.
+- `_scan_expression_tree` walks the parsed statement with `Node.__iter__` and fails closed on any
+  `SubLink` (scalar/`EXISTS`/`IN`/`ANY`/`ALL` expression subqueries) and on any `RangeVar` outside
+  the allowed FROM/relation paths (e.g. `SELECT INTO`).
+- `compile` and `_parse` wrap SQLAlchemy/pglast exceptions and raise `UnscopedRawSql`, so malformed
+  SQL or unresolved binds fail closed. `_validate_insert` checks every row in `valuesLists`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_rawsql.py -v`
-Expected: PASS (10 passed)
+Expected: PASS (18 passed)
 
 - [ ] **Step 5: Lint, type check, commit**
 

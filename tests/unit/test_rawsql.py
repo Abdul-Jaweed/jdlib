@@ -153,3 +153,103 @@ def test_privileged_mode_still_rejects_ddl(validator):
     validator.validate_privileged(_compiled("SELECT * FROM invoices"))
     with pytest.raises(UnscopedRawSql):
         validator.validate_privileged(_compiled("DROP TABLE invoices"))
+
+
+def test_scalar_subquery_in_target_list_rejected(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "SELECT (SELECT count(*) FROM projects) FROM invoices "
+                "WHERE tenant_id = :tenant_id",
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
+def test_exists_subquery_in_where_rejected(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "SELECT * FROM invoices WHERE tenant_id = :tenant_id "
+                "AND EXISTS (SELECT 1 FROM projects)",
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
+def test_insert_checks_every_values_row(validator):
+    validator.validate_tenant_bound(
+        _compiled(
+            "INSERT INTO invoices (tenant_id, id) VALUES (:tenant_id, :id1), (:tenant_id, :id2)",
+            tenant_id=TENANT_ID,
+            id1=uuid.uuid4(),
+            id2=uuid.uuid4(),
+        ),
+        TENANT_ID,
+    )
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "INSERT INTO invoices (tenant_id, id) VALUES (:tenant_id, :id1), (:other, :id2)",
+                tenant_id=TENANT_ID,
+                other=OTHER_ID,
+                id1=uuid.uuid4(),
+                id2=uuid.uuid4(),
+            ),
+            TENANT_ID,
+        )
+
+
+def test_insert_literal_tenant_value_rejected(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "INSERT INTO invoices (tenant_id, id) VALUES (:tenant_id, :id1), "
+                "('00000000-0000-0000-0000-0000000000bb', :id2)",
+                tenant_id=TENANT_ID,
+                id1=uuid.uuid4(),
+                id2=uuid.uuid4(),
+            ),
+            TENANT_ID,
+        )
+
+
+def test_update_from_requires_predicate_on_every_relation(validator):
+    sql = (
+        "UPDATE invoices SET status = :status FROM projects p "
+        "WHERE invoices.tenant_id = :tenant_id"
+    )
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(sql, status="paid", tenant_id=TENANT_ID), TENANT_ID
+        )
+    sql_ok = (
+        "UPDATE invoices SET status = :status FROM projects p "
+        "WHERE invoices.tenant_id = :tenant_id AND p.tenant_id = :tenant_id"
+    )
+    validator.validate_tenant_bound(
+        _compiled(sql_ok, status="paid", tenant_id=TENANT_ID), TENANT_ID
+    )
+
+
+def test_delete_using_requires_predicate_on_every_relation(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "DELETE FROM invoices USING projects WHERE invoices.tenant_id = :tenant_id",
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
+def test_malformed_sql_raises_unscoped(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(_compiled("SELECT FROM"), TENANT_ID)
+
+
+def test_missing_bind_parameter_raises_unscoped():
+    with pytest.raises(UnscopedRawSql):
+        _compiled("SELECT * FROM invoices WHERE tenant_id = :tenant_id")
