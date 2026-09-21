@@ -2571,7 +2571,7 @@ def assert_clean(controls: list[MetaData], rls_enabled: bool = False) -> None:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/unit/test_lint.py -v`
-Expected: PASS (14 passed)
+Expected: PASS (15 passed)
 
 - [ ] **Step 5: Lint, type check, commit**
 
