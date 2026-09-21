@@ -277,22 +277,27 @@ Application models inherit `TenantBase` + `TenantRouted` + mixins; the metadata
 lint (L1–L19) runs against the combined metadata at import time in tests and at
 startup when `config.strict_schema = true`.
 
-Model inheritance contract (frozen, enforced by L17–L19):
+Model inheritance contract (frozen, enforced by L11 and L17–L19):
 
 ```
                 TenantOwned
-                /         \
-   control-plane            TenantRouted
-   tenant-owned             tenant-plane
-   (NOT routed)             + application-plane
+                     │
+                TenantRouted
+                tenant-plane
+                + application-plane
+
+   Control-plane tenant-scoped tables are tenant-owned but NOT
+   TenantRouted; they declare tenant_id explicitly (identity shape
+   enforced by L1/L4/L9).
 ```
 
 - Every tenant-plane framework model and every application resource inherits
   `TenantRouted` (`TenantRouted ⊂ TenantOwned`).
-- Control-plane tenant-owned models (`Membership`, `Role`, `RolePermission`,
+- Control-plane tenant-scoped models (`Membership`, `Role`, `RolePermission`,
   `RoleBinding`, `ResourceGrant`, `Invitation`, `ApiKey`, `ServiceAccount`)
-  inherit `TenantOwned` only.
-- L17: tenant-plane model without `TenantRouted` → build failure.
+  declare `tenant_id` explicitly and never inherit `TenantRouted`.
+- L11: tenant-plane model without `TenantOwned` → build failure.
+  L17: tenant-plane model without `TenantRouted` → build failure.
   L18: registered application model without `TenantRouted` → build failure.
   L19: control-plane model marked `TenantRouted` → build failure.
 

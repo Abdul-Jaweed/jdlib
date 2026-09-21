@@ -2303,7 +2303,11 @@ def lint_metadata(controls: list[MetaData], rls_enabled: bool = False) -> list[L
                     )
                 if table.columns["tenant_id"].nullable:
                     issues.append(LintIssue("L9", table.name, "tenant_id is nullable"))
-                if model is not None and not issubclass(model, TenantOwned):
+                if (
+                    model is not None
+                    and table.schema is None
+                    and not issubclass(model, TenantOwned)
+                ):
                     issues.append(
                         LintIssue("L11", table.name, "tenant-scoped model is not TenantOwned")
                     )

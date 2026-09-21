@@ -495,8 +495,10 @@ required shape:
 - `L9` (metadata) `tenant_id` is NOT NULL on every tenant-scoped model.
 - `L10` (metadata) Every tenant-scoped FK column set contains `tenant_id`
   (same rule as L2, checked independently per constraint).
-- `L11` (metadata) Every tenant-scoped model is built on `TenantOwned` (no
-  hand-rolled `tenant_id` columns).
+- `L11` (metadata, tenant plane) Every tenant-plane model is built on
+  `TenantOwned` (no hand-rolled `tenant_id` columns). Control-plane
+  tenant-scoped tables declare `tenant_id` explicitly; their identity shape is
+  enforced by L1/L4/L9.
 - `L12` (metadata) Every unique constraint on a tenant-scoped model includes
   `tenant_id` (business keys are tenant-scoped unless listed as global in
   section 2).
