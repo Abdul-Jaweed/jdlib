@@ -16,7 +16,7 @@ def postgres_url() -> Iterator[str]:
     if url := os.environ.get("JDLIB_TEST_DATABASE_URL"):
         yield url
         return
-    from testcontainers.postgres import PostgresContainer
+    from testcontainers.community.postgres import PostgresContainer
 
     with PostgresContainer("postgres:16", driver="psycopg") as container:
         yield container.get_connection_url()

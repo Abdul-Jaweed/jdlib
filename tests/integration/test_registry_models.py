@@ -110,3 +110,35 @@ def test_duplicate_active_relocation_rejected(control_engine, control_metadata):
         connection.execute(sa.insert(_table(TenantRelocation)).values(id=uuid7(), **values))
         with pytest.raises(IntegrityError):
             connection.execute(sa.insert(_table(TenantRelocation)).values(id=uuid7(), **values))
+
+
+def test_non_active_relocation_permits_new_active(control_engine, control_metadata):
+    tenant_id = uuid7()
+    with control_engine.begin() as connection:
+        connection.execute(
+            sa.insert(_table(Tenant)).values(
+                id=tenant_id, slug=f"delta-{tenant_id.hex[:8]}", name="Delta", status="active"
+            )
+        )
+        connection.execute(
+            sa.insert(_table(TenantRelocation)).values(
+                id=uuid7(),
+                tenant_id=tenant_id,
+                from_strategy="shared",
+                from_target_handle="default",
+                to_strategy="database",
+                to_target_handle="db-delta",
+                status="rolled_back",
+            )
+        )
+        connection.execute(
+            sa.insert(_table(TenantRelocation)).values(
+                id=uuid7(),
+                tenant_id=tenant_id,
+                from_strategy="shared",
+                from_target_handle="default",
+                to_strategy="schema",
+                to_target_handle="t_delta",
+                status="copying",
+            )
+        )
