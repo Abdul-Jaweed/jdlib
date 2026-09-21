@@ -54,13 +54,27 @@ def _register_events(session: Session) -> None:
             return
         if state.is_select:
             tenant_id = context.tenant_id
+            mappers = list(state.all_mappers)
+            if not mappers and state.bind_mapper is not None:
+                mappers = [state.bind_mapper]
+            if not mappers:
+                get_final_froms = getattr(state.statement, "get_final_froms", None)
+                froms = (
+                    get_final_froms()
+                    if get_final_froms is not None
+                    else getattr(state.statement, "froms", ())
+                )
+                if any(getattr(from_, "name", None) in tables for from_ in froms):
+                    raise UnscopedRawSql(
+                        "table-level statements on tenant tables must use raw_sql"
+                    )
             options = [
                 sa.orm.with_loader_criteria(
                     mapper.class_,
                     lambda cls: cls.tenant_id == tenant_id,
                     include_aliases=True,
                 )
-                for mapper in state.all_mappers
+                for mapper in mappers
                 if issubclass(mapper.class_, TenantRouted)
             ]
             if options:

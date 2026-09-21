@@ -770,7 +770,7 @@ git commit -m "feat: structural raw SQL validator"
 **Interfaces:**
 - Consumes: Task 1–2; `TenantContext`; `TenantRouted`, `SoftDelete`; errors.
 - Produces: `TenantSession` with `context`, `raw_sql(statement, params, *, mode)`, `execute(statement)`, `get(model, id)`, `add(obj)`, `flush()`, `update_where(model, values, *criteria)`, `delete_where(model, *criteria)`; `RawSqlAuditor` protocol.
-- Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set, including DML wrapped in `select(...).from_statement(...)` (table resolved from the statement's `element`); `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar).
+- Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set, including DML wrapped in `select(...).from_statement(...)` (table resolved from the statement's `element`); entity-less ORM selects (e.g. `select(func.count()).select_from(Model)`) are scoped via the statement's bind mapper; SELECTs with no ORM mapper that reference a tenant table (`select(Model.__table__)`) are refused as `UnscopedRawSql`; `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar).
 
 - [ ] **Step 1: Add async fixtures to `tests/integration/conftest.py`**
 
@@ -862,6 +862,40 @@ async def test_reads_are_scoped_to_context_tenant(session_factory):
         rows = (await session.execute(sa.select(Invoice))).scalars().all()
         assert rows
         assert all(row.tenant_id == TENANT_A for row in rows)
+
+
+async def test_entity_less_select_is_scoped(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        before = int(
+            (
+                await session.execute(sa.select(sa.func.count()).select_from(Invoice))
+            ).scalar_one()
+        )
+    async with await _session(session_factory, TENANT_B) as session:
+        await session.add(Invoice(number=f"B-{uuid.uuid4().hex[:8]}"))
+        await session.commit()
+    async with await _session(session_factory, TENANT_A) as session:
+        scoped = int(
+            (
+                await session.execute(sa.select(sa.func.count()).select_from(Invoice))
+            ).scalar_one()
+        )
+    raw = session_factory()
+    await raw.execute(sa.text('SET search_path TO "jt_test"'))
+    try:
+        total = int(
+            (await raw.execute(sa.text("SELECT count(*) FROM invoices"))).scalar_one()
+        )
+    finally:
+        await raw.close()
+    assert scoped == before
+    assert total > scoped
+
+
+async def test_table_level_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(sa.select(Invoice.__table__))
 
 
 async def test_cross_tenant_get_returns_none(session_factory):
@@ -1120,13 +1154,27 @@ def _register_events(session: Session) -> None:
             return
         if state.is_select:
             tenant_id = context.tenant_id
+            mappers = list(state.all_mappers)
+            if not mappers and state.bind_mapper is not None:
+                mappers = [state.bind_mapper]
+            if not mappers:
+                get_final_froms = getattr(state.statement, "get_final_froms", None)
+                froms = (
+                    get_final_froms()
+                    if get_final_froms is not None
+                    else getattr(state.statement, "froms", ())
+                )
+                if any(getattr(from_, "name", None) in tables for from_ in froms):
+                    raise UnscopedRawSql(
+                        "table-level statements on tenant tables must use raw_sql"
+                    )
             options = [
                 sa.orm.with_loader_criteria(
                     mapper.class_,
                     lambda cls: cls.tenant_id == tenant_id,
                     include_aliases=True,
                 )
-                for mapper in state.all_mappers
+                for mapper in mappers
                 if issubclass(mapper.class_, TenantRouted)
             ]
             if options:
@@ -1288,13 +1336,13 @@ future version, adapt minimally.
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_session_isolation.py tests/unit/test_session.py -v`
-Expected: PASS (15 passed: 12 integration + 3 unit)
+Expected: PASS (17 passed: 14 integration + 3 unit)
 
 - [ ] **Step 6: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
-Expected: `149 passed`; `All checks passed!`; `Success: no issues found in 27 source files`.
+Expected: `155 passed`; `All checks passed!`; `Success: no issues found in 27 source files`.
 Note: the pre-existing unraisable `ResourceWarning` under `-W error` (undisposed engines in
 `tests/integration/test_migrations.py` / `test_tenant_models.py`) has been fixed by disposing
 those engines; the full suite is green under `-W error`.
@@ -1509,8 +1557,6 @@ git commit -m "feat: unit of work with write fence admission"
 ```python
 import uuid
 
-import sqlalchemy as sa
-
 from jdlib.persistence.repository import TenantRepository
 from tests.support.invoice import Invoice
 
@@ -1518,11 +1564,11 @@ TENANT_A = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 
 
 async def test_repository_crud_is_tenant_scoped(session_factory):
-    from tests.integration.test_session_isolation import _context, _session
+    from tests.integration.test_session_isolation import TENANT_B, _session
 
+    number = f"A-{uuid.uuid4().hex[:8]}"
     async with await _session(session_factory, TENANT_A) as session:
         repository: TenantRepository[Invoice] = TenantRepository(session, Invoice)
-        number = f"A-{uuid.uuid4().hex[:8]}"
         invoice = await repository.add(Invoice(number=number))
         assert invoice.tenant_id == TENANT_A
 
@@ -1530,14 +1576,37 @@ async def test_repository_crud_is_tenant_scoped(session_factory):
         assert fetched is not None and fetched.number == number
 
         await repository.update(invoice, status="paid")
-        assert (await repository.get(invoice.id)).status == "paid"
+        await session.commit()
+        invoice_id = invoice.id
 
-        assert await repository.count() >= 1
+    # Fresh session re-read proves the update reached the database.
+    async with await _session(session_factory, TENANT_A) as session:
+        repository = TenantRepository(session, Invoice)
+        persisted = await repository.get(invoice_id)
+        assert persisted is not None and persisted.status == "paid"
+
+        baseline = await repository.count()
+        assert baseline >= 1
         rows = await repository.list(Invoice.number == number)
         assert [row.number for row in rows] == [number]
 
-        await repository.soft_delete(invoice)
-        assert await repository.get(invoice.id) is None
+    # Commit a second tenant's row; tenant A's count must not move.
+    b_number = f"B-{uuid.uuid4().hex[:8]}"
+    async with await _session(session_factory, TENANT_B) as b_session:
+        await b_session.add(Invoice(number=b_number))
+        await b_session.commit()
+
+    async with await _session(session_factory, TENANT_A) as session:
+        repository = TenantRepository(session, Invoice)
+        assert await repository.count() == baseline
+        assert b_number not in [row.number for row in await repository.list()]
+
+        target = await repository.get(invoice_id)
+        assert target is not None
+        await repository.soft_delete(target)
+        assert await repository.get(invoice_id) is None
+        assert number not in [row.number for row in await repository.list()]
+        assert await repository.count() == baseline - 1
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**

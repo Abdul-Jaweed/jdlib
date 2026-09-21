@@ -50,6 +50,40 @@ async def test_reads_are_scoped_to_context_tenant(session_factory):
         assert all(row.tenant_id == TENANT_A for row in rows)
 
 
+async def test_entity_less_select_is_scoped(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        before = int(
+            (
+                await session.execute(sa.select(sa.func.count()).select_from(Invoice))
+            ).scalar_one()
+        )
+    async with await _session(session_factory, TENANT_B) as session:
+        await session.add(Invoice(number=f"B-{uuid.uuid4().hex[:8]}"))
+        await session.commit()
+    async with await _session(session_factory, TENANT_A) as session:
+        scoped = int(
+            (
+                await session.execute(sa.select(sa.func.count()).select_from(Invoice))
+            ).scalar_one()
+        )
+    raw = session_factory()
+    await raw.execute(sa.text('SET search_path TO "jt_test"'))
+    try:
+        total = int(
+            (await raw.execute(sa.text("SELECT count(*) FROM invoices"))).scalar_one()
+        )
+    finally:
+        await raw.close()
+    assert scoped == before
+    assert total > scoped
+
+
+async def test_table_level_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(sa.select(Invoice.__table__))
+
+
 async def test_cross_tenant_get_returns_none(session_factory):
     other_id = uuid.uuid4()
     async with await _session(session_factory, TENANT_B) as session:
