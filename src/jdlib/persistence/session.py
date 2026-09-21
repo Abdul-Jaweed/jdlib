@@ -43,15 +43,18 @@ def _context_of(session: Session) -> TenantContext:
     return context
 
 
-def _direct_table_names(statement: Any) -> set[str]:
+def _direct_froms(statement: Any) -> tuple[Any, ...]:
     get_final_froms = getattr(statement, "get_final_froms", None)
-    froms = (
-        get_final_froms() if get_final_froms is not None else getattr(statement, "froms", ())
-    )
+    if get_final_froms is not None:
+        return tuple(get_final_froms())
+    return tuple(getattr(statement, "froms", ()))
+
+
+def _direct_table_names(statement: Any) -> set[str]:
     names: set[str] = set()
 
     def collect(element: object) -> None:
-        if isinstance(element, sa.Table):
+        if isinstance(element, sa.TableClause):
             names.add(element.name)
         elif isinstance(element, sa.Join):
             collect(element.left)
@@ -59,7 +62,7 @@ def _direct_table_names(statement: Any) -> set[str]:
         elif isinstance(element, sa.Alias) and not isinstance(element, sa.Subquery):
             collect(element.element)
 
-    for from_ in froms:
+    for from_ in _direct_froms(statement):
         collect(from_)
     return names
 
@@ -76,6 +79,13 @@ def _register_events(session: Session) -> None:
             return
         if state.is_select:
             tenant_id = context.tenant_id
+            all_mappers = state.all_mappers
+            if not all_mappers and any(
+                isinstance(from_, sa.TextClause) for from_ in _direct_froms(state.statement)
+            ):
+                raise UnscopedRawSql(
+                    "table-level statements on tenant tables must use raw_sql"
+                )
             direct = _direct_table_names(state.statement)
 
             def _trusted(mapper: sa.orm.Mapper[Any]) -> bool:
@@ -86,7 +96,7 @@ def _register_events(session: Session) -> None:
                     and local_table.name in direct
                 )
 
-            mappers = list(state.all_mappers)
+            mappers = list(all_mappers)
             bind_mapper = state.bind_mapper
             if (
                 bind_mapper is not None
@@ -96,7 +106,9 @@ def _register_events(session: Session) -> None:
                 mappers.append(bind_mapper)
             allowed: set[str] = set()
             for mapper in mappers:
-                if not _trusted(mapper):
+                if not issubclass(mapper.class_, TenantRouted):
+                    continue
+                if mapper not in all_mappers and not _trusted(mapper):
                     continue
                 local_name = getattr(mapper.local_table, "name", None)
                 if local_name is not None:
@@ -104,7 +116,7 @@ def _register_events(session: Session) -> None:
             tenant_tables = {
                 element
                 for element in visitors.iterate(cast(Any, state.statement))
-                if isinstance(element, sa.Table) and element.name in tables
+                if isinstance(element, sa.TableClause) and element.name in tables
             }
             if any(table.name not in allowed for table in tenant_tables):
                 raise UnscopedRawSql(

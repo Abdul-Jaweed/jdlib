@@ -108,6 +108,32 @@ async def test_subquery_tenant_table_without_mapper_rejected(session_factory):
             )
 
 
+async def test_table_clause_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(sa.select(sa.func.count()).select_from(sa.table("invoices")))
+
+
+async def test_text_clause_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(sa.select(sa.func.count()).select_from(sa.text("invoices")))
+
+
+async def test_from_statement_select_is_allowed_and_scoped(session_factory):
+    async with await _session(session_factory, TENANT_B) as session:
+        await session.add(Invoice(number=f"B-{uuid.uuid4().hex[:8]}"))
+        await session.commit()
+    async with await _session(session_factory, TENANT_A) as session:
+        await session.add(Invoice(number=f"A-{uuid.uuid4().hex[:8]}"))
+        await session.commit()
+    async with await _session(session_factory, TENANT_A) as session:
+        statement = sa.select(Invoice).from_statement(sa.select(Invoice))
+        rows = (await session.execute(statement)).scalars().all()
+        assert rows
+        assert all(row.tenant_id == TENANT_A for row in rows)
+
+
 async def test_cross_tenant_get_returns_none(session_factory):
     other_id = uuid.uuid4()
     async with await _session(session_factory, TENANT_B) as session:

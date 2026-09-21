@@ -770,7 +770,7 @@ git commit -m "feat: structural raw SQL validator"
 **Interfaces:**
 - Consumes: Task 1–2; `TenantContext`; `TenantRouted`, `SoftDelete`; errors.
 - Produces: `TenantSession` with `context`, `raw_sql(statement, params, *, mode)`, `execute(statement)`, `get(model, id)`, `add(obj)`, `flush()`, `update_where(model, values, *criteria)`, `delete_where(model, *criteria)`; `RawSqlAuditor` protocol.
-- Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set, including DML wrapped in `select(...).from_statement(...)` (table resolved from the statement's `element`); SELECTs always walk the whole statement tree for tenant tables and are scoped with `with_loader_criteria` for every `TenantRouted` mapper in `all_mappers` plus a trusted bind mapper (a `TenantRouted` mapper whose `local_table` is a direct final FROM); any tenant table outside the trusted mappers' local tables (`select(Model.__table__)`, extra FROMs such as `select_from(Invoice, LineItem)`, a tenant table reachable only through a subquery, or an unmodeled tenant join) is refused as `UnscopedRawSql`; `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar).
+- Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set, including DML wrapped in `select(...).from_statement(...)` (table resolved from the statement's `element`); SELECTs always walk the whole statement tree for tenant tables and are scoped with `with_loader_criteria` for every `TenantRouted` mapper in `all_mappers` plus a trusted bind mapper (a `TenantRouted` mapper whose `local_table` is a direct final FROM); a `TenantRouted` mapper in `all_mappers` is allowed even when its table is not a direct final FROM, so `select(Model).from_statement(select(Model))` is scoped rather than refused; any other tenant table (`select(Model.__table__)`, `sa.table(...)`, extra FROMs such as `select_from(Invoice, LineItem)`, a tenant table reachable only through a subquery, or an unmodeled tenant join) is refused as `UnscopedRawSql`; an entity-less select whose direct final FROMs contain an unattributable `sa.TextClause` (`sa.select(count()).select_from(sa.text(...))`) is refused as well; `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar).
 
 - [ ] **Step 1: Add async fixtures to `tests/integration/conftest.py`**
 
@@ -920,6 +920,32 @@ async def test_subquery_tenant_table_without_mapper_rejected(session_factory):
                 .select_from(Invoice)
                 .where(Invoice.id.in_(sa.select(LineItem.id)))
             )
+
+
+async def test_table_clause_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(sa.select(sa.func.count()).select_from(sa.table("invoices")))
+
+
+async def test_text_clause_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(sa.select(sa.func.count()).select_from(sa.text("invoices")))
+
+
+async def test_from_statement_select_is_allowed_and_scoped(session_factory):
+    async with await _session(session_factory, TENANT_B) as session:
+        await session.add(Invoice(number=f"B-{uuid.uuid4().hex[:8]}"))
+        await session.commit()
+    async with await _session(session_factory, TENANT_A) as session:
+        await session.add(Invoice(number=f"A-{uuid.uuid4().hex[:8]}"))
+        await session.commit()
+    async with await _session(session_factory, TENANT_A) as session:
+        statement = sa.select(Invoice).from_statement(sa.select(Invoice))
+        rows = (await session.execute(statement)).scalars().all()
+        assert rows
+        assert all(row.tenant_id == TENANT_A for row in rows)
 
 
 async def test_cross_tenant_get_returns_none(session_factory):
@@ -1167,15 +1193,18 @@ def _context_of(session: Session) -> TenantContext:
     return context
 
 
-def _direct_table_names(statement: Any) -> set[str]:
+def _direct_froms(statement: Any) -> tuple[Any, ...]:
     get_final_froms = getattr(statement, "get_final_froms", None)
-    froms = (
-        get_final_froms() if get_final_froms is not None else getattr(statement, "froms", ())
-    )
+    if get_final_froms is not None:
+        return tuple(get_final_froms())
+    return tuple(getattr(statement, "froms", ()))
+
+
+def _direct_table_names(statement: Any) -> set[str]:
     names: set[str] = set()
 
     def collect(element: object) -> None:
-        if isinstance(element, sa.Table):
+        if isinstance(element, sa.TableClause):
             names.add(element.name)
         elif isinstance(element, sa.Join):
             collect(element.left)
@@ -1183,7 +1212,7 @@ def _direct_table_names(statement: Any) -> set[str]:
         elif isinstance(element, sa.Alias) and not isinstance(element, sa.Subquery):
             collect(element.element)
 
-    for from_ in froms:
+    for from_ in _direct_froms(statement):
         collect(from_)
     return names
 
@@ -1200,6 +1229,13 @@ def _register_events(session: Session) -> None:
             return
         if state.is_select:
             tenant_id = context.tenant_id
+            all_mappers = state.all_mappers
+            if not all_mappers and any(
+                isinstance(from_, sa.TextClause) for from_ in _direct_froms(state.statement)
+            ):
+                raise UnscopedRawSql(
+                    "table-level statements on tenant tables must use raw_sql"
+                )
             direct = _direct_table_names(state.statement)
 
             def _trusted(mapper: sa.orm.Mapper[Any]) -> bool:
@@ -1210,7 +1246,7 @@ def _register_events(session: Session) -> None:
                     and local_table.name in direct
                 )
 
-            mappers = list(state.all_mappers)
+            mappers = list(all_mappers)
             bind_mapper = state.bind_mapper
             if (
                 bind_mapper is not None
@@ -1220,7 +1256,9 @@ def _register_events(session: Session) -> None:
                 mappers.append(bind_mapper)
             allowed: set[str] = set()
             for mapper in mappers:
-                if not _trusted(mapper):
+                if not issubclass(mapper.class_, TenantRouted):
+                    continue
+                if mapper not in all_mappers and not _trusted(mapper):
                     continue
                 local_name = getattr(mapper.local_table, "name", None)
                 if local_name is not None:
@@ -1228,7 +1266,7 @@ def _register_events(session: Session) -> None:
             tenant_tables = {
                 element
                 for element in visitors.iterate(cast(Any, state.statement))
-                if isinstance(element, sa.Table) and element.name in tables
+                if isinstance(element, sa.TableClause) and element.name in tables
             }
             if any(table.name not in allowed for table in tenant_tables):
                 raise UnscopedRawSql(
@@ -1399,24 +1437,29 @@ Note for the implementer: `ORMExecuteState.is_insert` exists in SQLAlchemy 2.0.5
 required for the bulk-DML guard. If `pglast.ast.BoolExpr` uses different constant names in a
 future version, adapt minimally.
 
-Trust-check note: the direct-FROM match compares `Table.name`, not object identity, because
+Trust-check note: the direct-FROM match compares `TableClause.name`, not object identity, because
 SQLAlchemy wraps entity FROMs in `AnnotatedTable` / `AnnotatedAlias` — `isinstance`-compatible
 subclasses that are nonetheless distinct objects from `mapper.local_table`; the existing
 `tenant_table_map()` is likewise keyed by name. `_direct_table_names` descends through `Join`
 nodes and non-subquery `Alias` nodes so aliased selects and ORM joins whose entities carry
 loader criteria remain trusted, while subqueries/CTEs stay opaque and are refused by the tree
-walk.
+walk. A bare `sa.table(...)` is a `TableClause` (not a `Table`) and a bare `sa.text(...)` is a
+`TextClause`, so the tree walk collects `TableClause` elements and entity-less selects refuse
+direct `TextClause` FROMs. `select(Model).from_statement(select(Model))` executes as the ORM's
+internal `FromStatement`, which exposes neither `get_final_froms()` nor `froms`;
+`_direct_froms` therefore returns an empty tuple, and the mapper is admitted through
+`all_mappers` (loader criteria still scope the inner select).
 
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_session_isolation.py tests/unit/test_session.py -v`
-Expected: PASS (20 passed: 17 integration + 3 unit)
+Expected: PASS (23 passed: 20 integration + 3 unit)
 
 - [ ] **Step 6: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
-Expected: `158 passed`; `All checks passed!`; `Success: no issues found in 29 source files`.
+Expected: `161 passed`; `All checks passed!`; `Success: no issues found in 29 source files`.
 Note: the pre-existing unraisable `ResourceWarning` under `-W error` (undisposed engines in
 `tests/integration/test_migrations.py` / `test_tenant_models.py`) has been fixed by disposing
 those engines; the full suite is green under `-W error`.
