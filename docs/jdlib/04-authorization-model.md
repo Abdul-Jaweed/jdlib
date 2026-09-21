@@ -230,9 +230,10 @@ tree for teams).
 - Deleting an organization or team is blocked while resources reference it
   (`ON DELETE RESTRICT`); the lifecycle service requires transfer or explicit
   cascade with audit.
-- There is no cross-request permission cache in v1, so no cache invalidation is
-  required for transfers. Any future cache must invalidate on access-control
-  table changes.
+- Request-scoped authorization caches are invalidated by ownership changes and
+  transfers (section 7); there is no cross-request permission cache in v1, so
+  nothing else to invalidate. Any future cross-request cache must invalidate on
+  access-control table changes.
 
 ## 6. Platform operator capabilities
 
@@ -295,7 +296,17 @@ class Decision:
 - Every decision carries its reasoning; denials and allows on sensitive actions
   are auditable.
 - Resolution is memoized **per request** (scope chain, bindings, role
-  permissions). No cross-request cache in v1.
+  permissions) through a request-scoped `AuthzCache`. No cross-request cache in
+  v1.
+- Cache invalidation (frozen): any authorization-state mutation within a
+  request invalidates the request-scoped cache before further decisions —
+  role/permission changes, binding changes, grant changes, membership changes,
+  ownership transfer, and team moves. `AccessControl` performs the invalidation;
+  alternatively a mutation may begin a new resolution context. A mutation must
+  never be followed by a stale cached allow.
+- Tests: `test_authorization_cache_invalidated_after_role_mutation`,
+  `..._after_binding_mutation`, `..._after_grant_mutation`,
+  `..._after_ownership_change`, plus a direct `test_pdp_cache_invalidation`.
 - `Decision` is advisory to the PEP; the framework guards and `AccessControl`
   are the only supported enforcement points.
 

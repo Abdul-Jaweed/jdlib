@@ -172,6 +172,26 @@ Tests: `test_resource_team_same_tenant`; `test_resource_team_same_organization`;
 `test_team_requires_organization`; `test_cross_org_team_assignment_rejected`;
 `test_cross_tenant_team_assignment_rejected`; `test_invalid_hierarchy_rejected`.
 
+### I13 — Raw SQL fails closed
+
+Statement: raw SQL either proves tenant-boundedness structurally or is rejected;
+cross-tenant/system raw SQL requires a `PrivilegeContext` and mandatory audit.
+
+Enforcement: `RawSqlValidator` (real Postgres parser, `pglast`) in
+`TENANT_BOUND` mode; unprovable statements raise `UnscopedRawSql`; `PRIVILEGED`
+mode requires the raw-SQL capability, a justification where required, and a
+mandatory `PlatformAuditEvent`. Regex, string matching, and SQLAlchemy `text()`
+are never used as isolation validators.
+
+Tests: `test_raw_sql_requires_scope`;
+`test_raw_sql_select/update/delete/insert_requires_tenant_boundary`;
+`test_raw_sql_cte_cannot_bypass_tenant_scope`;
+`test_raw_sql_subquery_cannot_bypass_tenant_scope`;
+`test_raw_sql_schema_escape_rejected`;
+`test_raw_sql_ambiguous_statement_rejected`;
+`test_privileged_raw_sql_requires_capability`;
+`test_privileged_raw_sql_is_audited`.
+
 ## 2. Isolation matrix
 
 | Mechanism | Shared | Schema | Database |
@@ -208,19 +228,23 @@ tests/isolation/
 ├── test_writes.py         # I3, I4
 ├── test_relationships.py  # I2 (lazy, eager, joins, subqueries)
 ├── test_bulk_ops.py       # I2 (update/delete helpers; unsupported API rejects)
-├── test_raw_sql.py        # I2, I6
 ├── test_context.py        # I1, I5
 ├── test_envelope.py       # I7
 ├── test_external_keys.py  # I8
 ├── test_polymorphic.py    # I11 (grants, scopes, dangling references)
 ├── test_ownership.py      # I12 (team/org/tenant hierarchy consistency)
 ├── test_api_key_scopes.py # scopes limit bindings and grants; never widen; NULL scopes preserve authority
+├── test_raw_sql.py        # I2, I6: tenant-bound vs privileged vs rejected; CTE/subquery/schema escapes
+├── test_relocation.py     # operation record, preserved placement until flip, rollback, concurrency, idempotency
+├── test_model_classification.py # L17–L19 (TenantRouted mandate on both planes)
+├── test_audit.py          # transactional audit rollback; mandatory platform audit failure; best-effort behavior
+├── test_pdp_cache.py      # request-scoped decisions invalidated after authorization mutations
 ├── test_strategy_matrix.py# I9; pool-leakage test (A → checkout → B → checkout)
 ├── test_pool_eviction.py  # never evict a pool with checked-out connections
 ├── test_rls_tenant_routed.py # RLS applies to all tenant-routed tables incl. consumer resources; control plane excluded; unset setting → zero rows/writes
 ├── test_constraints.py    # NULLS NOT DISTINCT bindings; partial uniques; CHECKs; cross-tenant insert
 ├── test_authorization.py  # I10 (delegates to the 04 matrix)
-└── test_schema_lint.py    # L1–L16
+└── test_schema_lint.py    # L1–L19
 ```
 
 Every test in this directory runs unchanged under `{shared, schema, database} ×

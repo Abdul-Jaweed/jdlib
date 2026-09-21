@@ -1,7 +1,7 @@
 # jdlib — Multi-Tenancy Foundation: Design
 
-Date: 2026-09-21 (rev 4: final hardening pass — API-key scope/grants, TenantRouted RLS, I12 ownership)
-Status: Approved (design rev 4), implementation-ready after sign-off
+Date: 2026-09-21 (rev 5: relocation operation model, raw-SQL parser boundary, TenantRouted mandate, audit ordering, PDP cache invalidation)
+Status: Approved (design rev 5), implementation-ready after sign-off
 Package: `jdlib` (Python 3.12+, async-first)
 Detail contracts: `docs/jdlib/02-relational-schema.md`, `03-isolation-invariants.md`,
 `04-authorization-model.md`, `05-tenant-lifecycle.md`, `06-strategy-matrix.md`,
@@ -69,7 +69,7 @@ domain-model changes. Strategy is deployment configuration, not business logic.
 
 | Plane | Lifetime and routing | Contents |
 |---|---|---|
-| **Control plane** | One physical location; never moved, never strategy-routed; its own schema/database and `MetaData` | `Tenant`, `TenantPlacement`, `TenantMigrationState`, `User`, `IdentityLink`, `PlatformOperator`, `ServiceAccount`, `ApiKey`, `Membership`, `Invitation`, `Role`, `RolePermission`, `RoleBinding`, `ResourceGrant`, `PlatformAuditEvent` |
+| **Control plane** | One physical location; never moved, never strategy-routed; its own schema/database and `MetaData` | `Tenant`, `TenantPlacement`, `TenantMigrationState`, `TenantRelocation`, `User`, `IdentityLink`, `PlatformOperator`, `ServiceAccount`, `ApiKey`, `Membership`, `Invitation`, `Role`, `RolePermission`, `RoleBinding`, `ResourceGrant`, `PlatformAuditEvent` |
 | **Tenant plane** | Routed per tenant by the isolation strategy | `Organization`, `Team`, `TenantSetting`, `AuditEvent` |
 | **Application plane** | Same routing as tenant plane; owned by consuming applications | Concrete resources (`Invoice`, `Project`, …) built on `TenantOwned` mixins |
 
@@ -128,8 +128,9 @@ carry a tenant's `tenant_id` for ownership (tenant-owned) or are global.
 | Entity | Why it exists | Identity / constraints |
 |---|---|---|
 | `Tenant` | Customer/account and isolation boundary. Single-tenant mode seeds exactly one. | `PK(id)`, `UNIQUE(slug)`, self-FK `parent_tenant_id` (reserved: delegation only, never data access), `suspended_reason` |
-| `TenantPlacement` | Where this tenant's data lives. The strategy switch. | `PK(tenant_id)`, `strategy ∈ {shared, schema, database}`, `target_handle` (opaque; resolved via secret provider), `region` |
+| `TenantPlacement` | Where this tenant's data lives. The strategy switch. Authoritative current placement, exactly one row per tenant. | `PK(tenant_id)`, `strategy ∈ {shared, schema, database}`, `target_handle` (opaque; resolved via secret provider), `region` |
 | `TenantMigrationState` | Per-tenant migration position and health. | `PK(tenant_id)`, `current_version`, `desired_version`, `status` |
+| `TenantRelocation` | Durable record of an in-flight/completed strategy change; keeps the old target addressable until post-flip verification. | `PK(tenant_id, id)`, `from_*`/`to_*` placement, `status`, phase timestamps, `error` |
 | `User` | One row per human; global so one login serves many tenants. | `PK(id)`, `email` nullable/normalized/partial-unique |
 | `IdentityLink` | Maps external IdP subject to user; one user may have several. | `PK(id)`, `UNIQUE(issuer, subject)`, `FK(user_id)` |
 | `PlatformOperator` | Platform staff, outside all tenants. | `PK(user_id)`, `level ∈ {support, operator, admin}`; capabilities mapped in code |
@@ -361,7 +362,8 @@ src/jdlib/
 ├── context.py            # TenantContext, ContextFactory, envelope, fail-closed accessors
 ├── errors.py             # exception hierarchy
 ├── control/              # platform control plane (own MetaData, never routed)
-│   ├── models.py         # Tenant, TenantPlacement, TenantMigrationState, User, IdentityLink,
+│   ├── models.py         # Tenant, TenantPlacement, TenantMigrationState, TenantRelocation,
+│   │                     #   User, IdentityLink, PlatformOperator, ServiceAccount, ApiKey,
 │   │                     #   PlatformOperator, ServiceAccount, ApiKey, Membership, Role,
 │   │                     #   RolePermission, RoleBinding, ResourceGrant, Invitation, audit
 │   ├── session.py        # ControlPlaneSession (framework-internal)
@@ -404,7 +406,8 @@ permission_namespace)`; rejects inconsistent definitions; source of truth for
 grants, audit, RLS generation, and the isolation kit),
 `TenantLifecycleHook`, ORM mixins. Dependencies:
 SQLAlchemy 2.0, Pydantic v2 + pydantic-settings, Alembic, PyJWT + httpx,
-argon2-cffi; extras `[fastapi]`, `[postgres]`, `[cli]`.
+argon2-cffi, pglast (structural validation of raw SQL); extras `[fastapi]`,
+`[postgres]`, `[cli]`.
 
 ## 9. Errors, auditing, external state
 
@@ -415,7 +418,7 @@ Exception hierarchy (one root): `MissingTenantContext`;
 `AuthenticationError` (`InvalidToken`, `ExpiredToken`, `UnknownPrincipal`);
 `AuthorizationError` (`PermissionDenied`, `RoleEscalationBlocked`);
 `StrategyCapabilityError`; `PoolCapacityError`; `TenantOperationInProgress`;
-`ProvisioningError`/`MigrationError`. HTTP mapping:
+`UnscopedRawSql`; `ProvisioningError`/`MigrationError`. HTTP mapping:
 401 / 403 / 404 / 423 / 409 as before.
 
 Audit splits into **platform audit** (authn failures, resolution failures,

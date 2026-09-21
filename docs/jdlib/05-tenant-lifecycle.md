@@ -147,26 +147,54 @@ Ordering for `purge`/`destroy` (under lifecycle lock):
   complete; if the sink is unavailable the operation fails closed. Informational
   events are best-effort with buffering.
 
+### 5.1 Audit transaction ordering (frozen)
+
+| Operation shares a transaction with its audit? | Ordering |
+|---|---|
+| Control-plane mutation | **Same transaction**: business row + platform audit commit or roll back together |
+| Tenant-routed mutation | **Same transaction** (tenant DB): mutation + `AuditEvent` commit or roll back together |
+| Cross-plane (operator/system mutating tenant data) | Mandatory platform audit is durably committed **before** the tenant transaction applies the mutation; the tenant transaction carries its own `AuditEvent`. If the tenant transaction fails, the platform event remains as a record of the attempted operation. A durable outbox is the documented future upgrade if stronger cross-plane atomicity is required |
+
+There is no path where a business commit succeeds and a required audit event
+fails afterwards.
+
 ## 6. Tenant relocation (manual procedure, v1)
 
 Strategy changes for an existing tenant are an operational procedure, not an
-application feature:
+application feature. `tenant_placements` remains the **authoritative current
+placement** (exactly one row per tenant); the in-flight operation is recorded as
+a `tenant_relocations` row (control plane, `02` section 3.3.1). The placement
+row is updated exactly once, at the atomic flip.
 
 ```
-1. provision new target via a new tenant_placements row (same tenant id)
-2. copy data (logical export/import or logical replication)
-3. verify: row counts, migration version, seed invariants, health checks
-4. flip: update tenant_placements (strategy, target_handle) in one transaction
-5. post-flip health check on the new target (servability predicate + smoke query)
-6. retain old target; deprovision it only after verification succeeds
-7. audit: tenant.relocated with from/to placement
+1. create TenantRelocation(status=pending)      # from_* captured from current placement
+2. provision destination target; status=provisioning
+3. copy data (logical export/import or logical replication); status=copying
+4. verify destination: row counts, migration version, seed invariants, health
+   checks; status=verifying        (failure → failed, placement untouched)
+5. flip (single transaction): update tenant_placements to to_* + status=flipping
+   → post_flip_verification
+6. post-flip health check on the new target (servability predicate + smoke query)
+   ├── success → status=completed; deprovision old target (kept until now)
+   └── failure → rollback: restore tenant_placements to from_* in one transaction;
+                 status=rolled_back; retain BOTH targets for diagnosis
+7. audit: tenant.relocated (from/to placement, outcome)
 ```
 
-Rollback: flipping back restores service because the old target is retained
-until step 6; if the post-flip health check fails, flip back and leave both
-targets intact for diagnosis. Application code is unaware; ids do not change;
-logical references remain valid. Automated relocation is explicitly out of v1
-scope.
+Rules:
+
+- The old target remains fully provisioned and reachable until
+  `status='completed'`; deprovisioning it earlier is a contract violation.
+- The flip is one transaction over `tenant_placements` + relocation status; no
+  observer can see a half-flipped tenant.
+- Relocation uses the same per-tenant advisory lock as other lifecycle
+  operations; concurrent relocations for one tenant are rejected
+  (`TenantOperationInProgress`), and the DB partial unique index is the second
+  guard.
+- Every phase is idempotent/resumable from the recorded status; re-running a
+  completed phase is a no-op.
+- Application code is unaware; ids do not change; logical references remain
+  valid. Automated relocation is explicitly out of v1 scope.
 
 ## 7. Secret and target resolution
 
@@ -191,7 +219,7 @@ scope.
 | suspension | suspended tenant denies and resumes without data change |
 | deprovision ordering | access rows gone before storage drop; audit retained |
 | parent deletion | parent with children blocked; `detach_children=true` detaches then deletes |
-| relocation | flip preserves ids and logical references; post-flip health failure rolls back; old target retained until verification |
+| relocation | operation record created; placement preserved until flip; destination verified before flip; post-flip failure rolls back placement; old target retained until `completed`; concurrent relocations rejected; re-runs idempotent |
 | invitation tokens | valid accepted; wrong/expired/revoked/already-accepted/tampered/duplicate/nonexistent `token_id` all rejected; Argon2id verify is the only acceptance path |
 | mandatory audit | lifecycle operation fails when the audit sink is unavailable |
 | secret resolution | missing handle fails closed, no fallback to shared |

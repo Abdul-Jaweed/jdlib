@@ -63,8 +63,8 @@ src/jdlib/
 │                               #   ContextFactory, current_*, scoped_key, envelope
 ├── control/
 │   ├── base.py                 # ControlBase (DeclarativeBase, schema="jd_control")
-│   ├── models.py               # Tenant, TenantPlacement, TenantMigrationState, User,
-│   │                           #   IdentityLink, PlatformOperator, ServiceAccount, ApiKey,
+│   ├── models.py               # Tenant, TenantPlacement, TenantMigrationState, TenantRelocation,
+│   │                           #   User, IdentityLink, PlatformOperator, ServiceAccount, ApiKey,
 │   │                           #   Membership, Invitation, Role, RolePermission,
 │   │                           #   RoleBinding, ResourceGrant, PlatformAuditEvent
 │   ├── session.py              # ControlPlaneSession (framework-internal)
@@ -87,6 +87,7 @@ src/jdlib/
 │   ├── resource_types.py       # ResourceTypeDefinition, ResourceTypeRegistry
 │   ├── scopes.py               # ScopeRef, ScopeType, ScopeResolver
 │   ├── pdp.py                  # PolicyDecisionPoint, DefaultPDP, Decision, MatchedRule
+│   ├── cache.py                # AuthzCache (request-scoped, invalidatable)
 │   ├── guards.py               # Enforcer, requires(), authorize()
 │   └── ownership.py            # validate_ownership, hierarchy helpers (I12)
 ├── tenancy/
@@ -94,7 +95,8 @@ src/jdlib/
 │   ├── middleware.py           # pure-ASGI TenantMiddleware, context lifecycle
 │   └── jobs.py                 # @tenant_job decorator, ContextPropagator
 ├── persistence/
-│   ├── session.py              # TenantSession (scoping, stamping, guards, raw_sql)
+│   ├── session.py              # TenantSession (scoping, stamping, guards, raw_sql modes)
+│   ├── rawsql.py               # RawSqlMode, RawSqlValidator (pglast structural validation)
 │   ├── router.py               # SessionRouter, PoolCache, SecretProvider
 │   ├── uow.py                  # UnitOfWork
 │   ├── repository.py           # TenantRepository[ModelT]
@@ -250,7 +252,7 @@ class TenantOwned:
     tenant_id: Mapped[uuid.UUID] = mapped_column(primary_key=True, nullable=False)
 
 class TenantRouted(TenantOwned):
-    """Marker: RLS-eligible and strategy-routed. Only tenant-plane models use it."""
+    """TenantOwned + physical routing/RLS eligibility. Subclass, never a sibling."""
 
 class Timestamped:
     created_at: Mapped[datetime]; updated_at: Mapped[datetime]
@@ -269,9 +271,33 @@ class OwnableByTeam:
     #                        ["teams.tenant_id","teams.id","teams.organization_id"])
 ```
 
-Application models inherit `TenantBase` + mixins; the metadata lint (L1–L16)
-runs against the combined metadata at import time in tests and at startup when
-`config.strict_schema = true`.
+Application models inherit `TenantBase` + `TenantRouted` + mixins; the metadata
+lint (L1–L19) runs against the combined metadata at import time in tests and at
+startup when `config.strict_schema = true`.
+
+Model inheritance contract (frozen, enforced by L17–L19):
+
+```
+                TenantOwned
+                /         \
+   control-plane            TenantRouted
+   tenant-owned             tenant-plane
+   (NOT routed)             + application-plane
+```
+
+- Every tenant-plane framework model and every application resource inherits
+  `TenantRouted` (`TenantRouted ⊂ TenantOwned`).
+- Control-plane tenant-owned models (`Membership`, `Role`, `RolePermission`,
+  `RoleBinding`, `ResourceGrant`, `Invitation`, `ApiKey`, `ServiceAccount`)
+  inherit `TenantOwned` only.
+- L17: tenant-plane model without `TenantRouted` → build failure.
+  L18: registered application model without `TenantRouted` → build failure.
+  L19: control-plane model marked `TenantRouted` → build failure.
+
+```python
+class Project(TenantRouted, Timestamped, OwnableByOrg, OwnableByTeam):
+    ...
+```
 
 ### 6.3 Scoping implementation (the enforcement core)
 
@@ -293,11 +319,28 @@ In `persistence/events.py`, registered on every tenant session:
   - maintain `Timestamped` values;
   - translate `session.delete()` on `SoftDelete` models into `deleted_at`
     (hard delete requires a privileged context, audited).
-- **Raw SQL** — `TenantSession.raw_sql(statement, *, params, tenant_bound=False)`:
-  without `tenant_bound=True` it refuses `INSERT/UPDATE/DELETE/SELECT` touching
-  tenant-routed tables (regex-free: statement classification via SQLAlchemy
-  `text()` plus a required explicit opt-in), and every call is logged with the
-  tenant. Privileged contexts may pass `tenant_bound=True`; audited.
+- **Raw SQL** — explicit modes, never a boolean switch:
+
+```python
+class RawSqlMode(StrEnum):
+    TENANT_BOUND = "tenant_bound"
+    PRIVILEGED = "privileged"
+
+class RawSqlValidator:   # persistence/rawsql.py
+    def validate_tenant_bound(self, statement: str, ctx: TenantContext) -> None: ...
+```
+
+  `raw_sql(statement, params, *, mode=RawSqlMode.TENANT_BOUND)`:
+  `TENANT_BOUND` requires `RawSqlValidator` to *prove* the statement safe using
+  the Postgres parser (`pglast`), not regex/`text()` heuristics: single
+  statement, DML only, no DDL/multiple statements/dynamic SQL/CTEs, every
+  referenced relation resolves to a registered `TenantRouted` table for the
+  active target, no control-plane or foreign-schema references, and every
+  tenant-routed relation carries an explicit `tenant_id = :tenant_id`
+  predicate. Anything unprovable raises `UnscopedRawSql`.
+  `PRIVILEGED` requires a `PrivilegeContext` with the raw-SQL capability, is
+  bypassed only at the tenant-scope check, still rejects DDL/multistatement,
+  and is mandatorily audited. Every call is logged with tenant and mode.
 
 Serialization of tenant identity is never implicit: sessions hold an immutable
 `TenantContext`; there is no setter.
@@ -354,7 +397,10 @@ class TenantRegistry:
     async def deprovision(self, tenant_id: uuid.UUID, *, mode: DeprovisionMode,
                           actor: Principal, detach_children: bool = False) -> None: ...
     async def relocate(self, tenant_id: uuid.UUID, *, to_strategy: StrategyName,
-                       to_target_handle: str, actor: Principal) -> None: ...
+                       to_target_handle: str, to_region: str | None = None,
+                       actor: Principal) -> TenantRelocation: ...
+    async def resume_relocation(self, tenant_id: uuid.UUID, *, actor: Principal) -> TenantRelocation: ...
+    async def rollback_relocation(self, tenant_id: uuid.UUID, *, actor: Principal) -> TenantRelocation: ...
     async def assert_servable(self, tenant: Tenant) -> None: ...
     async def list_for_user(self, user_id: uuid.UUID) -> Sequence[TenantSummary]: ...
 
@@ -377,8 +423,33 @@ class AccessControl:
 
 All methods: run under the lifecycle advisory lock where they mutate lifecycle,
 validate every polymorphic reference (I11/L14), enforce scope and namespace
-compatibility (L16), write mandatory audit events, and never expose a raw
-control-plane session.
+compatibility (L16), write mandatory audit events, invalidate the request-scoped
+`AuthzCache` after any authorization-state change (section 10), and never expose
+a raw control-plane session.
+
+Relocation record and phases:
+
+```python
+class RelocationPhase(StrEnum):
+    PENDING = "pending"; PROVISIONING = "provisioning"; COPYING = "copying"
+    VERIFYING = "verifying"; FLIPPING = "flipping"
+    POST_FLIP_VERIFICATION = "post_flip_verification"
+    COMPLETED = "completed"; FAILED = "failed"; ROLLED_BACK = "rolled_back"
+
+@dataclass(frozen=True, slots=True)
+class TenantRelocation:
+    tenant_id: uuid.UUID; id: uuid.UUID
+    from_strategy: StrategyName; from_target_handle: str; from_region: str | None
+    to_strategy: StrategyName; to_target_handle: str; to_region: str | None
+    phase: RelocationPhase
+    started_at: datetime; verified_at: datetime | None
+    flipped_at: datetime | None; completed_at: datetime | None
+    error: str | None
+```
+
+`TenantPlacement` stays the single authoritative placement; `relocate()` only
+updates it inside the `FLIPPING` transaction, and the old target is retained
+until `COMPLETED` (section 6 of `05-tenant-lifecycle.md`).
 
 ## 9. Authentication
 
@@ -436,7 +507,13 @@ class PolicyDecisionPoint(Protocol):
 class DefaultPDP(PolicyDecisionPoint):
     # Precedence chain → bindings → role permissions → grants → API-key scopes
     # Namespace/scope validation for binding/grants lives in AccessControl.
-    # Per-request memoization via a request-scoped resolution object.
+    # Memoization goes through AuthzCache.
+
+class AuthzCache:
+    """Request-scoped only. AccessControl calls invalidate() after any
+    authorization-state mutation (role, permission, binding, grant, membership,
+    ownership transfer, team move), so no stale allow can be reused."""
+    def invalidate(self) -> None: ...
 
 class Enforcer:
     async def require(self, permission: str, target: ScopeRef) -> Decision: ...  # raises AuthorizationError
@@ -485,9 +562,15 @@ class AuditRecorder:
 ```
 
 - Tenant-routed mutations: `AuditEvent` inserted **in the session transaction**
-  by repositories with `audited=True` (or services calling `record`).
+  by repositories with `audited=True` (or services calling `record`); failure
+  rolls the business mutation back too.
 - Platform events: `DatabaseAuditSink` via control-plane connection; called even
   when no tenant context exists.
+- Transaction ordering is frozen in `05-tenant-lifecycle.md` section 5.1:
+  same-transaction on-plane; cross-plane mandatory platform audit is durably
+  committed **before** the tenant transaction applies the mutation (a durable
+  outbox is the documented future upgrade). No path commits business state and
+  then fails a required audit.
 - Mandatory events fail the operation closed when no sink can durably record
   them; best-effort events buffer and log.
 - `AuditSink` is a port; `CompositeAuditSink` fans out to SIEM adapters in a
@@ -535,7 +618,7 @@ and audits.
   testcontainers Postgres; the same behavioral tests run everywhere.
 - `jdlib.testing` exports `tenants`, `tenant_context`, `strategy_matrix`,
   `assert_isolation`, `assert_cross_tenant_rejected`, `assert_rls_matrix`.
-- Lint tests run L1–L16 against the consumer's combined metadata.
+- Lint tests run L1–L19 against the consumer's combined metadata.
 - TDD is the implementation workflow: each phase's gate tests are written
   before the phase's code.
 
@@ -562,11 +645,11 @@ and audits.
 | Phase | Files |
 |---|---|
 | 0 | doc sign-off; scaffolding (`pyproject`, CI, lint config) |
-| 1 | `control/base.py`, `control/models.py`, `models/*`, baseline migrations |
+| 1 | `control/base.py`, `control/models.py` (incl. `TenantRelocation`), `models/*`, baseline migrations |
 | 2 | `context.py`, `errors.py`, `config.py`, `tenancy/resolution.py`, `tenancy/middleware.py` |
-| 3 | `persistence/events.py`, `session.py`, `uow.py`, `repository.py`, `router.py`, `strategies/base.py`, lint tests |
+| 3 | `persistence/events.py`, `session.py`, `rawsql.py`, `uow.py`, `repository.py`, `router.py`, `strategies/base.py`, lint tests |
 | 4 | `strategies/shared.py`, control `registry.py` provisioning path, first end-to-end |
-| 5 | `authz/*`, `control/access.py`, `authn/base.py` (static principal provider for tests) |
+| 5 | `authz/*` (incl. `cache.py`), `control/access.py`, registry relocation operations, `authn/base.py` (static principal provider for tests) |
 | 6 | `authn/oidc.py`, `authn/apikey.py`, `authn/composite.py` |
 | 7 | `strategies/schema.py`, migration distribution |
 | 8 | `strategies/database.py`, `SecretProvider` |

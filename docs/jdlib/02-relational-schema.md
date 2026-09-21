@@ -97,6 +97,36 @@ Indexes: `UNIQUE (slug)`, `INDEX (status)`, `INDEX (parent_tenant_id)`.
 
 `CHECK (strategy <> 'database' OR target_handle <> 'default')` is intentionally
 not enforced at the DB level; the router validates handles per strategy.
+`tenant_placements` holds exactly one authoritative row per tenant; relocation
+in progress is represented by `tenant_relocations` (section 3.3.1), never by a
+second placement row.
+
+### 3.3.1 `tenant_relocations`
+
+Durable operation record for a strategy change; the authoritative placement
+stays in `tenant_placements` until the atomic flip.
+
+| Column | Type | Constraints |
+|---|---|---|
+| `tenant_id` | uuid | PK part, FK → `tenants(id)` ON DELETE RESTRICT |
+| `id` | uuid | PK part |
+| `from_strategy` / `to_strategy` | text | NOT NULL, same CHECK as placements |
+| `from_target_handle` / `to_target_handle` | text | NOT NULL |
+| `from_region` / `to_region` | text | NULL |
+| `status` | text | NOT NULL, `CHECK (status IN ('pending','provisioning','copying','verifying','flipping','post_flip_verification','completed','failed','rolled_back'))` |
+| `started_at` | timestamptz | NOT NULL |
+| `verified_at` / `flipped_at` / `completed_at` | timestamptz | NULL |
+| `error` | text | NULL |
+| `created_by` | uuid | NULL, logical reference to `users(id)` |
+
+`PRIMARY KEY (tenant_id, id)`;
+partial `UNIQUE (tenant_id) WHERE status NOT IN ('completed','failed','rolled_back')`
+(at most one in-flight relocation per tenant, DB-enforced);
+`INDEX (tenant_id, status)`.
+Rules: the old target is never deprovisioned before `completed`; `flipping` is a
+single transaction that updates `tenant_placements` and sets
+`post_flip_verification`; failure at any phase sets `failed` (or
+`rolled_back` when the flip is reverted).
 
 ### 3.3 `tenant_migration_states`
 
@@ -459,6 +489,12 @@ required shape:
   compatibility (`RoleScopeMismatch`), and `ResourceGrant` creation validates
   permission ↔ resource-type namespace compatibility
   (`InvalidResourcePermission`) — see `04-authorization-model.md`.
+- `L17` (metadata) Every tenant-plane model is `TenantRouted` (a `TenantOwned`
+  base without routing is a build failure).
+- `L18` (metadata) Every application-plane model registered in the
+  `ResourceTypeRegistry` is `TenantRouted`.
+- `L19` (metadata) No control-plane model inherits `TenantRouted`
+  (`TenantOwned` only).
 
 ## 7. Migration artifacts
 
