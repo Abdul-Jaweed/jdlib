@@ -1268,7 +1268,7 @@ def test_api_key_prefix_globally_unique_and_sa_scoped(control_engine, control_me
             )
 
 
-def test_membership_unique_per_tenant_and_cross_tenant_fk(control_engine, control_metadata):
+def test_membership_unique_per_tenant(control_engine, control_metadata):
     with control_engine.begin() as connection:
         tenant_a = _new_tenant(connection, "mem-tenant-a")
         tenant_b = _new_tenant(connection, "mem-tenant-b")
@@ -1658,7 +1658,7 @@ class PlatformAuditEvent(ControlBase):
     __tablename__ = "platform_audit_events"
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid7)
-    tenant_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid, index=True)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid)
     actor_type: Mapped[str] = mapped_column(sa.Text, nullable=False)
     actor_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid)
     action: Mapped[str] = mapped_column(sa.Text, nullable=False)
@@ -1681,6 +1681,12 @@ class PlatformAuditEvent(ControlBase):
         sa.CheckConstraint(sql_in("severity", AuditSeverity), name="severity"),
         sa.Index("ix_platform_audit_events_occurred_at", "occurred_at"),
         sa.Index("ix_platform_audit_events_tenant_id_occurred_at", "tenant_id", "occurred_at"),
+        sa.Index(
+            "ix_platform_audit_events_actor_type_actor_id_occurred_at",
+            "actor_type",
+            "actor_id",
+            "occurred_at",
+        ),
         sa.Index("ix_platform_audit_events_action_occurred_at", "action", "occurred_at"),
     )
 ```

@@ -140,7 +140,7 @@ def test_api_key_prefix_globally_unique_and_sa_scoped(control_engine, control_me
             )
 
 
-def test_membership_unique_per_tenant_and_cross_tenant_fk(control_engine, control_metadata):
+def test_membership_unique_per_tenant(control_engine, control_metadata):
     with control_engine.begin() as connection:
         tenant_a = _new_tenant(connection, "mem-tenant-a")
         tenant_b = _new_tenant(connection, "mem-tenant-b")

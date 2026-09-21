@@ -445,7 +445,7 @@ class PlatformAuditEvent(ControlBase):
     __tablename__ = "platform_audit_events"
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid7)
-    tenant_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid, index=True)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid)
     actor_type: Mapped[str] = mapped_column(sa.Text, nullable=False)
     actor_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid)
     action: Mapped[str] = mapped_column(sa.Text, nullable=False)
@@ -468,5 +468,11 @@ class PlatformAuditEvent(ControlBase):
         sa.CheckConstraint(sql_in("severity", AuditSeverity), name="severity"),
         sa.Index("ix_platform_audit_events_occurred_at", "occurred_at"),
         sa.Index("ix_platform_audit_events_tenant_id_occurred_at", "tenant_id", "occurred_at"),
+        sa.Index(
+            "ix_platform_audit_events_actor_type_actor_id_occurred_at",
+            "actor_type",
+            "actor_id",
+            "occurred_at",
+        ),
         sa.Index("ix_platform_audit_events_action_occurred_at", "action", "occurred_at"),
     )
