@@ -770,7 +770,7 @@ git commit -m "feat: structural raw SQL validator"
 **Interfaces:**
 - Consumes: Task 1–2; `TenantContext`; `TenantRouted`, `SoftDelete`; errors.
 - Produces: `TenantSession` with `context`, `raw_sql(statement, params, *, mode)`, `execute(statement)`, `get(model, id)`, `add(obj)`, `flush()`, `update_where(model, values, *criteria)`, `delete_where(model, *criteria)`; `RawSqlAuditor` protocol.
-- Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set, including DML wrapped in `select(...).from_statement(...)` (table resolved from the statement's `element`); SELECTs always walk the whole statement tree for tenant tables and are scoped with `with_loader_criteria` for every `TenantRouted` mapper in `all_mappers` plus a trusted bind mapper (a `TenantRouted` mapper whose `local_table` is a direct final FROM); a `TenantRouted` mapper in `all_mappers` is allowed even when its table is not a direct final FROM, so `select(Model).from_statement(select(Model))` is scoped rather than refused; any other tenant table (`select(Model.__table__)`, `sa.table(...)`, extra FROMs such as `select_from(Invoice, LineItem)`, a tenant table reachable only through a subquery, or an unmodeled tenant join) is refused as `UnscopedRawSql`; an entity-less select whose direct final FROMs contain an unattributable `sa.TextClause` (`sa.select(count()).select_from(sa.text(...))`) is refused as well; `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar).
+- Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set, including DML wrapped in `select(...).from_statement(...)` (table resolved from the statement's `element`); SELECTs always walk the whole statement tree for tenant tables and are scoped with `with_loader_criteria` for every `TenantRouted` mapper in `all_mappers` plus a trusted bind mapper, and the tree walk only allows tenant tables of trusted mappers (a `TenantRouted` mapper whose `local_table` is a direct final FROM); `FromStatement` is rejected by contract — `select(Model).from_statement(...)` raises `UnscopedRawSql` before any mapper/trust logic, whatever its inner statement (ORM select, table select, or `sa.text(...)`) — so only scoped ORM selects and `raw_sql` are supported; any tenant table (`select(Model.__table__)`, `sa.table(...)`, extra FROMs such as `select_from(Invoice, LineItem)`, a tenant table reachable only through a subquery, or an unmodeled tenant join) is refused as `UnscopedRawSql`; an entity-less select whose direct final FROMs contain an unattributable `sa.TextClause` (`sa.select(count()).select_from(sa.text(...))`) is refused as well; `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar).
 
 - [ ] **Step 1: Add async fixtures to `tests/integration/conftest.py`**
 
@@ -934,18 +934,26 @@ async def test_text_clause_select_rejected(session_factory):
             await session.execute(sa.select(sa.func.count()).select_from(sa.text("invoices")))
 
 
-async def test_from_statement_select_is_allowed_and_scoped(session_factory):
-    async with await _session(session_factory, TENANT_B) as session:
-        await session.add(Invoice(number=f"B-{uuid.uuid4().hex[:8]}"))
-        await session.commit()
+async def test_from_statement_orm_select_rejected(session_factory):
     async with await _session(session_factory, TENANT_A) as session:
-        await session.add(Invoice(number=f"A-{uuid.uuid4().hex[:8]}"))
-        await session.commit()
+        with pytest.raises(UnscopedRawSql, match="from_statement is not supported"):
+            await session.execute(sa.select(Invoice).from_statement(sa.select(Invoice)))
+
+
+async def test_from_statement_table_select_rejected(session_factory):
     async with await _session(session_factory, TENANT_A) as session:
-        statement = sa.select(Invoice).from_statement(sa.select(Invoice))
-        rows = (await session.execute(statement)).scalars().all()
-        assert rows
-        assert all(row.tenant_id == TENANT_A for row in rows)
+        with pytest.raises(UnscopedRawSql, match="from_statement is not supported"):
+            await session.execute(
+                sa.select(Invoice).from_statement(sa.select(Invoice.__table__))
+            )
+
+
+async def test_from_statement_text_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="from_statement is not supported"):
+            await session.execute(
+                sa.select(Invoice).from_statement(sa.text("SELECT * FROM invoices"))
+            )
 
 
 async def test_cross_tenant_get_returns_none(session_factory):
@@ -1155,7 +1163,7 @@ from typing import Any, Protocol, cast
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import FromStatement, Session
 from sqlalchemy.sql import visitors
 
 from jdlib.context import TenantContext
@@ -1227,6 +1235,12 @@ def _register_events(session: Session) -> None:
             if state.is_select or state.is_update or state.is_delete or state.is_insert:
                 raise MissingTenantContext("session has no tenant context")
             return
+        if isinstance(state.statement, FromStatement) and not (
+            state.is_insert or state.is_update or state.is_delete
+        ):
+            raise UnscopedRawSql(
+                "from_statement is not supported; use ORM selects or raw_sql"
+            )
         if state.is_select:
             tenant_id = context.tenant_id
             all_mappers = state.all_mappers
@@ -1256,9 +1270,7 @@ def _register_events(session: Session) -> None:
                 mappers.append(bind_mapper)
             allowed: set[str] = set()
             for mapper in mappers:
-                if not issubclass(mapper.class_, TenantRouted):
-                    continue
-                if mapper not in all_mappers and not _trusted(mapper):
+                if not _trusted(mapper):
                     continue
                 local_name = getattr(mapper.local_table, "name", None)
                 if local_name is not None:
@@ -1445,21 +1457,25 @@ nodes and non-subquery `Alias` nodes so aliased selects and ORM joins whose enti
 loader criteria remain trusted, while subqueries/CTEs stay opaque and are refused by the tree
 walk. A bare `sa.table(...)` is a `TableClause` (not a `Table`) and a bare `sa.text(...)` is a
 `TextClause`, so the tree walk collects `TableClause` elements and entity-less selects refuse
-direct `TextClause` FROMs. `select(Model).from_statement(select(Model))` executes as the ORM's
-internal `FromStatement`, which exposes neither `get_final_froms()` nor `froms`;
-`_direct_froms` therefore returns an empty tuple, and the mapper is admitted through
-`all_mappers` (loader criteria still scope the inner select).
+direct `TextClause` FROMs. `FromStatement` is rejected by contract in tenant sessions:
+`select(Model).from_statement(...)` executes as the ORM's internal `FromStatement`, which
+exposes neither `get_final_froms()` nor `froms`, and neither `from_statement(select(Model.__table__))`
+nor `from_statement(sa.text(...))` can be proven scoped, so `_scope` raises `UnscopedRawSql`
+before any mapper/trust logic. `FromStatement` copies `is_select`/`is_insert`/`is_update`/`is_delete`
+from its inner element, so a `from_statement` wrapping text is not an `is_select` operation; the
+guard checks `isinstance(state.statement, FromStatement)` ahead of `state.is_select` but exempts
+DML inner statements, which are still refused by the bulk-DML guard via the statement's `element`.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_session_isolation.py tests/unit/test_session.py -v`
-Expected: PASS (23 passed: 20 integration + 3 unit)
+Expected: PASS (25 passed: 22 integration + 3 unit)
 
 - [ ] **Step 6: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
-Expected: `161 passed`; `All checks passed!`; `Success: no issues found in 29 source files`.
+Expected: `163 passed`; `All checks passed!`; `Success: no issues found in 29 source files`.
 Note: the pre-existing unraisable `ResourceWarning` under `-W error` (undisposed engines in
 `tests/integration/test_migrations.py` / `test_tenant_models.py`) has been fixed by disposing
 those engines; the full suite is green under `-W error`.

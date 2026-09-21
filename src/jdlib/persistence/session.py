@@ -5,7 +5,7 @@ from typing import Any, Protocol, cast
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import FromStatement, Session
 from sqlalchemy.sql import visitors
 
 from jdlib.context import TenantContext
@@ -77,6 +77,12 @@ def _register_events(session: Session) -> None:
             if state.is_select or state.is_update or state.is_delete or state.is_insert:
                 raise MissingTenantContext("session has no tenant context")
             return
+        if isinstance(state.statement, FromStatement) and not (
+            state.is_insert or state.is_update or state.is_delete
+        ):
+            raise UnscopedRawSql(
+                "from_statement is not supported; use ORM selects or raw_sql"
+            )
         if state.is_select:
             tenant_id = context.tenant_id
             all_mappers = state.all_mappers
@@ -106,9 +112,7 @@ def _register_events(session: Session) -> None:
                 mappers.append(bind_mapper)
             allowed: set[str] = set()
             for mapper in mappers:
-                if not issubclass(mapper.class_, TenantRouted):
-                    continue
-                if mapper not in all_mappers and not _trusted(mapper):
+                if not _trusted(mapper):
                     continue
                 local_name = getattr(mapper.local_table, "name", None)
                 if local_name is not None:

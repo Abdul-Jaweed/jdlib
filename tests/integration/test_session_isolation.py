@@ -120,18 +120,26 @@ async def test_text_clause_select_rejected(session_factory):
             await session.execute(sa.select(sa.func.count()).select_from(sa.text("invoices")))
 
 
-async def test_from_statement_select_is_allowed_and_scoped(session_factory):
-    async with await _session(session_factory, TENANT_B) as session:
-        await session.add(Invoice(number=f"B-{uuid.uuid4().hex[:8]}"))
-        await session.commit()
+async def test_from_statement_orm_select_rejected(session_factory):
     async with await _session(session_factory, TENANT_A) as session:
-        await session.add(Invoice(number=f"A-{uuid.uuid4().hex[:8]}"))
-        await session.commit()
+        with pytest.raises(UnscopedRawSql, match="from_statement is not supported"):
+            await session.execute(sa.select(Invoice).from_statement(sa.select(Invoice)))
+
+
+async def test_from_statement_table_select_rejected(session_factory):
     async with await _session(session_factory, TENANT_A) as session:
-        statement = sa.select(Invoice).from_statement(sa.select(Invoice))
-        rows = (await session.execute(statement)).scalars().all()
-        assert rows
-        assert all(row.tenant_id == TENANT_A for row in rows)
+        with pytest.raises(UnscopedRawSql, match="from_statement is not supported"):
+            await session.execute(
+                sa.select(Invoice).from_statement(sa.select(Invoice.__table__))
+            )
+
+
+async def test_from_statement_text_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="from_statement is not supported"):
+            await session.execute(
+                sa.select(Invoice).from_statement(sa.text("SELECT * FROM invoices"))
+            )
 
 
 async def test_cross_tenant_get_returns_none(session_factory):
