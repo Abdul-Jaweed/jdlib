@@ -50,7 +50,7 @@ async def async_engine(postgres_url: str):
     from jdlib.control.models import Tenant  # noqa: F401
     from jdlib.models import audit, org, settings  # noqa: F401
     from jdlib.models.base import TenantBase
-    from tests.support.invoice import Invoice  # noqa: F401
+    from tests.support.invoice import Invoice, LineItem  # noqa: F401
 
     engine = create_async_engine(
         postgres_url.replace("postgresql+psycopg", "postgresql+asyncpg")

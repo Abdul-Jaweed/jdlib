@@ -13,7 +13,7 @@ from jdlib.errors import (
     UnscopedRawSql,
 )
 from jdlib.persistence.session import TenantSession
-from tests.support.invoice import Invoice
+from tests.support.invoice import Invoice, LineItem
 
 TENANT_A = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 TENANT_B = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
@@ -89,6 +89,22 @@ async def test_subquery_table_level_select_rejected(session_factory):
         with pytest.raises(UnscopedRawSql, match="table-level statements"):
             await session.execute(
                 sa.select(sa.func.count()).select_from(sa.select(Invoice.id).subquery())
+            )
+
+
+async def test_multi_table_entity_less_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(sa.select(sa.func.count()).select_from(Invoice, LineItem))
+
+
+async def test_subquery_tenant_table_without_mapper_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(
+                sa.select(sa.func.count())
+                .select_from(Invoice)
+                .where(Invoice.id.in_(sa.select(LineItem.id)))
             )
 
 

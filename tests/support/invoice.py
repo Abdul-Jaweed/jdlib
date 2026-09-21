@@ -34,3 +34,19 @@ class Invoice(TenantBase, TenantRouted, Timestamped, SoftDelete, OwnableByOrg, O
             postgresql_where=sa.text("deleted_at IS NULL"),
         ),
     )
+
+
+class LineItem(TenantBase, TenantRouted, Timestamped):
+    __tablename__ = "line_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid7)
+    invoice_id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, nullable=False)
+    amount_cents: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "invoice_id"],
+            ["invoices.tenant_id", "invoices.id"],
+            ondelete="CASCADE",
+        ),
+    )
