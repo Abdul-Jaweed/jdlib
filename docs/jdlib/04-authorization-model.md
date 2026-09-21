@@ -202,7 +202,17 @@ Enforced inside `AccessControl`, not per endpoint:
    | `member:*`, `role:*`, `audit:*` | `tenant` |
    | `org:*` | `tenant`, `org` |
    | `team:*` | `tenant`, `org`, `team` |
-   | `resource:*` | `tenant`, `org`, `team`, or an exact resource grant |
+   | `resource:*` | `tenant`, `org`, `team` |
+
+   `allowed_scopes` governs **RoleBinding scope compatibility only**. Resource-level
+   authority is a separate mechanism: `ResourceGrant` targets one exact resource
+   and is validated independently through the `ResourceTypeRegistry` (rule 10);
+   it never participates in binding-scope compatibility, and there is no
+   `resource` binding scope.
+
+   Example: `RoleBinding(project:read @ team)` and
+   `ResourceGrant(project:delete @ project-123)` are different grants from
+   different mechanisms.
 
    Example: a role containing `tenant:manage` cannot be bound at team scope
    (`RoleScopeMismatch`). Downward inheritance is unaffected: a permission
@@ -248,6 +258,7 @@ Levels are code-mapped capability sets; there is no blanket bypass.
 | `platform.operator.manage` | | | ✓ |
 | `platform.tenant.access` (read-only, time-boxed, justified) | | ✓ | ✓ |
 | `platform.tenant.access.write` | | | ✓ |
+| `platform.raw_sql` (cross-target raw SQL; mandatory justification + audit) | | | ✓ |
 
 Rules:
 
@@ -298,12 +309,13 @@ class Decision:
 - Resolution is memoized **per request** (scope chain, bindings, role
   permissions) through a request-scoped `AuthzCache`. No cross-request cache in
   v1.
-- Cache invalidation (frozen): any authorization-state mutation within a
-  request invalidates the request-scoped cache before further decisions —
+- Cache invalidation (frozen, conservative): any attempted authorization-state
+  mutation within a request invalidates the request-scoped cache immediately —
   role/permission changes, binding changes, grant changes, membership changes,
-  ownership transfer, and team moves. `AccessControl` performs the invalidation;
-  alternatively a mutation may begin a new resolution context. A mutation must
-  never be followed by a stale cached allow.
+  ownership transfer, and team moves. `AccessControl` performs the invalidation
+  before the mutation; a rolled-back mutation leaves the cache invalidated
+  (fail-safe and acceptable for v1; no cache restoration is attempted). A
+  mutation must never be followed by a stale cached allow.
 - Tests: `test_authorization_cache_invalidated_after_role_mutation`,
   `..._after_binding_mutation`, `..._after_grant_mutation`,
   `..._after_ownership_change`, plus a direct `test_pdp_cache_invalidation`.

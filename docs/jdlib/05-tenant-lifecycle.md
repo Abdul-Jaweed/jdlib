@@ -90,10 +90,12 @@ Rules:
   "failed but usable" state.
 - `blocked` means automated retry is unsafe (divergent schema detected); a
   platform operator must resolve and reset the state to `pending`.
-- Servability is a single predicate used by both the health step and
+- Servability is a single predicate used by the health step, the router, and
   `TenantRegistry.assert_servable(tenant)`:
   `tenants.status='active' AND migration.status='success' AND
-  current_version = desired_version`.
+  current_version = desired_version AND relocation permits serving`
+  (relocation blocks serving in `copying`, `verifying`, `flipping`,
+  `post_flip_verification` — section 6).
 - A failed migration never silently appears `active`-with-new-version: version
   and status are written in one transaction; the suspension transition is part
   of the same operation.
@@ -169,17 +171,30 @@ row is updated exactly once, at the atomic flip.
 ```
 1. create TenantRelocation(status=pending)      # from_* captured from current placement
 2. provision destination target; status=provisioning
-3. copy data (logical export/import or logical replication); status=copying
-4. verify destination: row counts, migration version, seed invariants, health
+3. enter copying: serving gate closes for the tenant (application traffic and
+   writes blocked); wait for in-flight request/session drain
+4. copy data (logical export/import or logical replication); status=copying
+5. verify destination: row counts, migration version, seed invariants, health
    checks; status=verifying        (failure → failed, placement untouched)
-5. flip (single transaction): update tenant_placements to to_* + status=flipping
+6. flip (single transaction): update tenant_placements to to_* + status=flipping
    → post_flip_verification
-6. post-flip health check on the new target (servability predicate + smoke query)
-   ├── success → status=completed; deprovision old target (kept until now)
+7. post-flip health check on the new target (servability predicate + smoke query)
+   while serving stays blocked
+   ├── success → status=completed; serving restored; deprovision old target
    └── failure → rollback: restore tenant_placements to from_* in one transaction;
-                 status=rolled_back; retain BOTH targets for diagnosis
-7. audit: tenant.relocated (from/to placement, outcome)
+                 status=rolled_back; serving stays blocked; retain BOTH targets
+8. audit events at each phase (section 6.1)
 ```
+
+Serving gate (frozen): the tenant is non-servable during `copying`, `verifying`,
+`flipping`, and `post_flip_verification`. This is part of the single servability
+predicate (`TenantRegistry.assert_servable`), not a separate check in routing
+code. No application writes can reach either target after the snapshot is taken,
+so a rollback after post-flip failure cannot lose or fork writes.
+
+Phase transitions are the table in `02` section 3.3.1; invalid transitions raise
+`RelocationPhaseError`, and `failed`/`rolled_back` retry is an explicit
+operator action that returns the record to `pending`.
 
 Rules:
 
@@ -195,6 +210,31 @@ Rules:
   completed phase is a no-op.
 - Application code is unaware; ids do not change; logical references remain
   valid. Automated relocation is explicitly out of v1 scope.
+
+### 6.1 Relocation audit events (frozen)
+
+`tenant.relocation.started` · `.provisioned` · `.copying` · `.verified` ·
+`.flipped` · `.completed` · `.failed` · `.rolled_back`
+
+Each event carries `tenant_id`, `relocation_id`, `from_strategy`,
+`from_target`, `to_strategy`, `to_target`, `outcome`, `error`, `actor`,
+`request_id`, `correlation_id`. `.failed` and `.rolled_back` are mandatory
+platform audit events (fail closed if the sink is unavailable), so an
+operational investigation never lacks the trail.
+
+Relocation test names (frozen): `test_relocation_blocks_application_traffic`;
+`test_relocation_blocks_writes_during_post_flip_verification`;
+`test_relocation_does_not_serve_after_placement_flip_until_verified`;
+`test_relocation_rollback_cannot_lose_post_flip_writes`;
+`test_relocation_completion_restores_servability`;
+`test_relocation_creates_operation_record`;
+`test_relocation_preserves_current_placement_until_flip`;
+`test_relocation_destination_is_verified_before_flip`;
+`test_relocation_flip_updates_authoritative_placement`;
+`test_relocation_post_flip_failure_rolls_back`;
+`test_relocation_old_target_retained_until_verification`;
+`test_relocation_cannot_run_concurrently`;
+`test_relocation_is_idempotent`.
 
 ## 7. Secret and target resolution
 
@@ -219,7 +259,7 @@ Rules:
 | suspension | suspended tenant denies and resumes without data change |
 | deprovision ordering | access rows gone before storage drop; audit retained |
 | parent deletion | parent with children blocked; `detach_children=true` detaches then deletes |
-| relocation | operation record created; placement preserved until flip; destination verified before flip; post-flip failure rolls back placement; old target retained until `completed`; concurrent relocations rejected; re-runs idempotent |
+| relocation | operation record created; placement preserved until flip; destination verified before flip; traffic/writes blocked during critical phases; post-flip failure rolls back with no write loss; old target retained until `completed`; serving restored on completion; concurrent relocations rejected; re-runs idempotent |
 | invitation tokens | valid accepted; wrong/expired/revoked/already-accepted/tampered/duplicate/nonexistent `token_id` all rejected; Argon2id verify is the only acceptance path |
 | mandatory audit | lifecycle operation fails when the audit sink is unavailable |
 | secret resolution | missing handle fails closed, no fallback to shared |

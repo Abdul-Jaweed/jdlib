@@ -25,7 +25,7 @@ The control plane is always a single, unrouted schema with its own pool and
 ```
 resolve tenant (control plane)
   → TenantContext
-  → TenantRegistry.assert_servable(tenant)   # active AND migration success AND current = desired
+  → TenantRegistry.assert_servable(tenant)   # active AND migration success AND current = desired AND relocation permits serving
   → SessionRouter.route(tenant)
        placement.strategy: shared  → control-plane's tenant-plane engine (default handle)
                            schema → engine + SET search_path TO <validated handle>
@@ -156,7 +156,7 @@ tenants: acme → shared      globex → schema t_globex     initech → databas
 
 | Condition | Behavior |
 |---|---|
-| Tenant not servable (`provisioning`, `suspended`, migration gate) | `TenantSuspended` / 404 semantics before routing |
+| Tenant not servable (`provisioning`, `suspended`, migration gate, relocation critical phase) | `TenantSuspended` / 404 semantics before routing |
 | Unknown strategy value | startup config validation error |
 | Missing/unresolvable `target_handle` | `StrategyCapabilityError`, no fallback |
 | Pool cap exceeded | `PoolCapacityError`, bounded latency, alert |

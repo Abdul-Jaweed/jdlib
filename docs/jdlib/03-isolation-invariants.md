@@ -177,20 +177,38 @@ Tests: `test_resource_team_same_tenant`; `test_resource_team_same_organization`;
 Statement: raw SQL either proves tenant-boundedness structurally or is rejected;
 cross-tenant/system raw SQL requires a `PrivilegeContext` and mandatory audit.
 
-Enforcement: `RawSqlValidator` (real Postgres parser, `pglast`) in
-`TENANT_BOUND` mode; unprovable statements raise `UnscopedRawSql`; `PRIVILEGED`
-mode requires the raw-SQL capability, a justification where required, and a
-mandatory `PlatformAuditEvent`. Regex, string matching, and SQLAlchemy `text()`
-are never used as isolation validators.
+Enforcement: `RawSqlValidator` in `TENANT_BOUND` mode validates **compiled
+PostgreSQL SQL** (SQLAlchemy statement → PostgreSQL dialect compilation → SQL
+text + positional bind metadata) with a real parser (`pglast`), and must
+semantically prove the tenant predicate: for every referenced tenant-routed
+relation, the WHERE clause must be an AND-conjunction containing
+`<relation>.tenant_id = $n` where bind `$n` is the context tenant id. `OR`,
+`NOT`, and nested boolean wrappers around the tenant predicate are rejected
+(`OR TRUE` cannot pass). CTEs, DDL, multi-statements, transaction control
+(`BEGIN`/`COMMIT`/`ROLLBACK`), `SET`, `COPY`, dynamic SQL, and administrative
+commands are rejected in v1.
+
+`PRIVILEGED` mode requires an explicit capability: `tenant.raw_sql` (current
+tenant only, tenant-predicate restrictions waived) or `platform.raw_sql`
+(cross-tenant/system; admin-level, mandatory justification and
+`PlatformAuditEvent`). A generic "raw SQL" capability is never a platform-wide
+bypass. Regex, string matching, and SQLAlchemy `text()` are never used as
+isolation validators.
 
 Tests: `test_raw_sql_requires_scope`;
 `test_raw_sql_select/update/delete/insert_requires_tenant_boundary`;
+`test_raw_sql_select_without_boundary_rejected`;
+`test_raw_sql_or_true_rejected`;
+`test_raw_sql_nested_boolean_predicate_rejected`;
+`test_raw_sql_parameter_binding_is_tenant_bound`;
+`test_raw_sql_compiles_before_pglast_validation`;
 `test_raw_sql_cte_cannot_bypass_tenant_scope`;
 `test_raw_sql_subquery_cannot_bypass_tenant_scope`;
 `test_raw_sql_schema_escape_rejected`;
 `test_raw_sql_ambiguous_statement_rejected`;
 `test_privileged_raw_sql_requires_capability`;
-`test_privileged_raw_sql_is_audited`.
+`test_privileged_raw_sql_tenant_scope_limited`;
+`test_privileged_raw_sql_platform_scope_audited`.
 
 ## 2. Isolation matrix
 
@@ -235,7 +253,7 @@ tests/isolation/
 ├── test_ownership.py      # I12 (team/org/tenant hierarchy consistency)
 ├── test_api_key_scopes.py # scopes limit bindings and grants; never widen; NULL scopes preserve authority
 ├── test_raw_sql.py        # I2, I6: tenant-bound vs privileged vs rejected; CTE/subquery/schema escapes
-├── test_relocation.py     # operation record, preserved placement until flip, rollback, concurrency, idempotency
+├── test_relocation.py     # operation record, quiesced traffic during critical phases, preserved placement until flip, rollback cannot lose writes, concurrency, idempotency
 ├── test_model_classification.py # L17–L19 (TenantRouted mandate on both planes)
 ├── test_audit.py          # transactional audit rollback; mandatory platform audit failure; best-effort behavior
 ├── test_pdp_cache.py      # request-scoped decisions invalidated after authorization mutations

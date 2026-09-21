@@ -123,10 +123,28 @@ stays in `tenant_placements` until the atomic flip.
 partial `UNIQUE (tenant_id) WHERE status NOT IN ('completed','failed','rolled_back')`
 (at most one in-flight relocation per tenant, DB-enforced);
 `INDEX (tenant_id, status)`.
-Rules: the old target is never deprovisioned before `completed`; `flipping` is a
-single transaction that updates `tenant_placements` and sets
-`post_flip_verification`; failure at any phase sets `failed` (or
-`rolled_back` when the flip is reverted).
+Allowed phase transitions (enforced by `TenantRegistry`, rejected transitions
+raise `TenantOperationInProgress` or `RelocationPhaseError`):
+
+```
+pending                → provisioning | failed
+provisioning           → copying | failed
+copying                → verifying | failed
+verifying              → flipping | failed
+flipping               → post_flip_verification | rolled_back
+post_flip_verification → completed | rolled_back
+failed                 → pending          # explicit retry only
+rolled_back            → pending          # explicit retry only
+completed              → terminal
+```
+
+Serving gate: the tenant is **not servable** during `copying`, `verifying`,
+`flipping`, and `post_flip_verification` (application traffic and writes are
+blocked before the snapshot is taken and remain blocked until verification
+succeeds). The old target is never deprovisioned before `completed`; `flipping`
+is a single transaction that updates `tenant_placements` and sets
+`post_flip_verification`; because no application writes can occur after the
+flip, rollback to the old placement cannot lose data.
 
 ### 3.3 `tenant_migration_states`
 
@@ -142,7 +160,9 @@ single transaction that updates `tenant_placements` and sets
 Servability predicate (single source of truth for the router and the registry):
 a tenant is servable **iff** `tenants.status = 'active'` **and**
 `tenant_migration_states.status = 'success'` **and**
-`current_version = desired_version`. A `failed` or `blocked` migration on an
+`current_version = desired_version` **and** no `tenant_relocations` row for the
+tenant is in a critical phase (`copying`, `verifying`, `flipping`,
+`post_flip_verification`). A `failed` or `blocked` migration on an
 active tenant immediately moves it to `suspended`
 (`suspended_reason = 'migration_failed'`, audited); an operator resolves the
 migration and explicitly resumes.

@@ -1,7 +1,7 @@
 # jdlib — Multi-Tenancy Foundation: Design
 
-Date: 2026-09-21 (rev 5: relocation operation model, raw-SQL parser boundary, TenantRouted mandate, audit ordering, PDP cache invalidation)
-Status: Approved (design rev 5), implementation-ready after sign-off
+Date: 2026-09-21 (rev 6: relocation serving gate, raw-SQL SELECT/semantic proof, scope-compat fix, single servability predicate)
+Status: Approved (design rev 6), implementation-ready after sign-off
 Package: `jdlib` (Python 3.12+, async-first)
 Detail contracts: `docs/jdlib/02-relational-schema.md`, `03-isolation-invariants.md`,
 `04-authorization-model.md`, `05-tenant-lifecycle.md`, `06-strategy-matrix.md`,
@@ -293,7 +293,10 @@ tracks `alembic_version` locally and the registry tracks
 tenant becomes `active` only after create → migrate → seed → health check →
 invariants pass. Servability is a single predicate:
 `tenants.status = 'active' AND migration.status = 'success' AND
-current_version = desired_version`. A migration that fails or becomes blocked
+current_version = desired_version AND relocation permits serving` (relocation
+blocks serving during `copying`, `verifying`, `flipping`,
+`post_flip_verification`; `TenantRegistry.assert_servable` is the only
+implementation of this predicate). A migration that fails or becomes blocked
 on an already-active tenant immediately suspends it
 (`suspended_reason = 'migration_failed'`, audited); the operator resolves the
 migration and explicitly resumes. Provisioning, migration, seeding, and
@@ -418,8 +421,8 @@ Exception hierarchy (one root): `MissingTenantContext`;
 `AuthenticationError` (`InvalidToken`, `ExpiredToken`, `UnknownPrincipal`);
 `AuthorizationError` (`PermissionDenied`, `RoleEscalationBlocked`);
 `StrategyCapabilityError`; `PoolCapacityError`; `TenantOperationInProgress`;
-`UnscopedRawSql`; `ProvisioningError`/`MigrationError`. HTTP mapping:
-401 / 403 / 404 / 423 / 409 as before.
+`RelocationPhaseError`; `UnscopedRawSql`; `ProvisioningError`/`MigrationError`.
+HTTP mapping: 401 / 403 / 404 / 423 / 409 as before.
 
 Audit splits into **platform audit** (authn failures, resolution failures,
 privileged use, operator actions, lifecycle and migration events; written via

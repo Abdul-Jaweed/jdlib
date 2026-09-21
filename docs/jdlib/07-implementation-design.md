@@ -326,21 +326,39 @@ class RawSqlMode(StrEnum):
     TENANT_BOUND = "tenant_bound"
     PRIVILEGED = "privileged"
 
+@dataclass(frozen=True, slots=True)
+class CompiledRawSql:
+    sql: str                        # PostgreSQL dialect, $n positional placeholders
+    binds: Mapping[int, object]     # bind values by index
+
 class RawSqlValidator:   # persistence/rawsql.py
-    def validate_tenant_bound(self, statement: str, ctx: TenantContext) -> None: ...
+    def compile(self, statement: TextClause | Executable) -> CompiledRawSql: ...
+    def validate_tenant_bound(self, compiled: CompiledRawSql, ctx: TenantContext) -> None: ...
 ```
 
-  `raw_sql(statement, params, *, mode=RawSqlMode.TENANT_BOUND)`:
-  `TENANT_BOUND` requires `RawSqlValidator` to *prove* the statement safe using
-  the Postgres parser (`pglast`), not regex/`text()` heuristics: single
-  statement, DML only, no DDL/multiple statements/dynamic SQL/CTEs, every
-  referenced relation resolves to a registered `TenantRouted` table for the
-  active target, no control-plane or foreign-schema references, and every
-  tenant-routed relation carries an explicit `tenant_id = :tenant_id`
-  predicate. Anything unprovable raises `UnscopedRawSql`.
-  `PRIVILEGED` requires a `PrivilegeContext` with the raw-SQL capability, is
-  bypassed only at the tenant-scope check, still rejects DDL/multistatement,
-  and is mandatorily audited. Every call is logged with tenant and mode.
+  Validation pipeline (frozen): SQLAlchemy statement → PostgreSQL dialect
+  compilation (`postgresql.asyncpg` dialect; `$n` placeholders + bind metadata)
+  → `pglast` parse → AST validation → execution. Uncompiled SQLAlchemy bind
+  syntax (`:name`) is never handed to the parser.
+
+  `TENANT_BOUND` allows **SELECT, INSERT, UPDATE, DELETE** and rejects DDL,
+  multiple statements, dynamic SQL, CTEs, transaction control
+  (`BEGIN`/`COMMIT`/`ROLLBACK`), `SET`, `COPY`, and administrative commands.
+  It must *semantically prove* tenant boundedness, not string-match: every
+  referenced relation must resolve to a registered `TenantRouted` table for the
+  active target (no control-plane or foreign-schema references, no
+  table-valued functions), the WHERE clause must be an AND-conjunction, and
+  every relation must carry a conjunct `<relation>.tenant_id = $n` where bind
+  `$n` holds the context tenant id; `INSERT` must bind `tenant_id` explicitly.
+  `OR`, `NOT`, or nested boolean wrappers around the tenant predicate are
+  rejected (`WHERE tenant_id = $1 OR TRUE` cannot pass). Anything unprovable
+  raises `UnscopedRawSql`.
+
+  `PRIVILEGED` requires an explicit capability: `tenant.raw_sql` (current
+  tenant only; tenant-predicate proof waived, structural rejects still apply)
+  or `platform.raw_sql` (cross-tenant/system only, admin-level, mandatory
+  justification and `PlatformAuditEvent`). A generic raw-SQL capability is
+  never a platform-wide bypass. Every call is logged with tenant and mode.
 
 Serialization of tenant identity is never implicit: sessions hold an immutable
 `TenantContext`; there is no setter.
@@ -449,7 +467,17 @@ class TenantRelocation:
 
 `TenantPlacement` stays the single authoritative placement; `relocate()` only
 updates it inside the `FLIPPING` transaction, and the old target is retained
-until `COMPLETED` (section 6 of `05-tenant-lifecycle.md`).
+until `COMPLETED` (section 6 of `05-tenant-lifecycle.md`). Phase transitions are
+validated against the table in `02` section 3.3.1; invalid moves raise
+`RelocationPhaseError`, and only `failed`/`rolled_back → pending` (explicit
+retry) or the forward edges are allowed.
+
+Serving gate: `assert_servable()` is the one predicate used by the router,
+middleware, and migration runner, and it includes relocation state —
+`active AND migration success AND current = desired AND relocation permits
+serving`. Relocation permits serving in `pending` and `provisioning`, and
+blocks it in `copying`, `verifying`, `flipping`, and
+`post_flip_verification`. No adapter reimplements this predicate.
 
 ## 9. Authentication
 
@@ -510,9 +538,10 @@ class DefaultPDP(PolicyDecisionPoint):
     # Memoization goes through AuthzCache.
 
 class AuthzCache:
-    """Request-scoped only. AccessControl calls invalidate() after any
+    """Request-scoped only. AccessControl calls invalidate() before any
     authorization-state mutation (role, permission, binding, grant, membership,
-    ownership transfer, team move), so no stale allow can be reused."""
+    ownership transfer, team move), so no stale allow can be reused. A rolled
+    back mutation leaves the cache invalidated — fail-safe, no restoration."""
     def invalidate(self) -> None: ...
 
 class Enforcer:
