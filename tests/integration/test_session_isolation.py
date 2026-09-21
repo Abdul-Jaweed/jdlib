@@ -116,8 +116,73 @@ async def test_table_clause_select_rejected(session_factory):
 
 async def test_text_clause_select_rejected(session_factory):
     async with await _session(session_factory, TENANT_A) as session:
-        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+        with pytest.raises(UnscopedRawSql, match="text fragments"):
             await session.execute(sa.select(sa.func.count()).select_from(sa.text("invoices")))
+
+
+async def test_text_fragment_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="text fragments"):
+            await session.execute(sa.select(sa.text("* FROM invoices")))
+
+
+async def test_text_fragment_in_criteria_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="text fragments"):
+            await session.execute(sa.select(Invoice).where(sa.text("1 = 1")))
+
+
+async def test_aliased_entity_select_is_scoped(session_factory):
+    async with await _session(session_factory, TENANT_B) as session:
+        await session.add(Invoice(number=f"B-{uuid.uuid4().hex[:8]}"))
+        await session.commit()
+    aliased = sa.orm.aliased(Invoice)
+    async with await _session(session_factory, TENANT_A) as session:
+        rows = (await session.execute(sa.select(aliased))).scalars().all()
+        assert all(row.tenant_id == TENANT_A for row in rows)
+
+
+async def test_literal_column_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="literal SQL fragments"):
+            await session.execute(
+                sa.select(sa.literal_column("tenant_id")).select_from(Invoice)
+            )
+
+
+async def test_table_clause_alias_from_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(
+                sa.select(sa.func.count()).select_from(
+                    Invoice, sa.table("invoices").alias("raw")
+                )
+            )
+
+
+async def test_join_between_tenant_models_is_scoped(session_factory):
+    invoice_id = uuid.uuid4()
+    async with await _session(session_factory, TENANT_B) as session:
+        await session.add(Invoice(id=invoice_id, number=f"B-{uuid.uuid4().hex[:8]}"))
+        await session.flush()
+        await session.add(LineItem(invoice_id=invoice_id, amount_cents=500))
+        await session.commit()
+    async with await _session(session_factory, TENANT_A) as session:
+        rows = (
+            await session.execute(
+                sa.select(Invoice).join(LineItem, LineItem.invoice_id == Invoice.id)
+            )
+        ).scalars().all()
+        assert all(row.tenant_id == TENANT_A for row in rows)
+    async with await _session(session_factory, TENANT_B) as session:
+        rows = (
+            await session.execute(
+                sa.select(Invoice)
+                .join(LineItem, LineItem.invoice_id == Invoice.id)
+                .where(Invoice.id == invoice_id)
+            )
+        ).scalars().all()
+        assert [row.id for row in rows] == [invoice_id]
 
 
 async def test_from_statement_orm_select_rejected(session_factory):
@@ -208,6 +273,33 @@ async def test_update_where_rejects_tenant_id_change(session_factory):
         with pytest.raises(AuthorizationError):
             await session.update_where(
                 Invoice, {"tenant_id": TENANT_B}, Invoice.number == "missing"
+            )
+
+
+async def test_raw_sql_update_tenant_id_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="tenant_id may not be assigned"):
+            await session.raw_sql(
+                sa.text("UPDATE invoices SET tenant_id = :other WHERE tenant_id = :tenant_id"),
+                {"other": TENANT_B, "tenant_id": TENANT_A},
+            )
+
+
+async def test_raw_sql_on_conflict_tenant_id_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="tenant_id may not be assigned"):
+            await session.raw_sql(
+                sa.text(
+                    "INSERT INTO invoices (tenant_id, id, number) "
+                    "VALUES (:tenant_id, :id, :number) "
+                    "ON CONFLICT (tenant_id, id) DO UPDATE SET tenant_id = :other"
+                ),
+                {
+                    "tenant_id": TENANT_A,
+                    "id": uuid.uuid4(),
+                    "number": f"A-{uuid.uuid4().hex[:8]}",
+                    "other": TENANT_B,
+                },
             )
 
 

@@ -4,7 +4,7 @@ import importlib
 import uuid
 from typing import Protocol
 
-from jdlib.context import TenantContext
+from jdlib.context import PrivilegeKind, TenantContext
 from jdlib.models.base import TenantBase, TenantRouted
 
 
@@ -39,4 +39,9 @@ class NullWriteFence:
 
 
 def privileged_bypass(context: TenantContext) -> bool:
-    return context.privilege is not None
+    privilege = context.privilege
+    return (
+        privilege is not None
+        and privilege.kind is PrivilegeKind.SYSTEM
+        and privilege.capability == "relocation.manage"
+    )

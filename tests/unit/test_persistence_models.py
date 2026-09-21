@@ -54,17 +54,17 @@ async def test_null_write_fence_always_allows():
     await NullWriteFence().assert_writable(TENANT_ID)
 
 
-def test_privileged_bypass_requires_privilege_kind():
+def test_privileged_bypass_requires_system_relocation_capability():
     assert privileged_bypass(_context()) is False
     operator = PrivilegeContext(
         kind=PrivilegeKind.OPERATOR,
-        capability="platform.tenant.access.write",
+        capability="relocation.manage",
         justification="ticket",
         actor=Principal(kind=PrincipalKind.PLATFORM_OPERATOR, id=uuid.uuid4()),
         issued_at=datetime.now(UTC),
         expires_at=None,
     )
-    assert privileged_bypass(_context(operator)) is True
+    assert privileged_bypass(_context(operator)) is False
     system = PrivilegeContext(
         kind=PrivilegeKind.SYSTEM,
         capability="relocation.manage",
@@ -74,6 +74,24 @@ def test_privileged_bypass_requires_privilege_kind():
         expires_at=None,
     )
     assert privileged_bypass(_context(system)) is True
+    other_capability = PrivilegeContext(
+        kind=PrivilegeKind.SYSTEM,
+        capability="tenant.migrate",
+        justification=None,
+        actor=Principal(kind=PrincipalKind.PLATFORM_OPERATOR, id=uuid.uuid4()),
+        issued_at=datetime.now(UTC),
+        expires_at=None,
+    )
+    assert privileged_bypass(_context(other_capability)) is False
+    test_kind = PrivilegeContext(
+        kind=PrivilegeKind.TEST,
+        capability=None,
+        justification=None,
+        actor=Principal(kind=PrincipalKind.USER, id=uuid.uuid4()),
+        issued_at=datetime.now(UTC),
+        expires_at=None,
+    )
+    assert privileged_bypass(_context(test_kind)) is False
 
 
 class _FencedFence:

@@ -1,8 +1,15 @@
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 
-from jdlib.context import Principal, PrincipalKind, TenantContext
+from jdlib.context import (
+    Principal,
+    PrincipalKind,
+    PrivilegeContext,
+    PrivilegeKind,
+    TenantContext,
+)
 from jdlib.control.enums import PlacementStrategy
 from jdlib.errors import TenantNotWritable
 from jdlib.persistence.uow import UnitOfWork
@@ -10,7 +17,7 @@ from jdlib.persistence.uow import UnitOfWork
 TENANT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 
 
-def _context() -> TenantContext:
+def _context(privilege: PrivilegeContext | None = None) -> TenantContext:
     return TenantContext(
         tenant_id=TENANT_ID,
         tenant_slug="acme",
@@ -18,6 +25,18 @@ def _context() -> TenantContext:
         principal=Principal(kind=PrincipalKind.USER, id=uuid.uuid4()),
         request_id="req",
         correlation_id="corr",
+        privilege=privilege,
+    )
+
+
+def _operator_privilege() -> PrivilegeContext:
+    return PrivilegeContext(
+        kind=PrivilegeKind.OPERATOR,
+        capability="relocation.manage",
+        justification="ticket",
+        actor=Principal(kind=PrincipalKind.PLATFORM_OPERATOR, id=uuid.uuid4()),
+        issued_at=datetime.now(UTC),
+        expires_at=None,
     )
 
 
@@ -99,4 +118,17 @@ async def test_fence_blocks_admission(monkeypatch):
     with pytest.raises(TenantNotWritable):
         async with UnitOfWork(factory, _context(), fence=_Fence(blocked=True)):
             pass
+    assert factory.sessions == []
+
+
+async def test_operator_context_does_not_bypass_fence(monkeypatch):
+    factory = _Factory()
+    monkeypatch.setattr(
+        "jdlib.persistence.uow.TenantSession", lambda session, context, **kw: session
+    )
+    fence = _Fence(blocked=True)
+    with pytest.raises(TenantNotWritable):
+        async with UnitOfWork(factory, _context(_operator_privilege()), fence=fence):
+            pass
+    assert fence.calls == 1
     assert factory.sessions == []

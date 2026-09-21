@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -59,6 +59,15 @@ def _column_is_tenant_id(node: object, qualifiers: set[str]) -> bool:
 
 def _param_index(node: object) -> int | None:
     return node.number if isinstance(node, ParamRef) else None
+
+
+def _reject_tenant_id_assignments(targets: Iterable[object] | None, context: str) -> None:
+    if targets is None:
+        return
+    for target in targets:
+        name = getattr(target, "name", None)
+        if getattr(name, "sval", name) == "tenant_id":
+            raise UnscopedRawSql(f"tenant_id may not be assigned in {context}")
 
 
 def _relation_qualifier(relation: RangeVar) -> str:
@@ -176,6 +185,7 @@ class RawSqlValidator:
                 relations.extend(_relations(node))
             where = stmt.whereClause
         elif isinstance(stmt, UpdateStmt):
+            _reject_tenant_id_assignments(stmt.targetList, "tenant-bound SQL")
             relations = _relations(stmt.relation)
             for node in stmt.fromClause or ():
                 relations.extend(_relations(node))
@@ -212,6 +222,10 @@ class RawSqlValidator:
         if relation is None:
             raise UnscopedRawSql("INSERT without target relation")
         _check_relation(relation, self._tables)
+        if stmt.onConflictClause is not None:
+            _reject_tenant_id_assignments(
+                stmt.onConflictClause.targetList, "tenant-bound SQL"
+            )
         if stmt.selectStmt is None or not isinstance(stmt.selectStmt, SelectStmt):
             raise UnscopedRawSql("INSERT requires a VALUES list")
         if stmt.selectStmt.fromClause:

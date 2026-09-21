@@ -119,6 +119,32 @@ def test_update_and_delete_require_predicate(validator):
         )
 
 
+def test_update_tenant_id_assignment_rejected(validator):
+    with pytest.raises(UnscopedRawSql, match="tenant_id may not be assigned"):
+        validator.validate_tenant_bound(
+            _compiled(
+                "UPDATE invoices SET tenant_id = :other WHERE tenant_id = :tenant_id",
+                other=OTHER_ID,
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
+def test_insert_on_conflict_tenant_id_assignment_rejected(validator):
+    with pytest.raises(UnscopedRawSql, match="tenant_id may not be assigned"):
+        validator.validate_tenant_bound(
+            _compiled(
+                "INSERT INTO invoices (tenant_id, id) VALUES (:tenant_id, :id) "
+                "ON CONFLICT (tenant_id, id) DO UPDATE SET tenant_id = :other",
+                tenant_id=TENANT_ID,
+                id=uuid.uuid4(),
+                other=OTHER_ID,
+            ),
+            TENANT_ID,
+        )
+
+
 def test_insert_requires_bound_tenant_value(validator):
     validator.validate_tenant_bound(
         _compiled(
