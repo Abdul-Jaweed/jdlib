@@ -78,7 +78,7 @@ src/jdlib/
 │   ├── settings.py             # TenantSetting
 │   └── audit.py                # AuditEvent
 ├── authn/
-│   ├── base.py                 # Authenticator protocol, RequestInfo
+│   ├── base.py                 # Authenticator protocol (imports RequestInfo)
 │   ├── oidc.py                 # OidcAuthenticator, JwksCache, TokenVerifier,
 │   │                           #   ClaimMapper, UserLinker
 │   ├── apikey.py               # ApiKeyAuthenticator, KeyParser
@@ -91,10 +91,7 @@ src/jdlib/
 │   ├── cache.py                # AuthzCache (request-scoped, invalidatable)
 │   ├── guards.py               # Enforcer, requires(), authorize()
 │   └── ownership.py            # validate_ownership, hierarchy helpers (I12)
-├── tenancy/
-│   ├── resolution.py           # TenantResolver protocol + 5 built-ins + ResolverChain
-│   ├── middleware.py           # pure-ASGI TenantMiddleware, context lifecycle
-│   └── jobs.py                 # @tenant_job decorator, ContextPropagator
+├── tenancy/              # resolution.py (RequestInfo + resolvers) · middleware.py · jobs.py
 ├── persistence/
 │   ├── session.py              # TenantSession (scoping, stamping, guards, raw_sql modes)
 │   ├── rawsql.py               # RawSqlMode, RawSqlValidator (pglast structural validation)
@@ -539,6 +536,8 @@ class ApiKeyAuthenticator(Authenticator):
 class CompositeAuthenticator(Authenticator):
     # first authenticator that returns a Principal wins; all failures audited
 ```
+
+`RequestInfo` is defined in `jdlib.tenancy.resolution` and imported by `authn/base.py`.
 
 ## 10. Authorization
 
