@@ -21,6 +21,7 @@ def tenant_metadata(postgres_url: str, control_metadata):
         connection.exec_driver_sql('SET search_path TO "jt_test"')
         TenantBase.metadata.create_all(connection)
     yield engine
+    engine.dispose()
 
 
 def _seed_tenant(engine, slug: str):

@@ -770,7 +770,7 @@ git commit -m "feat: structural raw SQL validator"
 **Interfaces:**
 - Consumes: Task 1–2; `TenantContext`; `TenantRouted`, `SoftDelete`; errors.
 - Produces: `TenantSession` with `context`, `raw_sql(statement, params, *, mode)`, `execute(statement)`, `get(model, id)`, `add(obj)`, `flush()`, `update_where(model, values, *criteria)`, `delete_where(model, *criteria)`; `RawSqlAuditor` protocol.
-- Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set; `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar).
+- Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set, including DML wrapped in `select(...).from_statement(...)` (table resolved from the statement's `element`); `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar).
 
 - [ ] **Step 1: Add async fixtures to `tests/integration/conftest.py`**
 
@@ -978,9 +978,10 @@ from jdlib.context import (
     context_scope,
 )
 from jdlib.control.enums import PlacementStrategy
-from jdlib.errors import AuthorizationError
+from jdlib.errors import AuthorizationError, UnscopedBulkOperation
 from jdlib.persistence.rawsql import RawSqlMode
 from jdlib.persistence.session import TenantSession
+from tests.support.invoice import Invoice
 
 TENANT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 
@@ -1020,8 +1021,22 @@ class _StubAsyncSession:
         return self.result
 
 
+class _ExecutingStubAsyncSession(_StubAsyncSession):
+    async def execute(self, statement: sa.Executable, params: object = None) -> Any:
+        self.executed.append(statement)
+        return self.sync_session.execute(statement, params)
+
+
 def _tenant_session(context: TenantContext, stub: _StubAsyncSession) -> TenantSession:
     return TenantSession(cast(Any, stub), context)
+
+
+async def test_from_statement_wrapped_insert_rejected() -> None:
+    stub = _ExecutingStubAsyncSession()
+    session = _tenant_session(_context(), stub)
+    statement = sa.select(Invoice).from_statement(sa.insert(Invoice).returning(Invoice))
+    with pytest.raises(UnscopedBulkOperation):
+        await session.execute(statement)
 
 
 async def test_privileged_raw_sql_rejects_without_session_privilege() -> None:
@@ -1122,6 +1137,8 @@ def _register_events(session: Session) -> None:
             ):
                 return
             table = getattr(state.statement, "table", None)
+            if table is None:
+                table = getattr(getattr(state.statement, "element", None), "table", None)
             if table is not None and table.name in tables:
                 raise UnscopedBulkOperation(
                     f"unscoped bulk DML on {table.name}; use update_where/delete_where/raw_sql"
@@ -1271,16 +1288,16 @@ future version, adapt minimally.
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_session_isolation.py tests/unit/test_session.py -v`
-Expected: PASS (14 passed: 12 integration + 2 unit)
+Expected: PASS (15 passed: 12 integration + 3 unit)
 
 - [ ] **Step 6: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
-Expected: `148 passed`; `All checks passed!`; `Success: no issues found in 27 source files`.
-Note: under `-W error` a pre-existing unraisable `ResourceWarning` (undisposed engines in
-`tests/integration/test_migrations.py` / `test_tenant_models.py`) fails one test regardless of
-this task's changes.
+Expected: `149 passed`; `All checks passed!`; `Success: no issues found in 27 source files`.
+Note: the pre-existing unraisable `ResourceWarning` under `-W error` (undisposed engines in
+`tests/integration/test_migrations.py` / `test_tenant_models.py`) has been fixed by disposing
+those engines; the full suite is green under `-W error`.
 
 ```bash
 git add src/jdlib/persistence/session.py tests/integration/test_session_isolation.py tests/unit/test_session.py tests/integration/conftest.py

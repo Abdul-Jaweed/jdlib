@@ -11,10 +11,13 @@ def test_control_baseline_migrates_all_tables(postgres_url: str):
     runner = MigrationRunner(postgres_url)
     runner.upgrade_control()
     engine = sa.create_engine(postgres_url, future=True)
-    with engine.connect() as connection:
-        tables = set(
-            sa.inspect(connection).get_table_names(schema="jd_control")
-        )
+    try:
+        with engine.connect() as connection:
+            tables = set(
+                sa.inspect(connection).get_table_names(schema="jd_control")
+            )
+    finally:
+        engine.dispose()
     expected = {
         "tenants",
         "tenant_placements",
@@ -41,8 +44,11 @@ def test_tenant_baseline_creates_schema_tables(postgres_url: str):
     runner = MigrationRunner(postgres_url)
     runner.provision_tenant_schema("t_migrated")
     engine = sa.create_engine(postgres_url, future=True)
-    with engine.connect() as connection:
-        tables = set(sa.inspect(connection).get_table_names(schema="t_migrated"))
+    try:
+        with engine.connect() as connection:
+            tables = set(sa.inspect(connection).get_table_names(schema="t_migrated"))
+    finally:
+        engine.dispose()
     assert {"organizations", "teams", "tenant_settings", "audit_events"} <= tables
     assert "alembic_version" in tables
 

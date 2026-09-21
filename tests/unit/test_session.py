@@ -14,9 +14,10 @@ from jdlib.context import (
     context_scope,
 )
 from jdlib.control.enums import PlacementStrategy
-from jdlib.errors import AuthorizationError
+from jdlib.errors import AuthorizationError, UnscopedBulkOperation
 from jdlib.persistence.rawsql import RawSqlMode
 from jdlib.persistence.session import TenantSession
+from tests.support.invoice import Invoice
 
 TENANT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 
@@ -56,8 +57,22 @@ class _StubAsyncSession:
         return self.result
 
 
+class _ExecutingStubAsyncSession(_StubAsyncSession):
+    async def execute(self, statement: sa.Executable, params: object = None) -> Any:
+        self.executed.append(statement)
+        return self.sync_session.execute(statement, params)
+
+
 def _tenant_session(context: TenantContext, stub: _StubAsyncSession) -> TenantSession:
     return TenantSession(cast(Any, stub), context)
+
+
+async def test_from_statement_wrapped_insert_rejected() -> None:
+    stub = _ExecutingStubAsyncSession()
+    session = _tenant_session(_context(), stub)
+    statement = sa.select(Invoice).from_statement(sa.insert(Invoice).returning(Invoice))
+    with pytest.raises(UnscopedBulkOperation):
+        await session.execute(statement)
 
 
 async def test_privileged_raw_sql_rejects_without_session_privilege() -> None:

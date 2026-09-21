@@ -71,6 +71,8 @@ def _register_events(session: Session) -> None:
             ):
                 return
             table = getattr(state.statement, "table", None)
+            if table is None:
+                table = getattr(getattr(state.statement, "element", None), "table", None)
             if table is not None and table.name in tables:
                 raise UnscopedBulkOperation(
                     f"unscoped bulk DML on {table.name}; use update_where/delete_where/raw_sql"
