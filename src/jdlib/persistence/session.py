@@ -83,6 +83,29 @@ def _direct_tables(statement: Any) -> list[sa.Table]:
     return found
 
 
+def _entity_tables(statement: Any) -> list[sa.Table]:
+    found: list[sa.Table] = []
+
+    def collect(element: object) -> None:
+        if isinstance(element, sa.Join):
+            collect(element.left)
+            collect(element.right)
+            return
+        if not hasattr(element, "_Annotated__element"):
+            return
+        table = _underlying_table(element)
+        if table is not None:
+            found.append(table)
+
+    for element in getattr(statement, "_raw_columns", ()) or ():
+        collect(element)
+    for element in getattr(statement, "_from_obj", ()) or ():
+        collect(element)
+    for join in getattr(statement, "_setup_joins", ()) or ():
+        collect(join[0])
+    return found
+
+
 def _register_events(session: Session) -> None:
     tables = tenant_table_map()
     models_by_table: dict[sa.Table, type] = {}
@@ -124,6 +147,7 @@ def _register_events(session: Session) -> None:
                 if isinstance(element, sa.TableClause) and element.name in tables:
                     tenant_tables.append(element)
             direct_tables = _direct_tables(statement)
+            entity_tables = _entity_tables(statement)
 
             def _trusted(mapper: sa.orm.Mapper[Any]) -> bool:
                 if not issubclass(mapper.class_, TenantRouted):
@@ -138,8 +162,8 @@ def _register_events(session: Session) -> None:
                 mapper for mapper in all_mappers if _trusted(mapper)
             ]
             if all_mappers:
-                for direct_table in direct_tables:
-                    model = models_by_table.get(direct_table)
+                for entity_table in entity_tables:
+                    model = models_by_table.get(entity_table)
                     if model is None:
                         continue
                     mapper = cast(sa.orm.Mapper[Any], sa.inspect(model))

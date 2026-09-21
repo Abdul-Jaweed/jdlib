@@ -842,7 +842,7 @@ git commit -m "feat: structural raw SQL validator"
 **Interfaces:**
 - Consumes: Task 1–2; `TenantContext`; `TenantRouted`, `SoftDelete`; errors.
 - Produces: `TenantSession` with `context`, `raw_sql(statement, params, *, mode)`, `execute(statement)`, `get(model, id)`, `add(obj)`, `flush()`, `update_where(model, values, *criteria)`, `delete_where(model, *criteria)`; `RawSqlAuditor` protocol.
-- Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set, including DML wrapped in `select(...).from_statement(...)` (table resolved from the statement's `element`); SELECTs walk the whole statement tree and refuse any `sa.TextClause` and any literal `sa.ColumnClause` (`is_literal`; the anonymous `func.count()` `*` is carved out) before mapper/trust logic, then scope with `with_loader_criteria` for every trusted `TenantRouted` mapper; trust is object identity with `mapper.local_table` after unwrapping `AnnotatedTable`/`Alias`/`TableClause`, so `sa.table(...)` and its aliases are never admitted by name, while `Invoice.__table__` and `aliased(Invoice)` normalize to the same object; trusted mappers are `all_mappers` with a direct final FROM plus, for entity-bearing statements, mappers discovered from direct-FROM tables through the `TenantRouted` model map so `select(Invoice).join(LineItem, ...)` is accepted and both entities are scoped; entity-less statements accept only a trusted `bind_mapper`, so `select(count()).select_from(Invoice)` stays scoped while `select_from(Invoice, LineItem)` and raw `__table__` selects stay refused; `FromStatement` is rejected by contract — `select(Model).from_statement(...)` raises `UnscopedRawSql` before any mapper/trust logic, whatever its inner statement (ORM select, table select, or `sa.text(...)`) — so only scoped ORM selects and `raw_sql` are supported; subqueries/CTEs containing tenant tables without a trusted mapper and unmodeled tenant joins are refused as `UnscopedRawSql`; `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar), and `tenant.raw_sql` is still tenant-bound-validated while `platform.raw_sql` gets structural-only validation.
+- Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set, including DML wrapped in `select(...).from_statement(...)` (table resolved from the statement's `element`); SELECTs walk the whole statement tree and refuse any `sa.TextClause` and any literal `sa.ColumnClause` (`is_literal`; the anonymous `func.count()` `*` is carved out) before mapper/trust logic, then scope with `with_loader_criteria` for every trusted `TenantRouted` mapper; an entity mapper is trusted only when its `local_table` is object-identical to a direct final FROM after unwrapping `AnnotatedTable`/`Alias`/`TableClause`, so `sa.table(...)` and its aliases are never admitted by name, while `aliased(Invoice)` and entity selects whose table backs the columns clause normalize to the same object; mapper discovery for entity-bearing statements considers only entity-derived FROM occurrences — `AnnotatedTable`/`AnnotatedAlias` elements produced by `select(Entity)`/`aliased(Entity)` in the columns clause, `select_from(...)`, or join targets — so `select(Invoice).join(LineItem, ...)` is accepted and both entities are scoped, while bare `sa.Table`/`TableClause` occurrences of a tenant model (`select(Invoice, LineItem.__table__)`, `select(Invoice).join(LineItem.__table__, ...)`, `select(Invoice).select_from(LineItem.__table__)`) are never trusted, stay in the collected tenant-table set, and raise `UnscopedRawSql`; entity-less statements accept only a trusted `bind_mapper`, so `select(count()).select_from(Invoice)` stays scoped while `select_from(Invoice, LineItem)` and raw `__table__` selects stay refused; `FromStatement` is rejected by contract — `select(Model).from_statement(...)` raises `UnscopedRawSql` before any mapper/trust logic, whatever its inner statement (ORM select, table select, or `sa.text(...)`) — so only scoped ORM selects and `raw_sql` are supported; subqueries/CTEs containing tenant tables without a trusted mapper and unmodeled tenant joins are refused as `UnscopedRawSql`; `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar), and `tenant.raw_sql` is still tenant-bound-validated while `platform.raw_sql` gets structural-only validation.
 
 - [ ] **Step 1: Add async fixtures to `tests/integration/conftest.py`**
 
@@ -970,6 +970,28 @@ async def test_table_level_select_rejected(session_factory):
             await session.execute(sa.select(Invoice.__table__))
 
 
+async def test_entity_with_bare_table_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(sa.select(Invoice, LineItem.__table__))
+
+
+async def test_entity_join_bare_table_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(
+                sa.select(Invoice).join(
+                    LineItem.__table__, LineItem.__table__.c.invoice_id == Invoice.id
+                )
+            )
+
+
+async def test_entity_select_from_bare_table_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(sa.select(Invoice).select_from(LineItem.__table__))
+
+
 async def test_subquery_table_level_select_rejected(session_factory):
     async with await _session(session_factory, TENANT_A) as session:
         with pytest.raises(UnscopedRawSql, match="table-level statements"):
@@ -1069,6 +1091,31 @@ async def test_join_between_tenant_models_is_scoped(session_factory):
             )
         ).scalars().all()
         assert [row.id for row in rows] == [invoice_id]
+
+
+async def test_multi_entity_select_is_scoped(session_factory):
+    async with await _session(session_factory, TENANT_B) as session:
+        invoice_b = Invoice(number=f"B-{uuid.uuid4().hex[:8]}")
+        await session.add(invoice_b)
+        await session.flush()
+        await session.add(LineItem(invoice_id=invoice_b.id, amount_cents=700))
+        await session.commit()
+    async with await _session(session_factory, TENANT_A) as session:
+        invoice_a = Invoice(number=f"A-{uuid.uuid4().hex[:8]}")
+        await session.add(invoice_a)
+        await session.flush()
+        await session.add(LineItem(invoice_id=invoice_a.id, amount_cents=300))
+        await session.commit()
+    async with await _session(session_factory, TENANT_A) as session:
+        rows = (
+            await session.execute(
+                sa.select(Invoice, LineItem).where(LineItem.invoice_id == Invoice.id)
+            )
+        ).all()
+        assert rows
+        for invoice_row, line_item_row in rows:
+            assert invoice_row.tenant_id == TENANT_A
+            assert line_item_row.tenant_id == TENANT_A
 
 
 async def test_from_statement_orm_select_rejected(session_factory):
@@ -1446,6 +1493,29 @@ def _direct_tables(statement: Any) -> list[sa.Table]:
     return found
 
 
+def _entity_tables(statement: Any) -> list[sa.Table]:
+    found: list[sa.Table] = []
+
+    def collect(element: object) -> None:
+        if isinstance(element, sa.Join):
+            collect(element.left)
+            collect(element.right)
+            return
+        if not hasattr(element, "_Annotated__element"):
+            return
+        table = _underlying_table(element)
+        if table is not None:
+            found.append(table)
+
+    for element in getattr(statement, "_raw_columns", ()) or ():
+        collect(element)
+    for element in getattr(statement, "_from_obj", ()) or ():
+        collect(element)
+    for join in getattr(statement, "_setup_joins", ()) or ():
+        collect(join[0])
+    return found
+
+
 def _register_events(session: Session) -> None:
     tables = tenant_table_map()
     models_by_table: dict[sa.Table, type] = {}
@@ -1487,6 +1557,7 @@ def _register_events(session: Session) -> None:
                 if isinstance(element, sa.TableClause) and element.name in tables:
                     tenant_tables.append(element)
             direct_tables = _direct_tables(statement)
+            entity_tables = _entity_tables(statement)
 
             def _trusted(mapper: sa.orm.Mapper[Any]) -> bool:
                 if not issubclass(mapper.class_, TenantRouted):
@@ -1501,8 +1572,8 @@ def _register_events(session: Session) -> None:
                 mapper for mapper in all_mappers if _trusted(mapper)
             ]
             if all_mappers:
-                for direct_table in direct_tables:
-                    model = models_by_table.get(direct_table)
+                for entity_table in entity_tables:
+                    model = models_by_table.get(entity_table)
                     if model is None:
                         continue
                     mapper = cast(sa.orm.Mapper[Any], sa.inspect(model))
@@ -1705,18 +1776,27 @@ The one carve-out is the anonymous `*` literal (`element.name == "*"`) that SQLA
 `func.count()`; without it `select(func.count()).select_from(Model)` would be refused. Trust is
 object identity, not table name: `_underlying_table` unwraps `AnnotatedTable`
 (`_Annotated__element`, since `AnnotatedTable` subclasses `Table` in 2.0.54), `Alias.element` and
-`TableClause.element` down to a real `sa.Table`, and a tenant table is trusted only when it *is*
-the `local_table` of a trusted mapper. `sa.table("invoices")` and any alias of it resolve to no
-`sa.Table` and stay refused, while `Invoice.__table__` (identity equals `mapper.local_table`) and
-`aliased(Invoice)` unify to the same object and are accepted. Trusted mappers are the statement's
+`TableClause.element` down to a real `sa.Table`, and an entity mapper is trusted only when its
+`local_table` *is* a direct final FROM. `sa.table("invoices")` and any alias of it resolve to no
+`sa.Table` and stay refused, while `aliased(Invoice)` and entity selects whose table backs the
+columns clause unify to the same object and are accepted. Trusted mappers are the statement's
 `all_mappers` whose local table is a direct final FROM, plus (only when `all_mappers` is non-empty)
-mappers discovered by mapping each direct-FROM table object through the `TenantRouted` model map,
-so `select(Invoice).join(LineItem, ...)` is accepted and both entities receive loader criteria.
-Entity-less statements stay on the older, narrower rule: just the trusted `bind_mapper`, so
-`select(count()).select_from(Invoice)` is still scoped while `select(count()).select_from(Invoice,
-LineItem)`, raw `__table__` selects, subqueries and `sa.table(...)` clauses stay refused. The
-`is_annotated` attribute names above were verified against SQLAlchemy 2.0.54 and pglast v8.4;
-adapt minimally on upgrade. `state.all_mappers`/`state.bind_mapper` are read via `getattr` because
+mappers discovered from **entity-derived** FROM occurrences through the `TenantRouted` model map:
+`AnnotatedTable`/`AnnotatedAlias` elements produced by `select(Entity)`/`aliased(Entity)` found in
+`_raw_columns` (columns clause), `_from_obj` (`select_from`) and `_setup_joins` targets (join limbs,
+recursing into `Join`), so `select(Invoice).join(LineItem, ...)` is accepted and both entities
+receive loader criteria. A bare `sa.Table`/`TableClause` occurrence of a tenant model is never
+trusted — `select(Invoice, LineItem.__table__)`, `select(Invoice).join(LineItem.__table__, ...)`
+and `select(Invoice).select_from(LineItem.__table__)` stay in the collected tenant-table set and
+are refused as `UnscopedRawSql`. `_entity_tables` reads the statement's private
+`_raw_columns`/`_from_obj`/`_setup_joins` collections directly because `get_final_froms()` returns
+post-compilation objects with ORM annotations stripped, and `visitors.iterate` does not reliably
+visit `_from_obj` once a WHERE clause is present. Entity-less statements stay on the older, narrower
+rule: just the trusted `bind_mapper`, so `select(count()).select_from(Invoice)` is still scoped
+while `select(count()).select_from(Invoice, LineItem)`, raw `__table__` selects, subqueries and
+`sa.table(...)` clauses stay refused. The private attribute names above (`_Annotated__element`,
+`_raw_columns`, `_from_obj`, `_setup_joins`) were verified against SQLAlchemy 2.0.54 and pglast
+v8.4; adapt minimally on upgrade. `state.all_mappers`/`state.bind_mapper` are read via `getattr` because
 `all_mappers` raises `AttributeError` for Core-style selects that SQLAlchemy does not treat as ORM
 statements (fail closed: no trusted mapper, no tenant table admission). `FromStatement` is rejected
 by contract in tenant sessions: `select(Model).from_statement(...)` executes as the ORM's internal
@@ -1740,13 +1820,13 @@ until then.
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_session_isolation.py tests/unit/test_session.py -v`
-Expected: PASS (35 passed: 30 integration + 5 unit)
+Expected: PASS (39 passed: 34 integration + 5 unit)
 
 - [ ] **Step 6: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
-Expected: `179 passed`; `All checks passed!`; `Success: no issues found in 33 source files`.
+Expected: `183 passed`; `All checks passed!`; `Success: no issues found in 33 source files`.
 Note: the pre-existing unraisable `ResourceWarning` under `-W error` (undisposed engines in
 `tests/integration/test_migrations.py` / `test_tenant_models.py`) has been fixed by disposing
 those engines; the full suite is green under `-W error`.

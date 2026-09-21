@@ -84,6 +84,28 @@ async def test_table_level_select_rejected(session_factory):
             await session.execute(sa.select(Invoice.__table__))
 
 
+async def test_entity_with_bare_table_select_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(sa.select(Invoice, LineItem.__table__))
+
+
+async def test_entity_join_bare_table_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(
+                sa.select(Invoice).join(
+                    LineItem.__table__, LineItem.__table__.c.invoice_id == Invoice.id
+                )
+            )
+
+
+async def test_entity_select_from_bare_table_rejected(session_factory):
+    async with await _session(session_factory, TENANT_A) as session:
+        with pytest.raises(UnscopedRawSql, match="table-level statements"):
+            await session.execute(sa.select(Invoice).select_from(LineItem.__table__))
+
+
 async def test_subquery_table_level_select_rejected(session_factory):
     async with await _session(session_factory, TENANT_A) as session:
         with pytest.raises(UnscopedRawSql, match="table-level statements"):
@@ -183,6 +205,31 @@ async def test_join_between_tenant_models_is_scoped(session_factory):
             )
         ).scalars().all()
         assert [row.id for row in rows] == [invoice_id]
+
+
+async def test_multi_entity_select_is_scoped(session_factory):
+    async with await _session(session_factory, TENANT_B) as session:
+        invoice_b = Invoice(number=f"B-{uuid.uuid4().hex[:8]}")
+        await session.add(invoice_b)
+        await session.flush()
+        await session.add(LineItem(invoice_id=invoice_b.id, amount_cents=700))
+        await session.commit()
+    async with await _session(session_factory, TENANT_A) as session:
+        invoice_a = Invoice(number=f"A-{uuid.uuid4().hex[:8]}")
+        await session.add(invoice_a)
+        await session.flush()
+        await session.add(LineItem(invoice_id=invoice_a.id, amount_cents=300))
+        await session.commit()
+    async with await _session(session_factory, TENANT_A) as session:
+        rows = (
+            await session.execute(
+                sa.select(Invoice, LineItem).where(LineItem.invoice_id == Invoice.id)
+            )
+        ).all()
+        assert rows
+        for invoice_row, line_item_row in rows:
+            assert invoice_row.tenant_id == TENANT_A
+            assert line_item_row.tenant_id == TENANT_A
 
 
 async def test_from_statement_orm_select_rejected(session_factory):

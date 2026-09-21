@@ -204,11 +204,12 @@ relation, the WHERE clause must be an AND-conjunction containing
 commands are rejected in v1.
 
 `PRIVILEGED` mode requires an explicit capability: `tenant.raw_sql` (current
-tenant only, tenant-predicate restrictions waived) or `platform.raw_sql`
-(cross-tenant/system; admin-level, mandatory justification and
-`PlatformAuditEvent`). A generic "raw SQL" capability is never a platform-wide
-bypass. Regex, string matching, and SQLAlchemy `text()` are never used as
-isolation validators.
+tenant only; tenant-predicate validation still applies — the predicate is never
+waived) or `platform.raw_sql` (cross-tenant/system; admin-level, mandatory
+justification and `PlatformAuditEvent`; skips tenant-predicate validation while
+structural rejects still apply). A generic "raw SQL" capability is never a
+platform-wide bypass. Regex, string matching, and SQLAlchemy `text()` are never
+used as isolation validators.
 
 Tests: `test_raw_sql_requires_scope`;
 `test_raw_sql_select/update/delete/insert_requires_tenant_boundary`;

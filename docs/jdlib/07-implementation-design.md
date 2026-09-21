@@ -373,10 +373,12 @@ class RawSqlValidator:   # persistence/rawsql.py
   unprovable raises `UnscopedRawSql`.
 
   `PRIVILEGED` requires an explicit capability: `tenant.raw_sql` (current
-  tenant only; tenant-predicate proof waived, structural rejects still apply)
-  or `platform.raw_sql` (cross-tenant/system only, admin-level, mandatory
-  justification and `PlatformAuditEvent`). A generic raw-SQL capability is
-  never a platform-wide bypass. Every call is logged with tenant and mode.
+  tenant only; tenant-predicate validation still applies — the predicate is
+  never waived) or `platform.raw_sql` (cross-tenant/system only, admin-level,
+  mandatory justification and `PlatformAuditEvent`; skips tenant-predicate
+  validation while structural rejects still apply). A generic raw-SQL
+  capability is never a platform-wide bypass. Every call is logged with tenant
+  and mode.
 
 Serialization of tenant identity is never implicit: sessions hold an immutable
 `TenantContext`; there is no setter.
