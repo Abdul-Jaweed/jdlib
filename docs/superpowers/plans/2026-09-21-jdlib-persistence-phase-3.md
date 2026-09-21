@@ -1867,8 +1867,8 @@ import uuid
 
 import pytest
 
-from jdlib.control.enums import PlacementStrategy, TenantStatus
 from jdlib.context import TenantRecord
+from jdlib.control.enums import PlacementStrategy, TenantStatus
 from jdlib.errors import StrategyCapabilityError
 from jdlib.persistence.router import SessionRouter
 from jdlib.persistence.strategies.base import StrategyCapabilities
@@ -1876,7 +1876,7 @@ from jdlib.persistence.strategies.shared import SharedSchemaStrategy
 
 
 class _FakeEngine:
-    pass
+    sync_engine = None
 
 
 def _record(strategy: PlacementStrategy) -> TenantRecord:
