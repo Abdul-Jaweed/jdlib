@@ -1121,7 +1121,7 @@ class TenantRelocation(ControlBase):
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `python -m pytest tests/integration/test_registry_models.py -v`
-Expected: PASS (9 passed)
+Expected: PASS (10 passed)
 
 - [ ] **Step 7: Lint, type check, commit**
 
@@ -2558,7 +2558,7 @@ def assert_clean(controls: list[MetaData], rls_enabled: bool = False) -> None:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/unit/test_lint.py -v`
-Expected: PASS (5 passed)
+Expected: PASS (14 passed)
 
 - [ ] **Step 5: Lint, type check, commit**
 
@@ -2917,7 +2917,7 @@ Copy the control `script.py.mako` verbatim to `src/jdlib/migrations/tenant/scrip
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/integration/test_migrations.py -v`
-Expected: PASS (3 passed)
+Expected: PASS (4 passed)
 
 - [ ] **Step 5: Run the full suite, lint, type check**
 
