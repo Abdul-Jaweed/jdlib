@@ -9,10 +9,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from jdlib._uuid import uuid7
 from jdlib.control.enums import ActorType, sql_in
-from jdlib.models.base import TenantBase, TenantOwned
+from jdlib.models.base import TenantBase, TenantRouted
 
 
-class AuditEvent(TenantBase, TenantOwned):
+class AuditEvent(TenantBase, TenantRouted):
     __tablename__ = "audit_events"
 
     id: Mapped[uuid.UUID] = mapped_column(sa.Uuid, primary_key=True, default=uuid7)

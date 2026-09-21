@@ -8,10 +8,10 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from jdlib.models.base import TenantBase, TenantOwned
+from jdlib.models.base import TenantBase, TenantRouted
 
 
-class TenantSetting(TenantBase, TenantOwned):
+class TenantSetting(TenantBase, TenantRouted):
     __tablename__ = "tenant_settings"
 
     key: Mapped[str] = mapped_column(sa.Text, primary_key=True)
