@@ -74,20 +74,31 @@ For principal `P`, tenant `T`, target `X` (resource | team | org | tenant):
        AND (principal_type, principal_id) = P
        AND (scope_type='tenant' AND scope_id IS NULL
             OR (scope_type, scope_id) ∈ scope_chain(X))
-4. perms = ∪ role_permissions(role_id of bindings)
-   if P is a service_account authenticated by an API key with scopes:
-       perms = perms ∩ key.scopes            # narrowing only, never a union
+4. role_perms = ∪ role_permissions(role_id of bindings)
 5. grants = resource_grants
      WHERE tenant_id = T AND resource_type = type(X) AND resource_id = id(X)
        AND (principal_type, principal_id) = P
-6. effective = perms ∪ {grant.permission_code for grant in grants}
-7. allowed = requested_permission ∈ effective
+6. base_authority = role_perms ∪ {grant.permission_code for grant in grants}
+7. if P is a service_account authenticated by an API key with scopes IS NOT NULL:
+       effective = base_authority ∩ key.scopes     # scopes constrain grants too
+   else:
+       effective = base_authority
+8. allowed = requested_permission ∈ effective
 ```
 
-API-key scope rule (frozen): effective key permissions =
-`binding_permissions ∩ key_scopes` when scopes are present, and
-`binding_permissions` unchanged when `scopes IS NULL`. A key with scopes can
-never exceed the bindings of its service account; scopes never widen authority.
+API-key scope rule (frozen): scopes narrow **all** authority, including
+resource grants. An API key must never exercise a permission outside its
+declared scope: `effective_permissions ⊆ key.scopes` whenever
+`scopes IS NOT NULL`. When `scopes IS NULL`, the service account's base
+authority is unchanged.
+
+| Service-account binding | Resource grant | `key.scopes` | Result |
+|---|---|---|---|
+| `project:read` | – | `{project:read}` | read allowed |
+| `project:read` | `project:delete` on R | `{project:read}` | read allowed, delete **denied** (grant constrained) |
+| `project:read` | – | `{project:read, project:update}` | read allowed, update denied (scope cannot widen bindings) |
+| `project:read` | `project:delete` on R | NULL | both allowed (no scopes = no narrowing) |
+| `project:read` | – | `{}` (empty) | nothing allowed |
 
 Properties:
 
@@ -127,11 +138,28 @@ Explicit rule: a team binding does **not** inherit access to
 organization-owned resources where `team_id IS NULL`. An org binding does not
 reach another org's resources, even within the same tenant.
 
-Resource type registry (P1.5): `ResourceGrant`, `AuditEvent.target_type`, and
-the authorization layer accept only `resource_type` values declared in the
-`ResourceTypeRegistry` — each entry maps `resource_type → (model, tenant_owned,
-permission namespace)`. Unknown types are rejected (`UnknownResourceType`);
-declared types are what the RLS generator and the consumer isolation kit use.
+Resource type registry (frozen contract): `ResourceGrant`,
+`AuditEvent.target_type`, the authorization layer, and the RLS generator accept
+only `resource_type` values declared in the `ResourceTypeRegistry`:
+
+```python
+ResourceTypeDefinition(
+    resource_type: str,
+    model: type,
+    tenant_owned: bool,
+    tenant_routed: bool,
+    permission_namespace: str,
+)
+```
+
+Inconsistent definitions are rejected at startup (`tenant_routed=True` requires
+`tenant_owned=True`; duplicate names are rejected). Unknown types raise
+`UnknownResourceType`. For every grant, the `permission_code` must belong to the
+registered `permission_namespace` of the resource type (e.g. `project` grants
+accept only `project:*`; `project + invoice:approve` raises
+`InvalidResourcePermission`). The registry is the single source of truth for
+resource existence, tenant ownership, tenant routing, permission namespace, RLS
+generation, authorization, and the consumer isolation kit.
 
 ## 4. Anti-escalation rules
 
@@ -163,6 +191,26 @@ Enforced inside `AccessControl`, not per endpoint:
 
    The same subset rule applies wherever authority is transferred: binding
    assignment (rule 3), role edits (rule 2), and resource grants (rule 8).
+9. Permission ↔ binding-scope compatibility: every permission in an assigned
+   role must allow the binding's scope. Catalog entries carry
+   `allowed_scopes`; violations raise `RoleScopeMismatch`. Frozen namespace
+   defaults (custom catalog entries declare their own):
+
+   | Permission namespace | Allowed binding scopes |
+   |---|---|
+   | `tenant:*` | `tenant` |
+   | `member:*`, `role:*`, `audit:*` | `tenant` |
+   | `org:*` | `tenant`, `org` |
+   | `team:*` | `tenant`, `org`, `team` |
+   | `resource:*` | `tenant`, `org`, `team`, or an exact resource grant |
+
+   Example: a role containing `tenant:manage` cannot be bound at team scope
+   (`RoleScopeMismatch`). Downward inheritance is unaffected: a permission
+   allowed at tenant scope remains usable against team/org targets.
+10. Resource-grant namespace compatibility: the granted `permission_code` must
+    belong to the resource type's `permission_namespace`
+    (`InvalidResourcePermission`), and the resource must exist, belong to the
+    current tenant, and be in an allowed state (I11).
 
 ## 5. Ownership transfer
 

@@ -185,7 +185,7 @@ Capability mapping per level lives in code, not data.
 | `service_account_id` | uuid | NOT NULL, composite FK → `service_accounts(tenant_id, id)` ON DELETE CASCADE |
 | `key_prefix` | text | NOT NULL, UNIQUE; lookup value, non-secret |
 | `key_hash` | text | NOT NULL; Argon2id |
-| `scopes` | text[] | NULL; optional narrowing only; effective key permissions = binding permissions ∩ scopes |
+| `scopes` | text[] | NULL; optional narrowing only; effective key permissions = (binding permissions ∪ resource grants) ∩ scopes |
 | `status` | text | NOT NULL, `CHECK (status IN ('active','revoked','expired'))` |
 | `expires_at` | timestamptz | NULL |
 | `last_used_at` | timestamptz | NULL |
@@ -357,6 +357,8 @@ path in v1).
 | `created_at` / `updated_at` / `deleted_at` | timestamptz | NOT NULL / NOT NULL / NULL |
 
 `PRIMARY KEY (tenant_id, id)`;
+`UNIQUE (tenant_id, id, organization_id)` (FK target that makes resource
+ownership hierarchy consistent — see section 5);
 partial `UNIQUE (tenant_id, organization_id, slug) WHERE deleted_at IS NULL`;
 `INDEX (tenant_id, organization_id)`.
 Teams are flat within an organization (no `parent_team_id`). A user is a team
@@ -411,10 +413,11 @@ required shape:
 | Tenant-scoped FKs | Composite and include `tenant_id`; targets must have a matching unique/PK |
 | Cross-plane FKs | Forbidden; references to `users` are stored as logical `uuid` columns |
 | Optional ownership | `organization_id` and/or `team_id` with composite FKs to framework tables |
+| Ownership hierarchy | `CHECK (team_id IS NULL OR organization_id IS NOT NULL)`, plus composite FK `(tenant_id, team_id, organization_id) → teams(tenant_id, id, organization_id)`, so a team-owned resource can never point at a team from another organization or tenant |
 | Audit columns | `created_by` / `updated_by` logical user references; UTC timestamps |
 | Soft delete | `deleted_at`; unique business keys use partial indexes excluding deleted rows |
 | Indexes | Every high-volume table indexes `(tenant_id, created_at)` and common filters `(tenant_id, status)` |
-| RLS eligibility | Every model built on `TenantOwned` is RLS-eligible; when RLS is enabled the standard policy **must** be emitted for it (see `06-strategy-matrix.md` section 6) |
+| RLS eligibility | Every **tenant-routed** model (framework tenant-plane tables and application resources) is RLS-eligible; when RLS is enabled the standard policy **must** be emitted for it. Control-plane tenant-owned tables are not tenant-plane RLS targets (see `06-strategy-matrix.md` section 6) |
 
 ## 6. Enforced invariants (metadata lint and write-path tests)
 
@@ -441,11 +444,21 @@ required shape:
 - `L12` (metadata) Every unique constraint on a tenant-scoped model includes
   `tenant_id` (business keys are tenant-scoped unless listed as global in
   section 2).
-- `L13` (metadata, only when `rls` is enabled) Every `TenantOwned` model —
-  framework or application — is RLS-eligible and its policy has been emitted.
+- `L13` (metadata, only when `rls` is enabled) Every **tenant-routed** model —
+  framework or application — is RLS-eligible and its policy has been emitted;
+  control-plane tenant-owned models are explicitly excluded from tenant-plane
+  RLS generation.
 - `L14` (write path) Every polymorphic reference (`RoleBinding.scope_id`,
   `ResourceGrant.resource_id`, ownership columns) validates existence, tenant
   match, and allowed state (see I11 in `03-isolation-invariants.md`).
+- `L15` (metadata) Every model with a `team_id` ownership column declares the
+  `(team_id ⇒ organization_id)` CHECK and the
+  `(tenant_id, team_id, organization_id)` composite FK to `teams`
+  (see I12 in `03-isolation-invariants.md`).
+- `L16` (write path) `RoleBinding` creation validates permission ↔ scope
+  compatibility (`RoleScopeMismatch`), and `ResourceGrant` creation validates
+  permission ↔ resource-type namespace compatibility
+  (`InvalidResourcePermission`) — see `04-authorization-model.md`.
 
 ## 7. Migration artifacts
 

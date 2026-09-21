@@ -92,11 +92,16 @@ resolve tenant (control plane)
 
 - Enabled by config `rls: on`; requesting it with `schema`/`database` placement
   raises `StrategyCapabilityError` at startup.
-- Coverage contract: **every `TenantOwned` model is RLS-eligible — framework
-  tables and application tables alike**. `jdlib.migrations.rls` exposes
+- Coverage contract: **every tenant-routed model is RLS-eligible — framework
+  tenant-plane tables and application resources alike**. Control-plane
+  tenant-owned tables (`membership`, `role`, `role_binding`, `resource_grant`,
+  `invitation`, `api_key`, `service_account`) are **not** tenant-plane RLS
+  targets; they are protected by `ControlPlaneSession`, framework-only access,
+  and explicit filtering/authorization. `jdlib.migrations.rls` exposes
   `emit_rls_policies(metadata)` so consumer Alembic envs generate the same
   policy for their resources instead of hand-writing SQL. Metadata lint L13
-  fails the build if any `TenantOwned` table lacks a policy when RLS is enabled.
+  fails the build if any tenant-routed table lacks a policy when RLS is enabled,
+  or if a control-plane table is included in tenant-plane RLS emission.
 - Per table:
 
 ```sql
@@ -159,6 +164,6 @@ tenants: acme → shared      globex → schema t_globex     initech → databas
 | Schema missing after placement exists | `StrategyCapabilityError`; reprovision is idempotent |
 | `alembic_version` ≠ desired | migration state `failed`/`blocked`; tenant suspended, never served on mismatch |
 | RLS requested but role can bypass | startup self-check fails closed |
-| RLS enabled and a `TenantOwned` table lacks a policy | metadata lint L13 fails the build; no partial RLS deployment |
+| RLS enabled and a tenant-routed table lacks a policy (or a control-plane table is wrongly included) | metadata lint L13 fails the build; no partial RLS deployment |
 | RLS session setting missing | queries return zero rows (fail closed), never all rows |
 | search_path not applied | queries fail with missing relation, never cross-schema read |

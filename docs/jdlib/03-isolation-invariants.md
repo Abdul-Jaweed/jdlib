@@ -155,6 +155,23 @@ another tenant rejected; binding/grant to a soft-deleted or archived target
 rejected; unknown `resource_type` rejected by the registry; dangling reference
 created out-of-band is ignored by the PDP and reported by a consistency check.
 
+### I12 — Resource ownership hierarchy is consistent
+
+Statement: every application resource ownership reference resolves to a
+hierarchy consistent with its tenant. When `team_id IS NOT NULL`:
+`organization_id IS NOT NULL`, `team.tenant_id = resource.tenant_id`, and
+`team.organization_id = resource.organization_id`.
+
+Enforcement: `CHECK (team_id IS NULL OR organization_id IS NOT NULL)` plus the
+composite FK `(tenant_id, team_id, organization_id) → teams(tenant_id, id,
+organization_id)` (backed by `UNIQUE (tenant_id, id, organization_id)` on
+`teams`), and central validation in `AccessControl` for ownership changes.
+Metadata lint L15 fails the build if the constraint pair is missing.
+
+Tests: `test_resource_team_same_tenant`; `test_resource_team_same_organization`;
+`test_team_requires_organization`; `test_cross_org_team_assignment_rejected`;
+`test_cross_tenant_team_assignment_rejected`; `test_invalid_hierarchy_rejected`.
+
 ## 2. Isolation matrix
 
 | Mechanism | Shared | Schema | Database |
@@ -196,12 +213,14 @@ tests/isolation/
 ├── test_envelope.py       # I7
 ├── test_external_keys.py  # I8
 ├── test_polymorphic.py    # I11 (grants, scopes, dangling references)
+├── test_ownership.py      # I12 (team/org/tenant hierarchy consistency)
+├── test_api_key_scopes.py # scopes limit bindings and grants; never widen; NULL scopes preserve authority
 ├── test_strategy_matrix.py# I9; pool-leakage test (A → checkout → B → checkout)
-├── test_pool_eviction.py  # P1.15: never evict a pool with checked-out connections
-├── test_rls_app_tables.py # P0.2: consumer TenantOwned table under RLS; unset setting → zero rows/writes
+├── test_pool_eviction.py  # never evict a pool with checked-out connections
+├── test_rls_tenant_routed.py # RLS applies to all tenant-routed tables incl. consumer resources; control plane excluded; unset setting → zero rows/writes
 ├── test_constraints.py    # NULLS NOT DISTINCT bindings; partial uniques; CHECKs; cross-tenant insert
 ├── test_authorization.py  # I10 (delegates to the 04 matrix)
-└── test_schema_lint.py    # L1–L14
+└── test_schema_lint.py    # L1–L16
 ```
 
 Every test in this directory runs unchanged under `{shared, schema, database} ×

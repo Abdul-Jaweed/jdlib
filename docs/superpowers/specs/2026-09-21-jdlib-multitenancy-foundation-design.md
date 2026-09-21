@@ -1,10 +1,11 @@
 # jdlib — Multi-Tenancy Foundation: Design
 
-Date: 2026-09-21 (rev 3: hardening pass, second external review incorporated)
-Status: Approved (design rev 3), implementation-ready after sign-off
+Date: 2026-09-21 (rev 4: final hardening pass — API-key scope/grants, TenantRouted RLS, I12 ownership)
+Status: Approved (design rev 4), implementation-ready after sign-off
 Package: `jdlib` (Python 3.12+, async-first)
 Detail contracts: `docs/jdlib/02-relational-schema.md`, `03-isolation-invariants.md`,
-`04-authorization-model.md`, `05-tenant-lifecycle.md`, `06-strategy-matrix.md`
+`04-authorization-model.md`, `05-tenant-lifecycle.md`, `06-strategy-matrix.md`,
+`07-implementation-design.md`
 
 ## 1. Purpose
 
@@ -109,13 +110,18 @@ the control plane, always in one physical place. `Organization`, `Team`,
 tenant-routed. `Tenant` itself and platform identity tables are neither owned by
 another tenant nor routed.
 
+RLS coverage follows routing, not ownership: only **tenant-routed** models are
+RLS-eligible (shared strategy only). Control-plane tenant-owned tables are
+protected by `ControlPlaneSession`, framework-only access, and explicit
+filtering/authorization — never by tenant-plane RLS.
+
 ### 2.4 What is not a tenant
 
 `User`, `Organization`, `Team`, `ServiceAccount`, `PlatformOperator`, and
 application resources such as `Project` or `Invoice` are **not** tenants. Only
 `Tenant` is the isolation boundary, billing/administration unit, and placement
-owner. No other entity may be given a `tenant_id`; it is either tenant-scoped
-(carries the tenant's `tenant_id` for ownership) or global (no tenant).
+owner. No other entity may serve as the isolation boundary: entities either
+carry a tenant's `tenant_id` for ownership (tenant-owned) or are global.
 
 ## 3. Control-plane model
 
@@ -292,7 +298,7 @@ on an already-active tenant immediately suspends it
 migration and explicitly resumes. Provisioning, migration, seeding, and
 deprovisioning are idempotent or safely resumable; lifecycle operations are
 serialized per tenant with a Postgres advisory lock. RLS is opt-in,
-shared-schema only: `FORCE ROW LEVEL SECURITY` on every tenant-owned model
+shared-schema only: `FORCE ROW LEVEL SECURITY` on every tenant-routed model
 (framework and application), `NOBYPASSRLS` runtime role, fail-closed
 `SET LOCAL app.tenant_id` per transaction, and pool-leakage tests. Details:
 `05-tenant-lifecycle.md`, `06-strategy-matrix.md`.
@@ -318,7 +324,8 @@ shared-schema only: `FORCE ROW LEVEL SECURITY` on every tenant-owned model
 - **API keys:** `prefix.keyid.secret`; Argon2id hash at rest; prefix lookup in
   the control plane (works before tenant resolution); optional scopes **narrow**
   authority, never expand it: when present, effective key permissions are
-  `binding_permissions ∩ key_scopes`; `last_used_at`; pinned to one tenant and
+  `(binding_permissions ∪ resource_grants) ∩ key_scopes` — scopes constrain
+  grants too; `last_used_at`; pinned to one tenant and
   service account; revocable.
 - The package verifies credentials; it never issues passwords or sessions.
 
@@ -329,9 +336,11 @@ One evaluator (`PDP`), one traversal algorithm, additive and allow-only:
 ```
 authenticate → Principal (user | service_account | platform operator)
 principal + tenant must be active → Membership active (or operator capability)
-effective_permissions(principal, target) =
+base_authority(principal, target) =
     bindings at target scope and its ancestors (team → org → tenant)
   ∪ resource grants for that exact resource
+effective_permissions =
+    base_authority ∩ api_key.scopes        # only when scopes IS NOT NULL
 ```
 
 Precedence chain (all must hold): `Principal status → Tenant status →
@@ -389,9 +398,11 @@ Public API: `TenancyConfig`, `TenantContext`, `current_tenant`,
 
 Extension points: `IsolationStrategy`, `TenantResolver`, `Authenticator`,
 `PolicyDecisionPoint`, `AuditSink`, `RoleTemplateProvider`,
-`PermissionProvider`, `ResourceTypeRegistry` (declares resource types with
-model, tenant ownership, and permission namespace; rejects unknown types in
-grants/audit), `TenantLifecycleHook`, ORM mixins. Dependencies:
+`PermissionProvider`, `ResourceTypeRegistry` (declares
+`ResourceTypeDefinition(resource_type, model, tenant_owned, tenant_routed,
+permission_namespace)`; rejects inconsistent definitions; source of truth for
+grants, audit, RLS generation, and the isolation kit),
+`TenantLifecycleHook`, ORM mixins. Dependencies:
 SQLAlchemy 2.0, Pydantic v2 + pydantic-settings, Alembic, PyJWT + httpx,
 argon2-cffi; extras `[fastapi]`, `[postgres]`, `[cli]`.
 
@@ -399,7 +410,8 @@ argon2-cffi; extras `[fastapi]`, `[postgres]`, `[cli]`.
 
 Exception hierarchy (one root): `MissingTenantContext`;
 `TenantNotFound`/`TenantAccessDenied`/`TenantSuspended`; `CrossTenantReferenceError`;
-`InvalidReference`; `UnknownResourceType`; `UnknownPermission`;
+`InvalidReference`; `InvalidResourcePermission`; `UnknownResourceType`;
+`UnknownPermission`; `RoleScopeMismatch`;
 `AuthenticationError` (`InvalidToken`, `ExpiredToken`, `UnknownPrincipal`);
 `AuthorizationError` (`PermissionDenied`, `RoleEscalationBlocked`);
 `StrategyCapabilityError`; `PoolCapacityError`; `TenantOperationInProgress`;
