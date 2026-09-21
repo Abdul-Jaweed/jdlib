@@ -108,10 +108,10 @@ PlatformOperator ── User ── IdentityLink (issuer, subject)
         ▼            ▼               ▼
  Organization ──▶ Team ────────▶ Resource (app-defined; tenant_id mandatory)
         │            │               │
-   RoleBinding   RoleBinding     ResourceGrant (per-resource exception)
-   (scope=org)   (scope=team)         ▲
-        └────────── Role ──────────────┘  (Role is tenant-owned data;
-                                            permissions come from the code catalog)
+   RoleBinding   RoleBinding     ResourceGrant (per-resource exception,
+   (scope=org)   (scope=team)     references a catalog permission)
+        └────────── Role
+             (tenant-owned data; permissions come from the code catalog)
 ServiceAccount ── ApiKey              Invitation ──▶ Membership + RoleBinding
    (tenant-owned)
 ```
@@ -352,8 +352,9 @@ authorize(permission, scope_or_resource)
   escalate beyond what the code defines.
 - PDP interface: `can(principal, permission, target) → Decision(allowed, reason,
   matched_rules)`. The built-in evaluator is the v1 implementation; decisions
-  carry their reasoning for audit. A per-request resolution cache is invalidated
-  on role or binding changes.
+  carry their reasoning for audit. Effective-permission resolution is cached for
+  the duration of a request only; any longer-lived cache introduced later must
+  be invalidated on role and binding changes.
 - Anti-escalation: a non-owner may only assign roles whose permissions they hold;
   owners are bounded by the catalog. Enforced in the evaluator, not per endpoint.
 - Enforcement points: declarative `@requires("invoice:approve", scope=resource)`
