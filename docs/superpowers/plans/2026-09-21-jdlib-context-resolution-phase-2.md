@@ -515,6 +515,7 @@ class RecordingPrivilegeAudit:
 
 ```python
 import uuid
+from datetime import timedelta
 
 import pytest
 
@@ -677,13 +678,39 @@ async def test_for_operator_rejects_ttl_above_maximum():
     operator = Principal(
         kind=PrincipalKind.PLATFORM_OPERATOR, id=OPERATOR_ID, operator_level=OperatorLevel.OPERATOR
     )
-    from datetime import timedelta
 
     with pytest.raises(AuthorizationError):
         await factory.for_operator(
             operator, TenantRef(slug="acme"), "platform.tenant.access",
             justification="ticket-1", ttl=timedelta(hours=2), request_id="req-1",
         )
+
+
+async def test_for_operator_rejects_non_positive_ttl():
+    factory, _ = _factory(capabilities={"platform.tenant.access"})
+    operator = Principal(
+        kind=PrincipalKind.PLATFORM_OPERATOR, id=OPERATOR_ID, operator_level=OperatorLevel.OPERATOR
+    )
+    for ttl in (timedelta(0), timedelta(seconds=-1)):
+        with pytest.raises(AuthorizationError):
+            await factory.for_operator(
+                operator, TenantRef(slug="acme"), "platform.tenant.access",
+                justification="ticket-1", ttl=ttl, request_id="req-1",
+            )
+
+
+async def test_for_operator_accepts_ttl_at_maximum():
+    factory, _ = _factory(capabilities={"platform.tenant.access"})
+    operator = Principal(
+        kind=PrincipalKind.PLATFORM_OPERATOR, id=OPERATOR_ID, operator_level=OperatorLevel.OPERATOR
+    )
+    context = await factory.for_operator(
+        operator, TenantRef(slug="acme"), "platform.tenant.access",
+        justification="ticket-1", ttl=timedelta(minutes=30), request_id="req-1",
+    )
+    assert context.privilege is not None
+    assert context.privilege.expires_at is not None
+    assert context.privilege.expires_at - context.privilege.issued_at == timedelta(minutes=30)
 
 
 def test_for_system_requires_issuer_capability():
@@ -708,6 +735,12 @@ def test_for_test_is_gated_by_config():
     context = factory.for_test(_record(), principal=_user(), issuer=PRIVILEGE_ISSUER)
     assert context.privilege is not None
     assert context.privilege.kind is PrivilegeKind.TEST
+
+
+def test_for_test_rejects_non_issuer():
+    factory, _ = _factory(allow_test=True)
+    with pytest.raises(AuthorizationError):
+        factory.for_test(_record(), principal=_user(), issuer=object())  # type: ignore[arg-type]
 ```
 
 - [ ] **Step 3: Run tests to verify they fail**
@@ -850,7 +883,9 @@ class ContextFactory:
             raise AuthorizationError("operator context requires a platform operator principal")
         if not justification.strip():
             raise AuthorizationError("operator context requires a justification")
-        effective_ttl = ttl or self._config.operator_ttl
+        effective_ttl = ttl if ttl is not None else self._config.operator_ttl
+        if effective_ttl <= timedelta(0):
+            raise AuthorizationError("ttl must be positive")
         if effective_ttl > self._config.operator_ttl:
             raise AuthorizationError("requested ttl exceeds the configured maximum")
         if not await self._operators.authorize(operator, capability):
@@ -889,7 +924,7 @@ class ContextFactory:
         purpose: str,
         issuer: _PrivilegeIssuer,
     ) -> TenantContext:
-        if not isinstance(issuer, _PrivilegeIssuer):
+        if issuer is not PRIVILEGE_ISSUER:
             raise AuthorizationError("system context requires the internal privilege issuer")
         now = self._clock.now()
         privilege = PrivilegeContext(
@@ -916,7 +951,7 @@ class ContextFactory:
         principal: Principal,
         issuer: _PrivilegeIssuer,
     ) -> TenantContext:
-        if not isinstance(issuer, _PrivilegeIssuer):
+        if issuer is not PRIVILEGE_ISSUER:
             raise AuthorizationError("test context requires the internal privilege issuer")
         if not self._config.allow_test_contexts:
             raise AuthorizationError("test contexts are disabled by configuration")
@@ -945,7 +980,7 @@ Note: the system context's actor uses `PrincipalKind.PLATFORM_OPERATOR` with
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_context_factory.py -v`
-Expected: PASS (11 passed)
+Expected: PASS (14 passed)
 
 - [ ] **Step 6: Lint, type check, commit**
 

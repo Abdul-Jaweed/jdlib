@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 
 import pytest
 
@@ -160,13 +161,39 @@ async def test_for_operator_rejects_ttl_above_maximum():
     operator = Principal(
         kind=PrincipalKind.PLATFORM_OPERATOR, id=OPERATOR_ID, operator_level=OperatorLevel.OPERATOR
     )
-    from datetime import timedelta
 
     with pytest.raises(AuthorizationError):
         await factory.for_operator(
             operator, TenantRef(slug="acme"), "platform.tenant.access",
             justification="ticket-1", ttl=timedelta(hours=2), request_id="req-1",
         )
+
+
+async def test_for_operator_rejects_non_positive_ttl():
+    factory, _ = _factory(capabilities={"platform.tenant.access"})
+    operator = Principal(
+        kind=PrincipalKind.PLATFORM_OPERATOR, id=OPERATOR_ID, operator_level=OperatorLevel.OPERATOR
+    )
+    for ttl in (timedelta(0), timedelta(seconds=-1)):
+        with pytest.raises(AuthorizationError):
+            await factory.for_operator(
+                operator, TenantRef(slug="acme"), "platform.tenant.access",
+                justification="ticket-1", ttl=ttl, request_id="req-1",
+            )
+
+
+async def test_for_operator_accepts_ttl_at_maximum():
+    factory, _ = _factory(capabilities={"platform.tenant.access"})
+    operator = Principal(
+        kind=PrincipalKind.PLATFORM_OPERATOR, id=OPERATOR_ID, operator_level=OperatorLevel.OPERATOR
+    )
+    context = await factory.for_operator(
+        operator, TenantRef(slug="acme"), "platform.tenant.access",
+        justification="ticket-1", ttl=timedelta(minutes=30), request_id="req-1",
+    )
+    assert context.privilege is not None
+    assert context.privilege.expires_at is not None
+    assert context.privilege.expires_at - context.privilege.issued_at == timedelta(minutes=30)
 
 
 def test_for_system_requires_issuer_capability():
@@ -191,3 +218,9 @@ def test_for_test_is_gated_by_config():
     context = factory.for_test(_record(), principal=_user(), issuer=PRIVILEGE_ISSUER)
     assert context.privilege is not None
     assert context.privilege.kind is PrivilegeKind.TEST
+
+
+def test_for_test_rejects_non_issuer():
+    factory, _ = _factory(allow_test=True)
+    with pytest.raises(AuthorizationError):
+        factory.for_test(_record(), principal=_user(), issuer=object())  # type: ignore[arg-type]

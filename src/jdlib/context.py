@@ -253,7 +253,9 @@ class ContextFactory:
             raise AuthorizationError("operator context requires a platform operator principal")
         if not justification.strip():
             raise AuthorizationError("operator context requires a justification")
-        effective_ttl = ttl or self._config.operator_ttl
+        effective_ttl = ttl if ttl is not None else self._config.operator_ttl
+        if effective_ttl <= timedelta(0):
+            raise AuthorizationError("ttl must be positive")
         if effective_ttl > self._config.operator_ttl:
             raise AuthorizationError("requested ttl exceeds the configured maximum")
         if not await self._operators.authorize(operator, capability):
@@ -292,7 +294,7 @@ class ContextFactory:
         purpose: str,
         issuer: _PrivilegeIssuer,
     ) -> TenantContext:
-        if not isinstance(issuer, _PrivilegeIssuer):
+        if issuer is not PRIVILEGE_ISSUER:
             raise AuthorizationError("system context requires the internal privilege issuer")
         now = self._clock.now()
         privilege = PrivilegeContext(
@@ -319,7 +321,7 @@ class ContextFactory:
         principal: Principal,
         issuer: _PrivilegeIssuer,
     ) -> TenantContext:
-        if not isinstance(issuer, _PrivilegeIssuer):
+        if issuer is not PRIVILEGE_ISSUER:
             raise AuthorizationError("test context requires the internal privilege issuer")
         if not self._config.allow_test_contexts:
             raise AuthorizationError("test contexts are disabled by configuration")
