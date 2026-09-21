@@ -760,6 +760,21 @@ def test_tenant_check_constraints_exist():
     assert names == {"ck_tenants_status", "ck_tenants_slug_format"}
 
 
+def test_registry_indexes_exist(control_engine, control_metadata):
+    with control_engine.connect() as connection:
+        inspector = sa.inspect(connection)
+        tenant_indexes = {
+            index["name"]
+            for index in inspector.get_indexes("tenants", schema=CONTROL_SCHEMA)
+        }
+        relocation_indexes = {
+            index["name"]
+            for index in inspector.get_indexes("tenant_relocations", schema=CONTROL_SCHEMA)
+        }
+    assert {"ix_tenants_status", "ix_tenants_parent_tenant_id"} <= tenant_indexes
+    assert "ix_tenant_relocations_tenant_id_status" in relocation_indexes
+
+
 def test_slug_format_rejected(control_engine, control_metadata):
     with control_engine.begin() as connection:
         with pytest.raises(IntegrityError):
@@ -1012,6 +1027,8 @@ class Tenant(ControlBase):
     __table_args__ = (
         sa.CheckConstraint(sql_in("status", TenantStatus), name="status"),
         sa.CheckConstraint("slug ~ '^[a-z0-9][a-z0-9-]{1,62}$'", name="slug_format"),
+        sa.Index("ix_tenants_status", "status"),
+        sa.Index("ix_tenants_parent_tenant_id", "parent_tenant_id"),
     )
 
 
@@ -1025,7 +1042,10 @@ class TenantPlacement(ControlBase):
     target_handle: Mapped[str] = mapped_column(sa.Text, nullable=False)
     region: Mapped[str | None] = mapped_column(sa.Text)
     updated_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.func.now(),
+        onupdate=sa.func.now(),
     )
 
     __table_args__ = (
@@ -1046,7 +1066,10 @@ class TenantMigrationState(ControlBase):
     )
     last_error: Mapped[str | None] = mapped_column(sa.Text)
     updated_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.func.now(),
+        onupdate=sa.func.now(),
     )
 
     __table_args__ = (
@@ -1083,6 +1106,7 @@ class TenantRelocation(ControlBase):
         sa.CheckConstraint(sql_in("from_strategy", PlacementStrategy), name="from_strategy"),
         sa.CheckConstraint(sql_in("to_strategy", PlacementStrategy), name="to_strategy"),
         sa.CheckConstraint(sql_in("status", RelocationPhase), name="status"),
+        sa.Index("ix_tenant_relocations_tenant_id_status", "tenant_id", "status"),
         sa.Index(
             "uq_tenant_relocations_active",
             "tenant_id",
@@ -1127,6 +1151,8 @@ git commit -m "feat: control registry models (tenants, placements, migration sta
 ```python
 from __future__ import annotations
 
+import uuid
+
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
@@ -1144,7 +1170,7 @@ from jdlib.control.models import (
 )
 
 
-def _new_tenant(connection: sa.Connection, slug: str) -> str:
+def _new_tenant(connection: sa.Connection, slug: str) -> uuid.UUID:
     tenant_id = uuid7()
     connection.execute(
         sa.insert(Tenant.__table__).values(id=tenant_id, slug=slug, name=slug, status="active")
@@ -1891,14 +1917,16 @@ def test_soft_delete_partial_unique(tenant_metadata):
                 tenant_id=tenant_id, id=uuid7(), number="INV-9"
             )
         )
-        with pytest.raises(IntegrityError):
+        with pytest.raises(IntegrityError), connection.begin_nested():
             connection.execute(
                 sa.insert(Invoice.__table__).values(
                     tenant_id=tenant_id, id=uuid7(), number="INV-9"
                 )
             )
-        connection.exec_driver_sql(
-            "DELETE FROM invoices WHERE number = 'INV-9'"
+        connection.execute(
+            sa.update(Invoice.__table__)
+            .where(Invoice.__table__.c.number == "INV-9")
+            .values(deleted_at=sa.func.now())
         )
         connection.execute(
             sa.insert(Invoice.__table__).values(
@@ -1925,7 +1953,7 @@ def test_tenant_setting_pk_and_upsert_shape(tenant_metadata):
 def test_tenant_audit_event_shape(tenant_metadata):
     assert [c.name for c in AuditEvent.__table__.primary_key.columns] == ["tenant_id", "id"]
 ```
-Note: `test_soft_delete_partial_unique` deletes the row hard to re-test the partial unique; this table has no soft-delete filter at the DB level in Phase 1 (soft delete semantics are application-side).
+Note: `test_soft_delete_partial_unique` soft-deletes the row (`deleted_at = now()`) to prove the partial unique index (`WHERE deleted_at IS NULL`) permits a replacement row after deletion.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -2200,6 +2228,133 @@ def test_assert_clean_raises_schema_lint_error():
     with pytest.raises(SchemaLintError) as caught:
         assert_clean([BadBase.metadata])
     assert "orphans" in str(caught.value)
+
+
+class _Marker:
+    pass
+
+
+def test_tenant_scoped_pk_missing_tenant_id_is_l1_violation():
+    metadata = MetaData()
+    sa.Table(
+        "l1_violation",
+        metadata,
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("tenant_id", sa.Uuid, nullable=False),
+    )
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L1" for issue in issues)
+
+
+def test_fk_across_planes_is_l3_violation():
+    metadata = MetaData()
+    sa.Table(
+        "parents",
+        metadata,
+        sa.Column("id", sa.Uuid, primary_key=True),
+        schema="plane_a",
+    )
+    sa.Table(
+        "children",
+        metadata,
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("parent_id", sa.Uuid, sa.ForeignKey("plane_a.parents.id")),
+        schema="plane_b",
+    )
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L3" and issue.table == "children" for issue in issues)
+
+
+def test_tenant_id_not_leading_pk_is_l4_violation():
+    metadata = MetaData()
+    sa.Table(
+        "l4_violation",
+        metadata,
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("tenant_id", sa.Uuid, primary_key=True, nullable=False),
+    )
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L4" for issue in issues)
+
+
+def test_cascade_from_tenants_is_l6_violation():
+    metadata = MetaData()
+    sa.Table("parents", metadata, sa.Column("id", sa.Uuid, primary_key=True))
+    sa.Table(
+        "tenants",
+        metadata,
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("parent_id", sa.Uuid, sa.ForeignKey("parents.id", ondelete="CASCADE")),
+    )
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L6" for issue in issues)
+
+
+def test_nullable_tenant_id_is_l9_violation():
+    metadata = MetaData()
+    sa.Table(
+        "l9_violation",
+        metadata,
+        sa.Column("tenant_id", sa.Uuid, primary_key=True, nullable=True),
+        sa.Column("id", sa.Uuid, primary_key=True),
+    )
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L9" for issue in issues)
+
+
+def test_tenant_scoped_model_not_tenant_owned_is_l11_violation():
+    metadata = MetaData()
+    table = sa.Table(
+        "l11_violation",
+        metadata,
+        sa.Column("tenant_id", sa.Uuid, primary_key=True, nullable=False),
+        sa.Column("id", sa.Uuid, primary_key=True),
+    )
+    table.info["jdlib_model"] = _Marker
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L11" for issue in issues)
+
+
+def test_global_unique_on_tenant_scoped_table_is_l12_violation():
+    metadata = MetaData()
+    table = sa.Table(
+        "l12_violation",
+        metadata,
+        sa.Column("tenant_id", sa.Uuid, primary_key=True, nullable=False),
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("code", sa.Text, nullable=False),
+        sa.UniqueConstraint("code", name="uq_l12_violation_code"),
+    )
+    table.info["jdlib_model"] = _Marker
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L12" for issue in issues)
+
+
+def test_rls_enabled_unrouted_table_is_l13_violation():
+    metadata = MetaData()
+    table = sa.Table(
+        "l13_violation",
+        metadata,
+        sa.Column("tenant_id", sa.Uuid, primary_key=True, nullable=False),
+        sa.Column("id", sa.Uuid, primary_key=True),
+    )
+    table.info["jdlib_model"] = _Marker
+    issues = lint_metadata([metadata], rls_enabled=True)
+    assert any(issue.rule == "L13" for issue in issues)
+
+
+def test_team_id_without_ownership_constraints_is_l15_violation():
+    metadata = MetaData()
+    table = sa.Table(
+        "l15_violation",
+        metadata,
+        sa.Column("tenant_id", sa.Uuid, primary_key=True, nullable=False),
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("team_id", sa.Uuid),
+    )
+    table.info["jdlib_model"] = _Marker
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L15" for issue in issues)
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -2441,8 +2596,10 @@ git commit -m "feat: metadata lint L1-L19"
 ```python
 from __future__ import annotations
 
+import pytest
 import sqlalchemy as sa
 
+from jdlib.errors import ProvisioningError
 from jdlib.migrations.runner import MigrationRunner
 
 
@@ -2478,10 +2635,10 @@ def test_control_baseline_migrates_all_tables(postgres_url: str):
 
 def test_tenant_baseline_creates_schema_tables(postgres_url: str):
     runner = MigrationRunner(postgres_url)
-    runner.provision_tenant_schema("jt_migrated")
+    runner.provision_tenant_schema("t_migrated")
     engine = sa.create_engine(postgres_url, future=True)
     with engine.connect() as connection:
-        tables = set(sa.inspect(connection).get_table_names(schema="jt_migrated"))
+        tables = set(sa.inspect(connection).get_table_names(schema="t_migrated"))
     assert {"organizations", "teams", "tenant_settings", "audit_events"} <= tables
     assert "alembic_version" in tables
 
@@ -2490,8 +2647,23 @@ def test_upgrade_is_idempotent(postgres_url: str):
     runner = MigrationRunner(postgres_url)
     runner.upgrade_control()
     runner.upgrade_control()
-    runner.provision_tenant_schema("jt_migrated")
-    runner.provision_tenant_schema("jt_migrated")
+    runner.provision_tenant_schema("t_migrated")
+    runner.provision_tenant_schema("t_migrated")
+
+
+def test_invalid_schema_name_rejected_before_sql(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(sa, "create_engine", lambda *args, **kwargs: calls.append("engine"))
+    monkeypatch.setattr(
+        "jdlib.migrations.runner.command.upgrade",
+        lambda *args, **kwargs: calls.append("upgrade"),
+    )
+    runner = MigrationRunner("postgresql+psycopg://unused")
+    with pytest.raises(ProvisioningError):
+        runner.provision_tenant_schema("bad-name")
+    with pytest.raises(ProvisioningError):
+        runner.upgrade_tenant("bad-name")
+    assert calls == []
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -2506,41 +2678,55 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.migrations'`
 ```python
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 
 from jdlib.control.base import CONTROL_SCHEMA
+from jdlib.errors import ProvisioningError
+
+_TENANT_SCHEMA_RE = re.compile(r"t_[a-z0-9][a-z0-9_]{0,50}")
 
 
 class MigrationRunner:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
 
-    def _config(self, plane: str, **attributes: object) -> Config:
+    def _config(self, plane: str, *, tenant_schema: str | None = None) -> Config:
         config = Config()
         config.set_main_option(
             "script_location",
             str(Path(__file__).parent / plane),
         )
         config.set_main_option("sqlalchemy.url", self._database_url)
-        config.attributes["tenant_schema"] = attributes.get("tenant_schema")
+        config.attributes["tenant_schema"] = tenant_schema
         return config
 
+    @staticmethod
+    def _validate_schema(schema: str) -> None:
+        if _TENANT_SCHEMA_RE.fullmatch(schema) is None:
+            raise ProvisioningError(f"invalid tenant schema name: {schema!r}")
+
     def upgrade_control(self, revision: str = "head") -> None:
+        engine = sa.create_engine(self._database_url, future=True)
+        with engine.begin() as connection:
+            connection.execute(sa.schema.CreateSchema(CONTROL_SCHEMA, if_not_exists=True))
+        engine.dispose()
         command.upgrade(self._config("control"), revision)
 
     def upgrade_tenant(self, schema: str, revision: str = "head") -> None:
+        self._validate_schema(schema)
         config = self._config("tenant", tenant_schema=schema)
         command.upgrade(config, revision)
 
     def provision_tenant_schema(self, schema: str, revision: str = "head") -> None:
-        import sqlalchemy as sa
-
+        self._validate_schema(schema)
         engine = sa.create_engine(self._database_url, future=True)
         with engine.begin() as connection:
-            connection.exec_driver_sql(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+            connection.execute(sa.schema.CreateSchema(schema, if_not_exists=True))
         engine.dispose()
         self.upgrade_tenant(schema, revision)
 ```
@@ -2685,7 +2871,9 @@ def run_migrations_online() -> None:
     )
     with connectable.connect() as connection:
         if tenant_schema:
-            connection.exec_driver_sql(f'SET search_path TO "{tenant_schema}"')
+            quoted = connection.dialect.identifier_preparer.quote(tenant_schema)
+            connection.exec_driver_sql(f"SET search_path TO {quoted}")
+            connection.commit()
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
@@ -2757,6 +2945,7 @@ git commit -m "feat: programmatic migration runner with control and tenant basel
 ## Plan Series (next plans, not this one)
 
 - Plan 2 — Phase 2: context (`Principal`, `TenantContext`, `PrivilegeContext`, `ContextFactory`, envelope), resolver chain, middleware/job decorators.
+  - Precondition: baseline revisions use `create_all` against live metadata — before adding any Phase-2 column/table, either freeze explicit DDL into revision 0001 or make every subsequent revision idempotent; add a CI smoke step that builds the wheel and runs `upgrade_control` + `provision_tenant_schema` against an empty database.
 - Plan 3 — Phase 3: `TenantSession`, scoping/stamping/validation events, `rawsql.py` validator, `UnitOfWork`, `TenantRepository`, `SessionRouter`, `IsolationStrategy` + shared adapter.
 - Plan 4 — Phases 4–6: `TenantRegistry` lifecycle/provisioning, authorization (catalog, registry, PDP, guards, `AccessControl`), authentication adapters.
 - Plan 5 — Phases 7–9: schema and database strategies, RLS emission and tests.

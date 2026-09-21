@@ -45,6 +45,21 @@ def test_tenant_check_constraints_exist():
     assert names == {"ck_tenants_status", "ck_tenants_slug_format"}
 
 
+def test_registry_indexes_exist(control_engine, control_metadata):
+    with control_engine.connect() as connection:
+        inspector = sa.inspect(connection)
+        tenant_indexes = {
+            index["name"]
+            for index in inspector.get_indexes("tenants", schema=CONTROL_SCHEMA)
+        }
+        relocation_indexes = {
+            index["name"]
+            for index in inspector.get_indexes("tenant_relocations", schema=CONTROL_SCHEMA)
+        }
+    assert {"ix_tenants_status", "ix_tenants_parent_tenant_id"} <= tenant_indexes
+    assert "ix_tenant_relocations_tenant_id_status" in relocation_indexes
+
+
 def test_slug_format_rejected(control_engine, control_metadata):
     with control_engine.begin() as connection, pytest.raises(IntegrityError):
         connection.execute(

@@ -128,8 +128,10 @@ def test_soft_delete_partial_unique(tenant_metadata):
                     tenant_id=tenant_id, id=uuid7(), number="INV-9"
                 )
             )
-        connection.exec_driver_sql(
-            "DELETE FROM invoices WHERE number = 'INV-9'"
+        connection.execute(
+            sa.update(Invoice.__table__)
+            .where(Invoice.__table__.c.number == "INV-9")
+            .values(deleted_at=sa.func.now())
         )
         connection.execute(
             sa.insert(Invoice.__table__).values(

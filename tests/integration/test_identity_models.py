@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
@@ -16,7 +18,7 @@ from jdlib.control.models import (
 )
 
 
-def _new_tenant(connection: sa.Connection, slug: str) -> str:
+def _new_tenant(connection: sa.Connection, slug: str) -> uuid.UUID:
     tenant_id = uuid7()
     connection.execute(
         sa.insert(Tenant.__table__).values(id=tenant_id, slug=slug, name=slug, status="active")

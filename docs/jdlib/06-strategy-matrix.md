@@ -63,7 +63,8 @@ resolve tenant (control plane)
   registration against `^t_[a-z0-9][a-z0-9_]{0,50}$`.
 - `search_path` is set by the framework on every connection checkout:
   `SET search_path TO <quoted handle>`; identifiers are quoted with driver-level
-  quoting (`psycopg.sql.Identifier`), never string interpolation.
+  quoting (`psycopg.sql.Identifier`, SQLAlchemy's identifier preparer, or
+  equivalent), never string interpolation.
 - Application code never sets or reads `search_path`; control-plane sessions use
   schema-qualified metadata and never share a pool with tenant sessions.
 - On checkin, reset `search_path` to the safe default `pg_catalog` (never

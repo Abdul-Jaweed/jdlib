@@ -522,7 +522,8 @@ required shape:
 - `L18` (metadata) Every application-plane model registered in the
   `ResourceTypeRegistry` is `TenantRouted`.
 - `L19` (metadata) No control-plane model inherits `TenantRouted`
-  (`TenantOwned` only).
+  (control-plane models declare `tenant_id` explicitly and never inherit
+  `TenantRouted`; L19 fires when they do).
 
 ## 7. Migration artifacts
 

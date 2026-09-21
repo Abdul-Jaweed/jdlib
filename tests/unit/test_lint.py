@@ -80,3 +80,130 @@ def test_assert_clean_raises_schema_lint_error():
     with pytest.raises(SchemaLintError) as caught:
         assert_clean([BadBase.metadata])
     assert "orphans" in str(caught.value)
+
+
+class _Marker:
+    pass
+
+
+def test_tenant_scoped_pk_missing_tenant_id_is_l1_violation():
+    metadata = MetaData()
+    sa.Table(
+        "l1_violation",
+        metadata,
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("tenant_id", sa.Uuid, nullable=False),
+    )
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L1" for issue in issues)
+
+
+def test_fk_across_planes_is_l3_violation():
+    metadata = MetaData()
+    sa.Table(
+        "parents",
+        metadata,
+        sa.Column("id", sa.Uuid, primary_key=True),
+        schema="plane_a",
+    )
+    sa.Table(
+        "children",
+        metadata,
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("parent_id", sa.Uuid, sa.ForeignKey("plane_a.parents.id")),
+        schema="plane_b",
+    )
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L3" and issue.table == "children" for issue in issues)
+
+
+def test_tenant_id_not_leading_pk_is_l4_violation():
+    metadata = MetaData()
+    sa.Table(
+        "l4_violation",
+        metadata,
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("tenant_id", sa.Uuid, primary_key=True, nullable=False),
+    )
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L4" for issue in issues)
+
+
+def test_cascade_from_tenants_is_l6_violation():
+    metadata = MetaData()
+    sa.Table("parents", metadata, sa.Column("id", sa.Uuid, primary_key=True))
+    sa.Table(
+        "tenants",
+        metadata,
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("parent_id", sa.Uuid, sa.ForeignKey("parents.id", ondelete="CASCADE")),
+    )
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L6" for issue in issues)
+
+
+def test_nullable_tenant_id_is_l9_violation():
+    metadata = MetaData()
+    sa.Table(
+        "l9_violation",
+        metadata,
+        sa.Column("tenant_id", sa.Uuid, primary_key=True, nullable=True),
+        sa.Column("id", sa.Uuid, primary_key=True),
+    )
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L9" for issue in issues)
+
+
+def test_tenant_scoped_model_not_tenant_owned_is_l11_violation():
+    metadata = MetaData()
+    table = sa.Table(
+        "l11_violation",
+        metadata,
+        sa.Column("tenant_id", sa.Uuid, primary_key=True, nullable=False),
+        sa.Column("id", sa.Uuid, primary_key=True),
+    )
+    table.info["jdlib_model"] = _Marker
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L11" for issue in issues)
+
+
+def test_global_unique_on_tenant_scoped_table_is_l12_violation():
+    metadata = MetaData()
+    table = sa.Table(
+        "l12_violation",
+        metadata,
+        sa.Column("tenant_id", sa.Uuid, primary_key=True, nullable=False),
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("code", sa.Text, nullable=False),
+        sa.UniqueConstraint("code", name="uq_l12_violation_code"),
+    )
+    table.info["jdlib_model"] = _Marker
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L12" for issue in issues)
+
+
+def test_rls_enabled_unrouted_table_is_l13_violation():
+    metadata = MetaData()
+    table = sa.Table(
+        "l13_violation",
+        metadata,
+        sa.Column("tenant_id", sa.Uuid, primary_key=True, nullable=False),
+        sa.Column("id", sa.Uuid, primary_key=True),
+    )
+    table.info["jdlib_model"] = _Marker
+    issues = lint_metadata([metadata], rls_enabled=True)
+    assert any(issue.rule == "L13" for issue in issues)
+
+
+def test_team_id_without_ownership_constraints_is_l15_violation():
+    metadata = MetaData()
+    table = sa.Table(
+        "l15_violation",
+        metadata,
+        sa.Column("tenant_id", sa.Uuid, primary_key=True, nullable=False),
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("team_id", sa.Uuid),
+    )
+    table.info["jdlib_model"] = _Marker
+    issues = lint_metadata([metadata])
+    assert any(issue.rule == "L15" for issue in issues)

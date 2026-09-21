@@ -114,7 +114,9 @@ src/jdlib/
 │   └── recorder.py             # AuditRecorder (mandatory vs best-effort)
 ├── migrations/
 │   ├── runner.py               # MigrationRunner (programmatic Alembic)
-│   └── template/env.py         # consumer Alembic template
+│   ├── alembic.ini             # template-only Alembic config
+│   ├── control/                # env.py + versions/0001_control_baseline.py
+│   └── tenant/                 # env.py + versions/0001_tenant_baseline.py
 ├── testing/
 │   ├── fixtures.py             # tenants, context, strategy_matrix, rls_on_off
 │   ├── fakes.py                # FakePDP, InMemoryAuditSink, StaticResolver, MemorySecretProvider

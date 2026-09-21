@@ -54,6 +54,8 @@ class Tenant(ControlBase):
     __table_args__ = (
         sa.CheckConstraint(sql_in("status", TenantStatus), name="status"),
         sa.CheckConstraint("slug ~ '^[a-z0-9][a-z0-9-]{1,62}$'", name="slug_format"),
+        sa.Index("ix_tenants_status", "status"),
+        sa.Index("ix_tenants_parent_tenant_id", "parent_tenant_id"),
     )
 
 
@@ -67,7 +69,10 @@ class TenantPlacement(ControlBase):
     target_handle: Mapped[str] = mapped_column(sa.Text, nullable=False)
     region: Mapped[str | None] = mapped_column(sa.Text)
     updated_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.func.now(),
+        onupdate=sa.func.now(),
     )
 
     __table_args__ = (
@@ -88,7 +93,10 @@ class TenantMigrationState(ControlBase):
     )
     last_error: Mapped[str | None] = mapped_column(sa.Text)
     updated_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.func.now(),
+        onupdate=sa.func.now(),
     )
 
     __table_args__ = (
@@ -125,6 +133,7 @@ class TenantRelocation(ControlBase):
         sa.CheckConstraint(sql_in("from_strategy", PlacementStrategy), name="from_strategy"),
         sa.CheckConstraint(sql_in("to_strategy", PlacementStrategy), name="to_strategy"),
         sa.CheckConstraint(sql_in("status", RelocationPhase), name="status"),
+        sa.Index("ix_tenant_relocations_tenant_id_status", "tenant_id", "status"),
         sa.Index(
             "uq_tenant_relocations_active",
             "tenant_id",

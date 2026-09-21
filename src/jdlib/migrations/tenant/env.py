@@ -30,7 +30,8 @@ def run_migrations_online() -> None:
     )
     with connectable.connect() as connection:
         if tenant_schema:
-            connection.exec_driver_sql(f'SET search_path TO "{tenant_schema}"')
+            quoted = connection.dialect.identifier_preparer.quote(tenant_schema)
+            connection.exec_driver_sql(f"SET search_path TO {quoted}")
             connection.commit()
         context.configure(
             connection=connection,

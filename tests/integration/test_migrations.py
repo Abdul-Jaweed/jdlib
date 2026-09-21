@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
 import sqlalchemy as sa
 
+from jdlib.errors import ProvisioningError
 from jdlib.migrations.runner import MigrationRunner
 
 
@@ -37,10 +39,10 @@ def test_control_baseline_migrates_all_tables(postgres_url: str):
 
 def test_tenant_baseline_creates_schema_tables(postgres_url: str):
     runner = MigrationRunner(postgres_url)
-    runner.provision_tenant_schema("jt_migrated")
+    runner.provision_tenant_schema("t_migrated")
     engine = sa.create_engine(postgres_url, future=True)
     with engine.connect() as connection:
-        tables = set(sa.inspect(connection).get_table_names(schema="jt_migrated"))
+        tables = set(sa.inspect(connection).get_table_names(schema="t_migrated"))
     assert {"organizations", "teams", "tenant_settings", "audit_events"} <= tables
     assert "alembic_version" in tables
 
@@ -49,5 +51,20 @@ def test_upgrade_is_idempotent(postgres_url: str):
     runner = MigrationRunner(postgres_url)
     runner.upgrade_control()
     runner.upgrade_control()
-    runner.provision_tenant_schema("jt_migrated")
-    runner.provision_tenant_schema("jt_migrated")
+    runner.provision_tenant_schema("t_migrated")
+    runner.provision_tenant_schema("t_migrated")
+
+
+def test_invalid_schema_name_rejected_before_sql(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(sa, "create_engine", lambda *args, **kwargs: calls.append("engine"))
+    monkeypatch.setattr(
+        "jdlib.migrations.runner.command.upgrade",
+        lambda *args, **kwargs: calls.append("upgrade"),
+    )
+    runner = MigrationRunner("postgresql+psycopg://unused")
+    with pytest.raises(ProvisioningError):
+        runner.provision_tenant_schema("bad-name")
+    with pytest.raises(ProvisioningError):
+        runner.upgrade_tenant("bad-name")
+    assert calls == []
