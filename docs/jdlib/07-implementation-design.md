@@ -178,12 +178,15 @@ class ContextFactory:
                             trace_id: str | None = None) -> TenantContext: ...
     async def for_operator(self, operator: Principal, tenant: TenantRef, capability: str,
                            *, justification: str, ttl: timedelta) -> TenantContext: ...
-    def for_system(self, tenant: TenantRef, *, purpose: str) -> TenantContext: ...
-    def for_test(self, tenant: TenantRef, *, principal: Principal) -> TenantContext: ...
+    async def for_system(self, tenant: TenantRecord, *, purpose: str,
+                         issuer: _PrivilegeIssuer) -> TenantContext: ...
+    async def for_test(self, tenant: TenantRecord, *, principal: Principal,
+                       issuer: _PrivilegeIssuer) -> TenantContext: ...
 ```
 
-`for_principal` runs the authoritative flow (statuses, membership, tenant
-servability) and never trusts caller-supplied state beyond ids.
+`for_principal` runs the authoritative flow (entitlement first, then tenant
+servability, so non-entitled principals never learn tenant state) and never
+trusts caller-supplied state beyond ids.
 `for_system`/`for_test` require the internal `_PrivilegeIssuer` instance held by
 the factory; their use is audited.
 
