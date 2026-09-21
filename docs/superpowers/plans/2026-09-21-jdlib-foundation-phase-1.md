@@ -565,6 +565,7 @@ class TenantOwned:
         primary_key=True,
         nullable=False,
         index=True,
+        sort_order=-1,
     )
 
 
@@ -621,6 +622,12 @@ def ownership_constraints() -> tuple[sa.schema.Constraint, ...]:
 
 Note: `uuid7` is intentionally not imported here; each model module imports it from
 `jdlib._uuid` directly.
+
+Note: `sort_order=-1` on the mixin's `tenant_id` is required — declarative mixin
+columns otherwise sort after subclass columns, producing a `(id, tenant_id)`
+column order that violates the frozen `PRIMARY KEY (tenant_id, id)` contract and
+lint L4. Models that declare `tenant_id` explicitly (rather than via the mixin)
+must declare it before `id`.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
