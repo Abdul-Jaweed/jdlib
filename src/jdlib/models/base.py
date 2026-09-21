@@ -19,7 +19,6 @@ class TenantOwned:
         sa.Uuid,
         primary_key=True,
         nullable=False,
-        index=True,
         sort_order=-1,
     )
 

@@ -564,7 +564,6 @@ class TenantOwned:
         sa.Uuid,
         primary_key=True,
         nullable=False,
-        index=True,
         sort_order=-1,
     )
 
@@ -627,7 +626,7 @@ Note: `sort_order=-1` on the mixin's `tenant_id` is required — declarative mix
 columns otherwise sort after subclass columns, producing a `(id, tenant_id)`
 column order that violates the frozen `PRIMARY KEY (tenant_id, id)` contract and
 lint L4. Models that declare `tenant_id` explicitly (rather than via the mixin)
-must declare it before `id`.
+must declare it before `id`. Do not add `index=True` to `tenant_id`: the composite primary key `(tenant_id, id)` already serves tenant-prefixed lookups in PostgreSQL.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
