@@ -449,7 +449,7 @@ git commit -m "feat: access control roles with anti-escalation"
 - Create: `tests/integration/test_access_bindings.py`
 
 **Interfaces:**
-- Produces: `bind_role(tenant_id, role_id, *, principal_type, principal_id, scope_type, scope_id, actor_id, actor_principal) -> RoleBinding`; `unbind_role(tenant_id, binding_id, *, actor_id, actor_principal) -> None`.
+- Produces: `bind_role(tenant_id, role_id, *, principal_type, principal_id, scope_type, scope_id, actor_id, actor_principal) -> RoleBinding`; `unbind_role(tenant_id, binding_id, *, actor_id, actor_principal) -> None`; optional `AccessControl(scope_lookup=ScopeLookup)` for org/team scope validation (I11/L14).
 
 **Additional required work (from Task 1 review — spec-mandated, must be in this task):**
 - `role:manage` gate: every role/binding mutation (`create_role`, `update_role`, `delete_role`, `bind_role`, `unbind_role`) must call a `_require_permission(tenant_id, "role:manage", actor_principal)` helper that raises `AuthorizationError` when the actor lacks it (seed `role:manage` in test harnesses accordingly; owner template includes it).
@@ -625,6 +625,26 @@ Expected: FAIL (missing methods)
 - [ ] **Step 3: Implement `bind_role`/`unbind_role` in `src/jdlib/authz/access.py`**
 
 ```python
+@dataclass(frozen=True, slots=True)
+class ScopeRecord:
+    """Ownership facts about an org/team scope row (tenant plane)."""
+
+    tenant_id: uuid.UUID
+    deleted: bool = False
+
+
+class ScopeLookup(Protocol):
+    """Resolves an org/team scope id to its owning tenant.
+
+    Returns ``None`` when no row with the given id exists anywhere;
+    otherwise the owning tenant and whether the row is soft-deleted.
+    """
+
+    async def __call__(
+        self, tenant_id: uuid.UUID, scope_type: str, scope_id: uuid.UUID
+    ) -> ScopeRecord | None: ...
+
+
     async def bind_role(
         self,
         tenant_id: uuid.UUID,
@@ -637,14 +657,24 @@ Expected: FAIL (missing methods)
         actor_id: uuid.UUID | None,
         actor_principal: Principal,
     ) -> RoleBinding:
-        if scope_type == "tenant" and scope_id is not None:
-            raise InvalidReference("tenant scope must not carry a scope id")
-        if scope_type in {"org", "team"} and scope_id is None:
+        held = await self._require_permission(tenant_id, "role:manage", actor_principal)
+        try:
+            scope = ScopeType(scope_type)
+        except ValueError as exc:
+            raise InvalidReference(f"unsupported scope type: {scope_type}") from exc
+        if scope is ScopeType.TENANT:
+            if scope_id is not None:
+                raise InvalidReference("tenant scope must not carry a scope id")
+        elif scope_id is None:
             raise InvalidReference(f"{scope_type} scope requires a scope id")
+        else:
+            await self._validate_scope(tenant_id, scope.value, scope_id)
         async with await self._session() as session:
             role = await session.get(Role, {"tenant_id": tenant_id, "id": role_id})
             if role is None:
                 raise InvalidReference(f"role not found: {role_id}")
+            if role.name == "owner" and not self._catalog_codes <= held:
+                raise AuthorizationError("only a full-catalog actor may assign the owner role")
             codes = (
                 await session.execute(
                     sa.select(RolePermission.permission_code).where(
@@ -654,12 +684,8 @@ Expected: FAIL (missing methods)
             ).scalars().all()
             for code in codes:
                 permission = self._catalog.validate(code)
-                from jdlib.control.enums import ScopeType
-
-                if ScopeType(scope_type) not in permission.allowed_scopes:
-                    raise RoleScopeMismatch(
-                        f"{code} cannot be bound at {scope_type} scope"
-                    )
+                if scope not in permission.allowed_scopes:
+                    raise RoleScopeMismatch(f"{code} cannot be bound at {scope_type} scope")
             await self._validate_principal(session, tenant_id, principal_type, principal_id)
         await self._require_subset(tenant_id, codes, actor_principal)
         self._cache.invalidate()
@@ -715,6 +741,26 @@ Expected: FAIL (missing methods)
         if membership is None:
             raise CrossTenantReferenceError("membership", str(tenant_id), str(principal_id))
 
+    async def _validate_scope(
+        self, tenant_id: uuid.UUID, scope_type: str, scope_id: uuid.UUID
+    ) -> None:
+        if self._scope_lookup is None:
+            raise AuthorizationError(f"{scope_type} scope validation is not configured")
+        record = await self._scope_lookup(tenant_id, scope_type, scope_id)
+        if record is None:
+            raise InvalidReference(f"{scope_type} scope not found: {scope_id}")
+        if record.tenant_id != tenant_id or record.deleted:
+            raise CrossTenantReferenceError(
+                f"{scope_type} scope {scope_id}", str(tenant_id), str(record.tenant_id)
+            )
+
+    async def _lock(self, session: ControlPlaneSession, tenant_id: uuid.UUID) -> None:
+        await session.execute(
+            sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))").bindparams(
+                key=f"jdlib:tenant:{tenant_id}"
+            )
+        )
+
     async def unbind_role(
         self,
         tenant_id: uuid.UUID,
@@ -723,13 +769,37 @@ Expected: FAIL (missing methods)
         actor_id: uuid.UUID | None,
         actor_principal: Principal,
     ) -> None:
+        await self._require_permission(tenant_id, "role:manage", actor_principal)
         self._cache.invalidate()
         async with await self._session() as session:
+            await self._lock(session, tenant_id)
             binding = await session.get(
                 RoleBinding, {"tenant_id": tenant_id, "id": binding_id}
             )
             if binding is None:
                 raise InvalidReference(f"binding not found: {binding_id}")
+            role = await session.get(Role, {"tenant_id": tenant_id, "id": binding.role_id})
+            if role is not None and role.name == "owner":
+                remaining = (
+                    await session.execute(
+                        sa.select(sa.func.count())
+                        .select_from(RoleBinding)
+                        .join(
+                            Role,
+                            sa.and_(
+                                Role.tenant_id == RoleBinding.tenant_id,
+                                Role.id == RoleBinding.role_id,
+                            ),
+                        )
+                        .where(
+                            RoleBinding.tenant_id == tenant_id,
+                            Role.name == "owner",
+                            RoleBinding.id != binding_id,
+                        )
+                    )
+                ).scalar_one()
+                if remaining == 0:
+                    raise AuthorizationError("cannot remove the last owner")
             await session.delete(binding)
             await self._audit.record(
                 action="binding.removed",
@@ -740,12 +810,12 @@ Expected: FAIL (missing methods)
             await session.commit()
 ```
 
-Note for the implementer: move the `from jdlib.control.enums import ScopeType` import to the module top; hoist `scope_type`/`scope_id` validation. `bind_role` opens two sessions (validation then write); acceptable, but prefer a single session by doing the subset check before opening the write session (as written). Add `sa` to test imports.
+Note for the implementer: `ScopeType` is imported at module top; scope shape validation is hoisted. `bind_role` opens two sessions (validation then write) — accepted TOCTOU debt, see the review-fix block below. `scope_lookup` is an optional constructor collaborator: absent, org/team scopes fail closed. Add `sa` to test imports.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_access_bindings.py -v -W error`
-Expected: PASS (4 passed)
+Expected: PASS (14 passed)
 
 - [ ] **Step 5: Full suite, lint, type check, commit**
 
@@ -755,6 +825,14 @@ Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -
 git add src/jdlib/authz/access.py tests/integration/test_access_bindings.py
 git commit -m "feat: role bindings with scope compatibility and principal validation"
 ```
+
+**Review fixes applied (follow-up commit):**
+
+- **I11/L14 scope validation:** `bind_role` resolves org/team scopes through an injected `ScopeLookup` collaborator (`ScopeRecord` ownership facts). Missing row → `InvalidReference`; other tenant or soft-deleted → `CrossTenantReferenceError`; unknown scope type → `InvalidReference`; absent collaborator → `AuthorizationError` (fail closed). Tests cover nonexistent, other-tenant, soft-deleted, and a positive team binding; the tenant-scope compatibility test uses a real team.
+- **Last-owner race:** `unbind_role` takes `pg_advisory_xact_lock(hashtextextended('jdlib:tenant:<id>', 0))` in the write session before reading the binding and counting owner bindings, so concurrent unbinds serialize. Covered by a white-box test that injects a competing deletion at lock time and proves the count observes it.
+- **Rule 7 comparison:** full-catalog check is now `self._catalog_codes <= held` (set containment), replacing the count comparison.
+- **Test gaps:** service-account principal path (active + suspended), active membership in another tenant, `binding.created`/`binding.removed` audit assertions, subset test tightened to `RoleEscalationBlocked`.
+- **Accepted TOCTOU debt:** `bind_role` validates role/scope/subset in one transaction and inserts in a second; a concurrent role-permission change or scope soft-delete between them can commit a binding that was valid at validation time. Reads treat dangling/soft-deleted targets as invalid (I11), so the window is fail-closed at evaluation; revisit if single-transaction writes become necessary.
 
 ---
 

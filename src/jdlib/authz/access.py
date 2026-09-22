@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Collection
+from dataclasses import dataclass
+from typing import Protocol
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +33,26 @@ from jdlib.errors import (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class ScopeRecord:
+    """Ownership facts about an org/team scope row (tenant plane)."""
+
+    tenant_id: uuid.UUID
+    deleted: bool = False
+
+
+class ScopeLookup(Protocol):
+    """Resolves an org/team scope id to its owning tenant.
+
+    Returns ``None`` when no row with the given id exists anywhere;
+    otherwise the owning tenant and whether the row is soft-deleted.
+    """
+
+    async def __call__(
+        self, tenant_id: uuid.UUID, scope_type: str, scope_id: uuid.UUID
+    ) -> ScopeRecord | None: ...
+
+
 class AccessControl:
     def __init__(
         self,
@@ -41,13 +63,16 @@ class AccessControl:
         cache: AuthzCache,
         audit: PlatformAudit,
         registry: ResourceTypeRegistry | None = None,
+        scope_lookup: ScopeLookup | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._catalog = catalog
+        self._catalog_codes = frozenset(permission.code for permission in catalog.all())
         self._reader = reader
         self._cache = cache
         self._audit = audit
         self._registry = registry or ResourceTypeRegistry()
+        self._scope_lookup = scope_lookup
 
     async def _session(self) -> ControlPlaneSession:
         return ControlPlaneSession(self._session_factory())
@@ -83,6 +108,26 @@ class AccessControl:
     def _validate_codes(self, permissions: Collection[str]) -> None:
         for code in permissions:
             self._catalog.validate(code)
+
+    async def _validate_scope(
+        self, tenant_id: uuid.UUID, scope_type: str, scope_id: uuid.UUID
+    ) -> None:
+        if self._scope_lookup is None:
+            raise AuthorizationError(f"{scope_type} scope validation is not configured")
+        record = await self._scope_lookup(tenant_id, scope_type, scope_id)
+        if record is None:
+            raise InvalidReference(f"{scope_type} scope not found: {scope_id}")
+        if record.tenant_id != tenant_id or record.deleted:
+            raise CrossTenantReferenceError(
+                f"{scope_type} scope {scope_id}", str(tenant_id), str(record.tenant_id)
+            )
+
+    async def _lock(self, session: ControlPlaneSession, tenant_id: uuid.UUID) -> None:
+        await session.execute(
+            sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))").bindparams(
+                key=f"jdlib:tenant:{tenant_id}"
+            )
+        )
 
     async def create_role(
         self,
@@ -237,15 +282,22 @@ class AccessControl:
         actor_principal: Principal,
     ) -> RoleBinding:
         held = await self._require_permission(tenant_id, "role:manage", actor_principal)
-        if scope_type == "tenant" and scope_id is not None:
-            raise InvalidReference("tenant scope must not carry a scope id")
-        if scope_type in {"org", "team"} and scope_id is None:
+        try:
+            scope = ScopeType(scope_type)
+        except ValueError as exc:
+            raise InvalidReference(f"unsupported scope type: {scope_type}") from exc
+        if scope is ScopeType.TENANT:
+            if scope_id is not None:
+                raise InvalidReference("tenant scope must not carry a scope id")
+        elif scope_id is None:
             raise InvalidReference(f"{scope_type} scope requires a scope id")
+        else:
+            await self._validate_scope(tenant_id, scope.value, scope_id)
         async with await self._session() as session:
             role = await session.get(Role, {"tenant_id": tenant_id, "id": role_id})
             if role is None:
                 raise InvalidReference(f"role not found: {role_id}")
-            if role.name == "owner" and len(held) != len(self._catalog.all()):
+            if role.name == "owner" and not self._catalog_codes <= held:
                 raise AuthorizationError("only a full-catalog actor may assign the owner role")
             codes = (
                 await session.execute(
@@ -256,7 +308,7 @@ class AccessControl:
             ).scalars().all()
             for code in codes:
                 permission = self._catalog.validate(code)
-                if ScopeType(scope_type) not in permission.allowed_scopes:
+                if scope not in permission.allowed_scopes:
                     raise RoleScopeMismatch(f"{code} cannot be bound at {scope_type} scope")
             await self._validate_principal(session, tenant_id, principal_type, principal_id)
         await self._require_subset(tenant_id, codes, actor_principal)
@@ -324,6 +376,7 @@ class AccessControl:
         await self._require_permission(tenant_id, "role:manage", actor_principal)
         self._cache.invalidate()
         async with await self._session() as session:
+            await self._lock(session, tenant_id)
             binding = await session.get(
                 RoleBinding, {"tenant_id": tenant_id, "id": binding_id}
             )
