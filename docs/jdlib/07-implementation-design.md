@@ -90,6 +90,8 @@ src/jdlib/
 │   ├── reader.py               # Binding, AccessReader, ControlAccessReader
 │   ├── pdp.py                  # PolicyDecisionPoint, DefaultPDP, Decision, MatchedRule
 │   ├── cache.py                # AuthzCache (request-scoped, invalidatable)
+│   ├── access.py               # AccessControl; one AuthzCache instance must be
+│   │                           #   shared with the PDP per request
 │   ├── guards.py               # Enforcer, requires(), authorize()
 │   └── ownership.py            # validate_ownership, hierarchy helpers (I12)
 ├── tenancy/              # resolution.py (RequestInfo + resolvers) · middleware.py · jobs.py

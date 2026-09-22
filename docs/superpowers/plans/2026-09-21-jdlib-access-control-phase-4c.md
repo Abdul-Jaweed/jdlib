@@ -1179,7 +1179,7 @@ git commit -m "feat: resource grants and ownership transfer"
 - Create: `tests/integration/test_access_invitations.py`
 
 **Interfaces:**
-- Produces: `invite(tenant_id, *, email, role_id, scope_type, scope_id, invited_by) -> tuple[Invitation, str]` (returns raw token once); `accept_invitation(token, *, user_id, actor_principal) -> Membership`.
+- Produces: `invite(tenant_id, *, email, role_id, scope_type, scope_id, invited_by, ttl=timedelta(days=7)) -> tuple[Invitation, str]` (returns raw token once); `accept_invitation(token, *, user_id) -> Membership`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1412,6 +1412,13 @@ git add src/jdlib/authz/access.py tests/unit/test_invitation_tokens.py tests/int
 git commit -m "feat: invitations with hashed single-use tokens"
 ```
 
+**Review fixes applied (follow-up commit from the Task 4 implementation):**
+
+- Interfaces correction: `invite(..., ttl=timedelta(days=7))` accepts the request-scoped TTL; `accept_invitation(token, *, user_id) -> Membership` has no `actor_principal` — the invitee `user_id` is the audit actor.
+- Token format: `build_invitation_token()` uses `secrets.token_hex(16)` for the id and `secrets.token_hex(32)` for the secret (the sketch's `token_urlsafe` was dropped); at rest the secret is Argon2id-hashed through a module-level `PasswordHasher`.
+- `accept_invitation` validates the invitation's scope placement before the atomic membership + binding write: tenant scope must not carry a `scope_id`; org/team scopes require one and resolve through the injected `ScopeLookup` (`InvalidReference` when missing, `CrossTenantReferenceError` when foreign/soft-deleted, `AuthorizationError` when the lookup is not configured). `invitation.created`/`invitation.accepted` are recorded before commit.
+- Shipped tests: 11 integration tests plus 3 unit tests (not the 2-test sketch), covering Argon2id hash-at-rest, token uniqueness, malformed/tampered tokens, expiry and terminal status, org-scope failure modes, and audit entries. Authoritative snippets live in `src/jdlib/authz/access.py`, `tests/integration/test_access_invitations.py`, and `tests/unit/test_invitation_tokens.py`.
+
 ---
 
 ### Task 5: Role × action matrix and phase exit
@@ -1446,6 +1453,8 @@ git add tests/integration/test_role_action_matrix.py docs
 git commit -m "test: role action matrix; docs sync"
 ```
 
+**Final state (shipped):** `tests/integration/test_role_action_matrix.py::test_role_action_matrix` seeds one tenant with the four system templates (`owner` = full catalog, `admin` = all but `tenant:manage`, `member` = read/create/update, `viewer` = read), a team-owned invoice under a real org/team, an unbound service account, and a platform operator, then evaluates the seven representative actions through the real `ControlAccessReader` + `ScopeResolver` + `DefaultPDP` with a real `TenantSession`. Asserted matrix: owner all; admin all but `tenant:manage`; member `resource:read`/`resource:update` (team scope); viewer `resource:read` (org scope); service account and platform operator none, with denial reasons `no_allow` and `principal_inactive`. The file also ships `test_access_control_invalidates_the_shared_pdp_cache`, which gives `AccessControl` the same `AuthzCache` as the PDP, binds a new team-scoped role, and proves the PDP refetches the allow (the `07` file map records that one-`AuthzCache`-instance-per-request sharing contract). No source wiring changes were required.
+
 ---
 
 ## Phase 4c Exit Criteria
@@ -1460,6 +1469,6 @@ git commit -m "test: role action matrix; docs sync"
 
 ## Plan Series (remaining)
 
-- Plan 4d — authentication (OIDC/JWT, API keys) + `ContextFactory`/middleware wiring.
+- Plan 4d (next) — authentication (OIDC/JWT, API keys) + `ContextFactory`/middleware wiring.
 - Plan 5 — schema/database strategies, RLS, privileged tenant-plane deletion.
 - Plan 6 — audit sinks, `jdlib.testing`, FastAPI/CLI, public API.
