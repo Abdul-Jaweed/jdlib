@@ -364,9 +364,9 @@ git commit -m "feat: strategy lifecycle methods and deprovision modes"
 **Review-fix invariants (frozen docs `05-tenant-lifecycle.md` §1–§6):**
 - Tenant transitions are exactly `provisioning → active|deleted`; `active → suspended|archived`; `suspended → active|archived`; `archived → active|deprovisioning`; `deprovisioning → deleted|archived`; `deleted` terminal. Invalid transitions raise `TenantOperationInProgress`; a repeat in the target state is an idempotent no-op.
 - `create` is idempotent per `(strategy, target_handle, region)` on an existing slug and raises `ProvisioningError` on a conflicting placement; the create race is serialized by `pg_advisory_xact_lock(hashtextextended('jdlib:tenant-slug:' || slug, 0))`.
-- `purge`/`destroy` order: `deprovisioning` commit → access-row deletes in dependency order (`api_keys`, `invitations`, `role_bindings`, `resource_grants`, `role_permissions`, `roles`, `memberships`) → `strategy.deprovision` → `deleted` + audit with mode and counts. `archive` deletes nothing and sets `archived_at`.
+- `purge`/`destroy` order: `deprovisioning` commit → access-row deletes in dependency order (`api_keys`, `service_accounts`, `invitations`, `role_bindings`, `resource_grants`, `role_permissions`, `roles`, `memberships`) → `strategy.deprovision` → `deleted` + audit with mode and counts. `archive` deletes nothing and sets `archived_at`. The ordered deletion block applies to both `purge` and `destroy` (see the §5 wording note below).
 - Mandatory failure audits are recorded **before** committing the failure-state mutation (audit failure prevents the commit).
-- `provision` health step reads `MigrationRunner.tenant_version(target_handle)` after migrate/seed and fails closed on any mismatch with `desired_version`.
+- `provision` health step reads `MigrationRunner.tenant_version(strategy.migration_schema(record))` after migrate/seed and fails closed on any mismatch with `desired_version`.
 - `assert_servable(tenant_id)` loads tenant, migration state, and relocation in one control session (no stale caller snapshot); `RegistryWriteFence.assert_writable` enforces the same predicate with `TenantNotWritable`.
 
 - [ ] **Step 1: Add the control async fixture**
@@ -431,6 +431,7 @@ DESIRED_VERSION = "0001_tenant_baseline"
 
 ACCESS_MODELS: dict[str, type] = {
     "api_keys": ApiKey,
+    "service_accounts": ServiceAccount,
     "invitations": Invitation,
     "role_bindings": RoleBinding,
     "resource_grants": ResourceGrant,
@@ -696,7 +697,7 @@ async def test_provision_health_check_failure_stays_provisioning(control_session
     tenant = await _create(registry, "healthcheck")
     with pytest.raises(ProvisioningError):
         await registry.provision(tenant.id)
-    assert runner.version_calls == ["default"]
+    assert runner.version_calls == ["jt_test"]
     assert (await registry.get(tenant.id)).status == TenantStatus.PROVISIONING
     state = await _migration_state(control_session_factory, tenant.id)
     assert state.status == MigrationStatus.FAILED.value
@@ -950,6 +951,7 @@ from jdlib.control.models import (
     Role,
     RoleBinding,
     RolePermission,
+    ServiceAccount,
     Tenant,
     TenantMigrationState,
     TenantPlacement,
@@ -985,6 +987,7 @@ _ALLOWED_TENANT_TRANSITIONS: dict[TenantStatus, frozenset[TenantStatus]] = {
 
 _ACCESS_ROW_DELETION_ORDER: tuple[tuple[str, Any], ...] = (
     ("api_keys", ApiKey),
+    ("service_accounts", ServiceAccount),
     ("invitations", Invitation),
     ("role_bindings", RoleBinding),
     ("resource_grants", ResourceGrant),
@@ -1162,7 +1165,7 @@ class TenantRegistry:
                 await session.flush()
                 await strategy.migrate(record, self._runner)
                 await self._seeder.seed(record)
-                actual_version = self._runner.tenant_version(placement.target_handle)
+                actual_version = self._runner.tenant_version(strategy.migration_schema(record))
                 if actual_version != state.desired_version:
                     raise ProvisioningError(
                         f"tenant target version {actual_version!r} does not match"
@@ -1447,10 +1450,13 @@ Review-fix notes (frozen-doc compliance):
   `provisioning`; `purge`/`destroy` may only enter `deprovisioning` from
   `archived` (or resume from `deprovisioning`), and `deleted` is terminal.
 - The health step (`05` §2 step 6) calls
-  `MigrationRunner.tenant_version(target_handle)` after migrate/seed; any
-  mismatch with `desired_version` raises `ProvisioningError` and follows the
-  failure path (tenant stays `provisioning`, migration state `failed`,
-  audited). Add to `src/jdlib/migrations/runner.py`:
+  `MigrationRunner.tenant_version(strategy.migration_schema(record))` after
+  migrate/seed; any mismatch with `desired_version` raises `ProvisioningError`
+  and follows the failure path (tenant stays `provisioning`, migration state
+  `failed`, audited). `migration_schema` is a new synchronous member of the
+  `IsolationStrategy` protocol (`src/jdlib/persistence/strategies/base.py`);
+  `SharedSchemaStrategy` returns its configured deployment schema. Add to
+  `src/jdlib/migrations/runner.py`:
 
 ```python
     def tenant_version(self, schema: str) -> str | None:
@@ -1472,19 +1478,37 @@ Review-fix notes (frozen-doc compliance):
             engine.dispose()
 ```
 
-  `target_handle` is the schema the tenant chain is read from; schema-per-tenant
-  placements already use the schema name as the handle (`06` §4). A missing
-  `alembic_version` reads as `None` and thus fails the comparison closed.
+  `target_handle` remains opaque (`05` §7) and is never used as a schema:
+  the strategy that performed the migration resolves the schema the health
+  read must inspect. Payload-schema strategies return their configured schema
+  the same way. A missing `alembic_version` reads as `None` and thus fails the
+  comparison closed.
 - Failure audits are recorded before committing the failure-state mutation
   (`05` §5.1), so an unavailable audit sink leaves the previous state committed
   (fail closed).
 - `deprovision(purge|destroy)` commits `deprovisioning` first, then deletes
   control-plane access rows in dependency order
-  (`_ACCESS_ROW_DELETION_ORDER`: `api_keys`, `invitations`, `role_bindings`,
-  `resource_grants`, `role_permissions`, `roles`, `memberships`), then calls
-  `strategy.deprovision`, then commits `deleted` with the mode and per-table
-  counts in the audit metadata. `archive` deletes nothing and sets
-  `archived_at`.
+  (`_ACCESS_ROW_DELETION_ORDER`: `api_keys`, `service_accounts`, `invitations`,
+  `role_bindings`, `resource_grants`, `role_permissions`, `roles`,
+  `memberships`), then calls `strategy.deprovision`, then commits `deleted`
+  with the mode and per-table counts in the audit metadata. `archive` deletes
+  nothing and sets `archived_at`.
+- **§5 `purge` wording (frozen doc):** the §5 mode table says `purge` retains
+  "control-plane rows"; the ordered deletion block in §5 (steps 2–4) is the
+  authoritative operation sequence and the implementation follows it for both
+  `purge` and `destroy` — access rows (`api_keys`, `service_accounts`,
+  `invitations`, `role_bindings`, `resource_grants`, `role_permissions`,
+  `roles`, `memberships`) are deleted for both modes. "Retained" refers to the
+  control-plane records outside that block: `tenant_placements`,
+  `tenant_migration_states`, tenant/audit rows (§5 step 6) and
+  `platform_audit_events`. Only `strategy.deprovision` (tenant-plane storage)
+  differentiates the modes.
+- Integration coverage for the health step: the fake-runner assertion expects
+  the strategy schema (`jt_test`), and `test_provision_with_real_runner_activates_tenant`
+  / `test_provision_version_mismatch_stays_provisioning` run the real
+  `MigrationRunner` against the migrated shared schema (activation vs
+  non-existent desired revision → stays `provisioning`); unit coverage:
+  `test_shared_migration_schema_returns_configured_schema`.
 - `create` reuses an existing slug only when `(strategy, target_handle, region)`
   match the stored placement; otherwise `ProvisioningError`. The create race is
   serialized with `pg_advisory_xact_lock(hashtextextended('jdlib:tenant-slug:' || slug, 0))`.
@@ -1499,7 +1523,7 @@ Review-fix notes (frozen-doc compliance):
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_registry.py -v -W error`
-Expected: PASS (24 passed)
+Expected: PASS (26 passed)
 
 - [ ] **Step 6: Full suite, lint, type check, commit**
 

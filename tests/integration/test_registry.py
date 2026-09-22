@@ -31,13 +31,16 @@ from jdlib.errors import (
     TenantOperationInProgress,
     TenantSuspended,
 )
+from jdlib.migrations.runner import MigrationRunner
 from jdlib.persistence.strategies.deprovision import DeprovisionMode
 from jdlib.persistence.strategies.shared import SharedSchemaStrategy
 
 DESIRED_VERSION = "0001_tenant_baseline"
+TENANT_SCHEMA = "jt_test"
 
 ACCESS_MODELS: dict[str, type] = {
     "api_keys": ApiKey,
+    "service_accounts": ServiceAccount,
     "invitations": Invitation,
     "role_bindings": RoleBinding,
     "resource_grants": ResourceGrant,
@@ -102,6 +105,24 @@ def _registry(
         audit=audit,
     )
     return registry, audit
+
+
+def _real_registry(
+    control_session_factory,
+    postgres_url: str,
+    desired_version: str = DESIRED_VERSION,
+) -> TenantRegistry:
+    runner = MigrationRunner(postgres_url)
+    runner.upgrade_tenant(TENANT_SCHEMA)
+    return TenantRegistry(
+        session_factory=control_session_factory,
+        strategies={
+            PlacementStrategy.SHARED: SharedSchemaStrategy(engine=None, schema=TENANT_SCHEMA)
+        },
+        runner=runner,
+        audit=RecordingPlatformAudit(),
+        desired_version=desired_version,
+    )
 
 
 async def _create(registry: TenantRegistry, prefix: str = "tenant", **overrides) -> Tenant:
@@ -303,7 +324,7 @@ async def test_provision_health_check_failure_stays_provisioning(control_session
     tenant = await _create(registry, "healthcheck")
     with pytest.raises(ProvisioningError):
         await registry.provision(tenant.id)
-    assert runner.version_calls == ["default"]
+    assert runner.version_calls == ["jt_test"]
     assert (await registry.get(tenant.id)).status == TenantStatus.PROVISIONING
     state = await _migration_state(control_session_factory, tenant.id)
     assert state.status == MigrationStatus.FAILED.value
@@ -312,6 +333,31 @@ async def test_provision_health_check_failure_stays_provisioning(control_session
         "tenant.created",
         "tenant.migration.failed",
     ]
+
+
+async def test_provision_with_real_runner_activates_tenant(control_session_factory, postgres_url):
+    registry = _real_registry(control_session_factory, postgres_url)
+    tenant = await _create(registry, "e2e")
+    provisioned = await registry.provision(tenant.id)
+    assert provisioned.status == TenantStatus.ACTIVE
+    state = await _migration_state(control_session_factory, tenant.id)
+    assert state.status == MigrationStatus.SUCCESS.value
+    assert state.current_version == DESIRED_VERSION
+
+
+async def test_provision_version_mismatch_stays_provisioning(
+    control_session_factory, postgres_url
+):
+    registry = _real_registry(
+        control_session_factory, postgres_url, desired_version="0002_nonexistent"
+    )
+    tenant = await _create(registry, "e2e-mismatch")
+    with pytest.raises(ProvisioningError):
+        await registry.provision(tenant.id)
+    assert (await registry.get(tenant.id)).status == TenantStatus.PROVISIONING
+    state = await _migration_state(control_session_factory, tenant.id)
+    assert state.status == MigrationStatus.FAILED.value
+    assert state.current_version is None
 
 
 async def test_failed_migration_suspends_active_tenant(control_session_factory):

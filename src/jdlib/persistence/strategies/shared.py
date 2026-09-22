@@ -30,5 +30,8 @@ class SharedSchemaStrategy:
     async def migrate(self, tenant: TenantRecord, runner: MigrationRunner) -> None:
         runner.upgrade_tenant(self._schema)
 
+    def migration_schema(self, tenant: TenantRecord) -> str:
+        return self._schema
+
     async def deprovision(self, tenant: TenantRecord, mode: DeprovisionMode) -> None:
         return None

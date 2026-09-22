@@ -19,6 +19,7 @@ from jdlib.control.models import (
     Role,
     RoleBinding,
     RolePermission,
+    ServiceAccount,
     Tenant,
     TenantMigrationState,
     TenantPlacement,
@@ -54,6 +55,7 @@ _ALLOWED_TENANT_TRANSITIONS: dict[TenantStatus, frozenset[TenantStatus]] = {
 
 _ACCESS_ROW_DELETION_ORDER: tuple[tuple[str, Any], ...] = (
     ("api_keys", ApiKey),
+    ("service_accounts", ServiceAccount),
     ("invitations", Invitation),
     ("role_bindings", RoleBinding),
     ("resource_grants", ResourceGrant),
@@ -231,7 +233,7 @@ class TenantRegistry:
                 await session.flush()
                 await strategy.migrate(record, self._runner)
                 await self._seeder.seed(record)
-                actual_version = self._runner.tenant_version(placement.target_handle)
+                actual_version = self._runner.tenant_version(strategy.migration_schema(record))
                 if actual_version != state.desired_version:
                     raise ProvisioningError(
                         f"tenant target version {actual_version!r} does not match"

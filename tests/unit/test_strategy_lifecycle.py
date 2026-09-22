@@ -105,6 +105,11 @@ async def test_shared_migrate_runs_tenant_chain_for_schema():
     assert runner.calls == [("jt_test", "head")]
 
 
+def test_shared_migration_schema_returns_configured_schema():
+    strategy = SharedSchemaStrategy(engine=None, schema="jt_test")  # type: ignore[arg-type]
+    assert strategy.migration_schema(_record()) == "jt_test"
+
+
 async def test_shared_deprovision_is_a_noop_for_all_modes():
     strategy = SharedSchemaStrategy(engine=None, schema="jt_test")  # type: ignore[arg-type]
     for mode in DeprovisionMode:
