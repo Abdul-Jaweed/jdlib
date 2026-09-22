@@ -61,6 +61,17 @@ def test_upgrade_is_idempotent(postgres_url: str):
     runner.provision_tenant_schema("t_migrated")
 
 
+def test_tenant_version_reads_alembic_version(postgres_url: str):
+    runner = MigrationRunner(postgres_url)
+    runner.provision_tenant_schema("t_versioned")
+    assert runner.tenant_version("t_versioned") == "0001_tenant_baseline"
+
+
+def test_tenant_version_missing_schema_returns_none(postgres_url: str):
+    runner = MigrationRunner(postgres_url)
+    assert runner.tenant_version("t_versionless") is None
+
+
 def test_invalid_schema_name_rejected_before_sql(monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(sa, "create_engine", lambda *args, **kwargs: calls.append("engine"))
@@ -73,4 +84,6 @@ def test_invalid_schema_name_rejected_before_sql(monkeypatch):
         runner.provision_tenant_schema("bad-name")
     with pytest.raises(ProvisioningError):
         runner.upgrade_tenant("bad-name")
+    with pytest.raises(ProvisioningError):
+        runner.tenant_version("bad-name")
     assert calls == []

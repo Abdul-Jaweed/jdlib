@@ -57,3 +57,21 @@ class MigrationRunner:
             connection.execute(sa.schema.CreateSchema(schema, if_not_exists=True))
         engine.dispose()
         self.upgrade_tenant(schema, revision)
+
+    def tenant_version(self, schema: str) -> str | None:
+        self._validate_deployment_schema(schema)
+        engine = sa.create_engine(self._database_url, future=True)
+        try:
+            with engine.begin() as connection:
+                present = connection.execute(
+                    sa.text("SELECT to_regclass(:quoted)").bindparams(
+                        quoted=f"{schema}.alembic_version"
+                    )
+                ).scalar_one_or_none()
+                if present is None:
+                    return None
+                return connection.execute(
+                    sa.text(f'SELECT version_num FROM "{schema}".alembic_version LIMIT 1')
+                ).scalar_one_or_none()
+        finally:
+            engine.dispose()

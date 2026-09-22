@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Mapping
-from typing import Protocol
+from datetime import UTC, datetime
+from typing import Any, Protocol
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +12,13 @@ from jdlib.context import TenantRecord
 from jdlib.control.audit import PlatformAudit
 from jdlib.control.enums import MigrationStatus, PlacementStrategy, RelocationPhase, TenantStatus
 from jdlib.control.models import (
+    ApiKey,
+    Invitation,
     Membership,
+    ResourceGrant,
+    Role,
+    RoleBinding,
+    RolePermission,
     Tenant,
     TenantMigrationState,
     TenantPlacement,
@@ -22,6 +29,7 @@ from jdlib.errors import (
     ProvisioningError,
     TenantNotFound,
     TenantNotWritable,
+    TenantOperationInProgress,
     TenantSuspended,
 )
 from jdlib.migrations.runner import MigrationRunner
@@ -35,6 +43,25 @@ CRITICAL_RELOCATION_PHASES = {
     RelocationPhase.POST_FLIP_VERIFICATION.value,
 }
 
+_ALLOWED_TENANT_TRANSITIONS: dict[TenantStatus, frozenset[TenantStatus]] = {
+    TenantStatus.PROVISIONING: frozenset({TenantStatus.ACTIVE, TenantStatus.DELETED}),
+    TenantStatus.ACTIVE: frozenset({TenantStatus.SUSPENDED, TenantStatus.ARCHIVED}),
+    TenantStatus.SUSPENDED: frozenset({TenantStatus.ACTIVE, TenantStatus.ARCHIVED}),
+    TenantStatus.ARCHIVED: frozenset({TenantStatus.ACTIVE, TenantStatus.DEPROVISIONING}),
+    TenantStatus.DEPROVISIONING: frozenset({TenantStatus.DELETED, TenantStatus.ARCHIVED}),
+    TenantStatus.DELETED: frozenset(),
+}
+
+_ACCESS_ROW_DELETION_ORDER: tuple[tuple[str, Any], ...] = (
+    ("api_keys", ApiKey),
+    ("invitations", Invitation),
+    ("role_bindings", RoleBinding),
+    ("resource_grants", ResourceGrant),
+    ("role_permissions", RolePermission),
+    ("roles", Role),
+    ("memberships", Membership),
+)
+
 
 class SeedHook(Protocol):
     async def seed(self, tenant: TenantRecord) -> None: ...
@@ -43,6 +70,25 @@ class SeedHook(Protocol):
 class _NoopSeedHook:
     async def seed(self, tenant: TenantRecord) -> None:
         return None
+
+
+def _require_transition(current: TenantStatus, target: TenantStatus) -> None:
+    if target not in _ALLOWED_TENANT_TRANSITIONS[current]:
+        raise TenantOperationInProgress(
+            f"tenant transition {current.value} -> {target.value} is not allowed"
+        )
+
+
+def _apply_status(tenant: Tenant, target: TenantStatus, *, reason: str | None) -> None:
+    tenant.status = target.value
+    if target is TenantStatus.SUSPENDED:
+        tenant.suspended_at = datetime.now(UTC)
+        tenant.suspended_reason = reason
+    elif target is TenantStatus.ACTIVE:
+        tenant.suspended_at = None
+        tenant.suspended_reason = None
+    elif target is TenantStatus.ARCHIVED:
+        tenant.archived_at = datetime.now(UTC)
 
 
 class TenantRegistry:
@@ -72,12 +118,15 @@ class TenantRegistry:
     async def _control(self) -> ControlPlaneSession:
         return ControlPlaneSession(self._session_factory())
 
+    async def _tenant(self, session: ControlPlaneSession, tenant_id: uuid.UUID) -> Tenant:
+        tenant: Tenant | None = await session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise TenantNotFound(str(tenant_id))
+        return tenant
+
     async def get(self, tenant_id: uuid.UUID) -> Tenant:
         async with await self._control() as session:
-            tenant: Tenant | None = await session.get(Tenant, tenant_id)
-            if tenant is None:
-                raise TenantNotFound(str(tenant_id))
-            return tenant
+            return await self._tenant(session, tenant_id)
 
     async def create(
         self,
@@ -91,10 +140,24 @@ class TenantRegistry:
         actor_id: uuid.UUID | None = None,
     ) -> Tenant:
         async with await self._control() as session:
+            await self._slug_lock(session, slug)
             existing: Tenant | None = (
                 await session.execute(sa.select(Tenant).where(Tenant.slug == slug))
             ).scalar_one_or_none()
             if existing is not None:
+                placement: TenantPlacement | None = await session.get(
+                    TenantPlacement, existing.id
+                )
+                if placement is None:
+                    raise ProvisioningError("tenant is missing a placement record")
+                if (
+                    PlacementStrategy(placement.strategy) != strategy
+                    or placement.target_handle != target_handle
+                    or placement.region != region
+                ):
+                    raise ProvisioningError(
+                        f"tenant {slug} already exists with a different placement"
+                    )
                 return existing
             tenant = Tenant(
                 slug=slug,
@@ -136,17 +199,30 @@ class TenantRegistry:
             )
         )
 
+    async def _slug_lock(self, session: ControlPlaneSession, slug: str) -> None:
+        await session.execute(
+            sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))").bindparams(
+                key=f"jdlib:tenant-slug:{slug}"
+            )
+        )
+
     async def provision(self, tenant_id: uuid.UUID) -> Tenant:
         async with await self._control() as session:
             await self._lock(session, tenant_id)
-            tenant: Tenant | None = await session.get(Tenant, tenant_id)
-            if tenant is None:
-                raise TenantNotFound(str(tenant_id))
-            if tenant.status == TenantStatus.ACTIVE.value:
+            tenant = await self._tenant(session, tenant_id)
+            current = TenantStatus(tenant.status)
+            if current is TenantStatus.ACTIVE:
                 return tenant
-            placement = await session.get(TenantPlacement, tenant_id)
-            state = await session.get(TenantMigrationState, tenant_id)
-            assert placement is not None and state is not None
+            if current is not TenantStatus.PROVISIONING:
+                raise TenantOperationInProgress(
+                    f"cannot provision tenant in state {current.value}"
+                )
+            placement: TenantPlacement | None = await session.get(TenantPlacement, tenant_id)
+            state: TenantMigrationState | None = await session.get(
+                TenantMigrationState, tenant_id
+            )
+            if placement is None or state is None:
+                raise ProvisioningError("tenant is missing placement or migration state")
             record = _record(tenant, placement)
             strategy = self._strategy_for(placement)
             try:
@@ -154,25 +230,33 @@ class TenantRegistry:
                 state.status = MigrationStatus.RUNNING.value
                 await session.flush()
                 await strategy.migrate(record, self._runner)
+                await self._seeder.seed(record)
+                actual_version = self._runner.tenant_version(placement.target_handle)
+                if actual_version != state.desired_version:
+                    raise ProvisioningError(
+                        f"tenant target version {actual_version!r} does not match"
+                        f" desired {state.desired_version!r}"
+                    )
                 state.current_version = state.desired_version
                 state.status = MigrationStatus.SUCCESS.value
-                await self._seeder.seed(record)
+                state.last_error = None
                 await self._audit.record(
                     action="tenant.migration.succeeded", tenant_id=tenant_id, actor_id=None
                 )
             except Exception as exc:
                 state.status = MigrationStatus.FAILED.value
                 state.last_error = str(exc)
-                await session.commit()
                 await self._audit.record(
                     action="tenant.migration.failed",
                     tenant_id=tenant_id,
                     actor_id=None,
                     metadata={"error": str(exc)},
                 )
+                await session.commit()
                 raise
             tenant.status = TenantStatus.ACTIVE.value
             tenant.suspended_reason = None
+            tenant.suspended_at = None
             await self._audit.record(
                 action="tenant.activated", tenant_id=tenant_id, actor_id=None
             )
@@ -182,30 +266,31 @@ class TenantRegistry:
     async def migrate(self, tenant_id: uuid.UUID) -> Tenant:
         async with await self._control() as session:
             await self._lock(session, tenant_id)
-            tenant: Tenant | None = await session.get(Tenant, tenant_id)
-            if tenant is None:
-                raise TenantNotFound(str(tenant_id))
-            placement = await session.get(TenantPlacement, tenant_id)
-            state = await session.get(TenantMigrationState, tenant_id)
-            assert placement is not None and state is not None
+            tenant = await self._tenant(session, tenant_id)
+            placement: TenantPlacement | None = await session.get(TenantPlacement, tenant_id)
+            state: TenantMigrationState | None = await session.get(
+                TenantMigrationState, tenant_id
+            )
+            if placement is None or state is None:
+                raise ProvisioningError("tenant is missing placement or migration state")
             record = _record(tenant, placement)
+            strategy = self._strategy_for(placement)
             try:
-                await self._strategies[PlacementStrategy(placement.strategy)].migrate(
-                    record, self._runner
-                )
+                await strategy.migrate(record, self._runner)
             except Exception as exc:
                 state.status = MigrationStatus.FAILED.value
                 state.last_error = str(exc)
                 if tenant.status == TenantStatus.ACTIVE.value:
                     tenant.status = TenantStatus.SUSPENDED.value
                     tenant.suspended_reason = "migration_failed"
-                await session.commit()
+                    tenant.suspended_at = datetime.now(UTC)
                 await self._audit.record(
                     action="tenant.migration.failed",
                     tenant_id=tenant_id,
                     actor_id=None,
                     metadata={"error": str(exc)},
                 )
+                await session.commit()
                 raise
             state.current_version = state.desired_version
             state.status = MigrationStatus.SUCCESS.value
@@ -256,11 +341,12 @@ class TenantRegistry:
     ) -> Tenant:
         async with await self._control() as session:
             await self._lock(session, tenant_id)
-            tenant: Tenant | None = await session.get(Tenant, tenant_id)
-            if tenant is None:
-                raise TenantNotFound(str(tenant_id))
-            tenant.status = target.value
-            tenant.suspended_reason = reason if target is TenantStatus.SUSPENDED else None
+            tenant = await self._tenant(session, tenant_id)
+            current = TenantStatus(tenant.status)
+            if current is target:
+                return tenant
+            _require_transition(current, target)
+            _apply_status(tenant, target, reason=reason)
             await self._audit.record(
                 action=action, tenant_id=tenant_id, actor_id=actor_id, metadata={"reason": reason}
             )
@@ -277,9 +363,17 @@ class TenantRegistry:
     ) -> Tenant:
         async with await self._control() as session:
             await self._lock(session, tenant_id)
-            tenant: Tenant | None = await session.get(Tenant, tenant_id)
-            if tenant is None:
-                raise TenantNotFound(str(tenant_id))
+            tenant = await self._tenant(session, tenant_id)
+            current = TenantStatus(tenant.status)
+            if mode is DeprovisionMode.ARCHIVE:
+                if current is TenantStatus.ARCHIVED:
+                    return tenant
+                _require_transition(current, TenantStatus.ARCHIVED)
+            else:
+                if current is TenantStatus.DELETED:
+                    return tenant
+                if current is not TenantStatus.DEPROVISIONING:
+                    _require_transition(current, TenantStatus.DEPROVISIONING)
             children = (
                 await session.execute(
                     sa.select(Tenant.id).where(Tenant.parent_tenant_id == tenant_id)
@@ -293,48 +387,68 @@ class TenantRegistry:
                     .where(Tenant.parent_tenant_id == tenant_id)
                     .values(parent_tenant_id=None)
                 )
-            placement = await session.get(TenantPlacement, tenant_id)
-            assert placement is not None
+            placement: TenantPlacement | None = await session.get(TenantPlacement, tenant_id)
+            if placement is None:
+                raise ProvisioningError("tenant is missing a placement record")
             record = _record(tenant, placement)
-            if mode is not DeprovisionMode.ARCHIVE:
-                await self._strategies[PlacementStrategy(placement.strategy)].deprovision(
-                    record, mode
+            if mode is DeprovisionMode.ARCHIVE:
+                _apply_status(tenant, TenantStatus.ARCHIVED, reason=None)
+                await self._audit.record(
+                    action="tenant.deprovisioned",
+                    tenant_id=tenant_id,
+                    actor_id=actor_id,
+                    metadata={"mode": mode.value},
                 )
-            tenant.status = (
-                TenantStatus.ARCHIVED.value
-                if mode is DeprovisionMode.ARCHIVE
-                else TenantStatus.DELETED.value
-            )
+                await session.commit()
+                return tenant
+            _apply_status(tenant, TenantStatus.DEPROVISIONING, reason=None)
+            await session.commit()
+            counts = await self._delete_access_rows(session, tenant_id)
+            await self._strategy_for(placement).deprovision(record, mode)
+            tenant.status = TenantStatus.DELETED.value
             await self._audit.record(
                 action="tenant.deprovisioned",
                 tenant_id=tenant_id,
                 actor_id=actor_id,
-                metadata={"mode": mode.value},
+                metadata={"mode": mode.value, "counts": counts},
             )
             await session.commit()
             return tenant
 
-    async def assert_servable(self, tenant: Tenant) -> None:
+    async def _delete_access_rows(
+        self, session: ControlPlaneSession, tenant_id: uuid.UUID
+    ) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for name, model in _ACCESS_ROW_DELETION_ORDER:
+            result = await session.execute(sa.delete(model).where(model.tenant_id == tenant_id))
+            counts[name] = int(getattr(result, "rowcount", 0) or 0)
+        return counts
+
+    async def assert_servable(self, tenant_id: uuid.UUID) -> Tenant:
         async with await self._control() as session:
-            state = await session.get(TenantMigrationState, tenant.id)
+            tenant = await self._tenant(session, tenant_id)
+            state: TenantMigrationState | None = await session.get(
+                TenantMigrationState, tenant_id
+            )
             relocating = (
                 await session.execute(
                     sa.select(TenantRelocation.id).where(
-                        TenantRelocation.tenant_id == tenant.id,
+                        TenantRelocation.tenant_id == tenant_id,
                         TenantRelocation.status.in_(CRITICAL_RELOCATION_PHASES),
                     )
                 )
             ).scalar_one_or_none()
-        if tenant.status != TenantStatus.ACTIVE.value:
-            raise TenantSuspended(f"tenant {tenant.slug} is {tenant.status}")
-        if (
-            state is None
-            or state.status != MigrationStatus.SUCCESS.value
-            or state.current_version != state.desired_version
-        ):
-            raise TenantSuspended(f"tenant {tenant.slug} migration is not current")
-        if relocating is not None:
-            raise TenantSuspended(f"tenant {tenant.slug} relocation in progress")
+            if tenant.status != TenantStatus.ACTIVE.value:
+                raise TenantSuspended(f"tenant {tenant.slug} is {tenant.status}")
+            if (
+                state is None
+                or state.status != MigrationStatus.SUCCESS.value
+                or state.current_version != state.desired_version
+            ):
+                raise TenantSuspended(f"tenant {tenant.slug} migration is not current")
+            if relocating is not None:
+                raise TenantSuspended(f"tenant {tenant.slug} relocation in progress")
+            return tenant
 
     async def list_for_user(self, user_id: uuid.UUID) -> list[Tenant]:
         async with await self._control() as session:
@@ -364,6 +478,9 @@ class RegistryWriteFence:
             tenant: Tenant | None = await session.get(Tenant, tenant_id)
             if tenant is None:
                 raise TenantNotWritable(f"tenant {tenant_id} not found")
+            state: TenantMigrationState | None = await session.get(
+                TenantMigrationState, tenant_id
+            )
             relocating = (
                 await session.execute(
                     sa.select(TenantRelocation.id).where(
@@ -372,7 +489,13 @@ class RegistryWriteFence:
                     )
                 )
             ).scalar_one_or_none()
-        if tenant.status != TenantStatus.ACTIVE.value:
-            raise TenantNotWritable(f"tenant {tenant.slug} is {tenant.status}")
-        if relocating is not None:
-            raise TenantNotWritable(f"tenant {tenant.slug} relocation in progress")
+            if tenant.status != TenantStatus.ACTIVE.value:
+                raise TenantNotWritable(f"tenant {tenant.slug} is {tenant.status}")
+            if (
+                state is None
+                or state.status != MigrationStatus.SUCCESS.value
+                or state.current_version != state.desired_version
+            ):
+                raise TenantNotWritable(f"tenant {tenant.slug} migration is not current")
+            if relocating is not None:
+                raise TenantNotWritable(f"tenant {tenant.slug} relocation in progress")
