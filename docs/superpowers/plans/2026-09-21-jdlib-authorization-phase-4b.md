@@ -596,7 +596,7 @@ git commit -m "feat: tenant-plane scope resolution with org ancestry and resourc
 
 **Interfaces:**
 - Consumes: catalog, registry, scopes, `ControlPlaneSession`, `TenantSession`, `Principal`, `TenantContext`, `ScopeType`.
-- Produces: `AuthzCache` (`invalidate`, memo accessors); `AccessReader` protocol; `ControlAccessReader(session_factory)`; `MatchedRule`, `Decision`, `PolicyDecisionPoint`, `DefaultPDP(catalog, reader, scopes, cache=None)` with `async evaluate(principal, permission, target, context, *, session)`.
+- Produces: `AuthzCache` (`invalidate`, memo accessors); `AccessReader` protocol (`bindings_for`, `permissions_by_role`, `grants_for`, status gates); `ControlAccessReader(session_factory)`; `MatchedRule`, `Decision`, `PolicyDecisionPoint`, `DefaultPDP(catalog, reader, scopes, cache=None)` with `async evaluate(principal, permission, target, context, *, session)` memoizing per-request resolution through the injected cache (status gates, scope chain, bindings, per-role permissions, grants).
 
 - [ ] **Step 1: Write the unit tests**
 
@@ -619,6 +619,7 @@ from jdlib.errors import MissingTenantContext
 TENANT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 USER_ID = uuid.uuid4()
 RESOURCE_ID = uuid.uuid4()
+OTHER_RESOURCE_ID = uuid.uuid4()
 _SESSION = object()
 _TENANT_CHAIN = (ScopeRef(ScopeType.TENANT, None),)
 
@@ -644,6 +645,7 @@ class _Reader:
         role_permissions: dict[uuid.UUID, frozenset[str]] | None = None,
         bindings: list[tuple[uuid.UUID, ScopeType, uuid.UUID | None]] | None = None,
         grants: frozenset[str] | None = None,
+        granted_resource_ids: set[uuid.UUID] | None = None,
     ) -> None:
         self.tenant_status = tenant_status
         self._principal_active = principal_active
@@ -651,6 +653,7 @@ class _Reader:
         self.role_permissions = role_permissions or {}
         self.bindings = bindings or []
         self.grants = grants or frozenset()
+        self.granted_resource_ids = granted_resource_ids
 
     async def tenant_status_of(self, tenant_id: uuid.UUID) -> str:
         return self.tenant_status
@@ -664,34 +667,75 @@ class _Reader:
     async def bindings_for(self, principal, tenant_id, scope_chain):
         return [Binding(*b) for b in self.bindings if (b[1], b[2]) in scope_chain]
 
-    async def permissions_for_roles(self, tenant_id, role_ids):
-        return frozenset().union(
-            *(self.role_permissions.get(role, frozenset()) for role in role_ids)
-        )
+    async def permissions_by_role(self, tenant_id, role_ids):
+        return {role_id: self.role_permissions.get(role_id, frozenset()) for role_id in role_ids}
 
     async def grants_for(self, principal, tenant_id, resource_type, resource_id):
+        if self.granted_resource_ids is not None and resource_id not in self.granted_resource_ids:
+            return frozenset()
         return self.grants
+
+
+class _CountingReader(_Reader):
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.calls: dict[str, int] = {}
+
+    def _count(self, name: str) -> None:
+        self.calls[name] = self.calls.get(name, 0) + 1
+
+    async def tenant_status_of(self, tenant_id: uuid.UUID) -> str:
+        self._count("tenant_status_of")
+        return await super().tenant_status_of(tenant_id)
+
+    async def principal_active(self, principal: Principal) -> bool:
+        self._count("principal_active")
+        return await super().principal_active(principal)
+
+    async def membership_active(self, principal: Principal, tenant_id: uuid.UUID) -> bool:
+        self._count("membership_active")
+        return await super().membership_active(principal, tenant_id)
+
+    async def bindings_for(self, principal, tenant_id, scope_chain):
+        self._count("bindings_for")
+        return await super().bindings_for(principal, tenant_id, scope_chain)
+
+    async def permissions_by_role(self, tenant_id, role_ids):
+        self._count("permissions_by_role")
+        return await super().permissions_by_role(tenant_id, role_ids)
+
+    async def grants_for(self, principal, tenant_id, resource_type, resource_id):
+        self._count("grants_for")
+        return await super().grants_for(principal, tenant_id, resource_type, resource_id)
 
 
 class _Scopes:
     def __init__(self, chain):
         self._chain = chain
+        self.calls = 0
 
     async def chain(self, session, target):
+        self.calls += 1
         return self._chain
 
 
-def _pdp(reader, chain=_TENANT_CHAIN) -> DefaultPDP:
+def _pdp(reader, chain=_TENANT_CHAIN, cache=None, scopes=None) -> DefaultPDP:
     return DefaultPDP(
         catalog=PermissionCatalog.with_builtins(),
         reader=reader,
-        scopes=_Scopes(chain),
-        cache=AuthzCache(),
+        scopes=scopes or _Scopes(chain),
+        cache=cache or AuthzCache(),
     )
 
 
 def _user(scopes: frozenset[str] | None = None) -> Principal:
     return Principal(kind=PrincipalKind.USER, id=USER_ID, user_id=USER_ID, scopes=scopes)
+
+
+def _service_account(scopes: frozenset[str] | None = None) -> Principal:
+    return Principal(
+        kind=PrincipalKind.SERVICE_ACCOUNT, id=uuid.uuid4(), tenant_id=TENANT_ID, scopes=scopes
+    )
 
 
 def test_cache_memoizes_until_invalidated():
@@ -722,6 +766,15 @@ async def test_denies_when_principal_inactive():
     assert decision.reason == "principal_inactive"
 
 
+async def test_principal_inactive_precedes_tenant_suspended():
+    decision = await _pdp(_Reader(tenant_status="suspended", principal_active=False)).evaluate(
+        _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()),
+        session=None,
+    )
+    assert decision.allowed is False
+    assert decision.reason == "principal_inactive"
+
+
 async def test_denies_when_membership_inactive():
     decision = await _pdp(_Reader(membership_active=False)).evaluate(
         _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()),
@@ -744,6 +797,31 @@ async def test_allows_tenant_scope_binding():
     assert decision.matched[0].kind == "binding"
 
 
+async def test_matched_only_includes_bindings_whose_role_grants_permission():
+    read_role = uuid.uuid4()
+    other_role = uuid.uuid4()
+    team_id = uuid.uuid4()
+    reader = _Reader(
+        bindings=[
+            (other_role, ScopeType.TENANT, None),
+            (read_role, ScopeType.TEAM, team_id),
+        ],
+        role_permissions={
+            read_role: frozenset({"resource:read"}),
+            other_role: frozenset({"resource:update"}),
+        },
+    )
+    chain = (ScopeRef(ScopeType.TENANT, None), ScopeRef(ScopeType.TEAM, team_id))
+    decision = await _pdp(reader, chain=chain).evaluate(
+        _user(), "resource:read", ScopeRef(ScopeType.TEAM, team_id), _context(_user()),
+        session=_SESSION,
+    )
+    assert decision.allowed is True
+    assert len(decision.matched) == 1
+    assert decision.matched[0].kind == "binding"
+    assert decision.matched[0].detail == f"role {read_role} at team:{team_id}"
+
+
 async def test_denies_without_session_for_scope_resolution():
     with pytest.raises(MissingTenantContext):
         await _pdp(_Reader()).evaluate(
@@ -762,16 +840,56 @@ async def test_denies_without_allow():
 
 
 async def test_grants_apply_only_to_the_exact_resource():
-    reader = _Reader(grants=frozenset({"resource:read"}))
-    decision = await _pdp(reader, chain=(ScopeRef(ScopeType.TENANT, None),)).evaluate(
+    reader = _Reader(grants=frozenset({"resource:read"}), granted_resource_ids={RESOURCE_ID})
+    pdp = _pdp(reader)
+    allowed = await pdp.evaluate(
         _user(),
         "resource:read",
         ResourceRef("invoice", RESOURCE_ID),
         _context(_user()),
         session=_SESSION,
     )
-    assert decision.allowed is True
-    assert any(rule.kind == "grant" for rule in decision.matched)
+    denied = await pdp.evaluate(
+        _user(),
+        "resource:read",
+        ResourceRef("invoice", OTHER_RESOURCE_ID),
+        _context(_user()),
+        session=_SESSION,
+    )
+    assert allowed.allowed is True
+    assert any(rule.kind == "grant" for rule in allowed.matched)
+    assert denied.allowed is False
+    assert denied.reason == "no_allow"
+
+
+async def test_key_scopes_cannot_widen_bindings():
+    role_id = uuid.uuid4()
+    reader = _Reader(
+        bindings=[(role_id, ScopeType.TENANT, None)],
+        role_permissions={role_id: frozenset({"resource:read"})},
+    )
+    principal = _service_account(scopes=frozenset({"resource:read", "resource:update"}))
+    decision = await _pdp(reader).evaluate(
+        principal, "resource:update", ScopeRef(ScopeType.TENANT, None), _context(principal),
+        session=_SESSION,
+    )
+    assert decision.allowed is False
+    assert decision.reason == "no_allow"
+
+
+async def test_empty_key_scopes_deny_everything():
+    role_id = uuid.uuid4()
+    reader = _Reader(
+        bindings=[(role_id, ScopeType.TENANT, None)],
+        role_permissions={role_id: frozenset({"resource:read"})},
+    )
+    principal = _service_account(scopes=frozenset())
+    decision = await _pdp(reader).evaluate(
+        principal, "resource:read", ScopeRef(ScopeType.TENANT, None), _context(principal),
+        session=_SESSION,
+    )
+    assert decision.allowed is False
+    assert decision.reason == "outside_key_scopes"
 
 
 async def test_api_key_scopes_narrow_everything():
@@ -781,12 +899,7 @@ async def test_api_key_scopes_narrow_everything():
         role_permissions={role_id: frozenset({"resource:read", "resource:delete"})},
         grants=frozenset({"resource:delete"}),
     )
-    principal = Principal(
-        kind=PrincipalKind.SERVICE_ACCOUNT,
-        id=uuid.uuid4(),
-        tenant_id=TENANT_ID,
-        scopes=frozenset({"resource:read"}),
-    )
+    principal = _service_account(scopes=frozenset({"resource:read"}))
     pdp = _pdp(reader)
     allowed = await pdp.evaluate(
         principal,
@@ -805,6 +918,60 @@ async def test_api_key_scopes_narrow_everything():
     assert allowed.allowed is True
     assert denied.allowed is False
     assert denied.reason == "outside_key_scopes"
+
+
+async def test_evaluate_memoizes_reader_and_scope_calls():
+    role_id = uuid.uuid4()
+    reader = _CountingReader(
+        bindings=[(role_id, ScopeType.TENANT, None)],
+        role_permissions={role_id: frozenset({"resource:read"})},
+        grants=frozenset({"resource:read"}),
+        granted_resource_ids={RESOURCE_ID},
+    )
+    scopes = _Scopes(_TENANT_CHAIN)
+    pdp = _pdp(reader, scopes=scopes)
+    principal = _user()
+    for _ in range(3):
+        decision = await pdp.evaluate(
+            principal,
+            "resource:read",
+            ResourceRef("invoice", RESOURCE_ID),
+            _context(principal),
+            session=_SESSION,
+        )
+        assert decision.allowed is True
+    assert reader.calls == {
+        "tenant_status_of": 1,
+        "principal_active": 1,
+        "membership_active": 1,
+        "bindings_for": 1,
+        "permissions_by_role": 1,
+        "grants_for": 1,
+    }
+    assert scopes.calls == 1
+
+
+async def test_cache_invalidate_forces_refetch():
+    role_id = uuid.uuid4()
+    reader = _CountingReader(
+        bindings=[(role_id, ScopeType.TENANT, None)],
+        role_permissions={role_id: frozenset({"resource:read"})},
+    )
+    cache = AuthzCache()
+    pdp = _pdp(reader, cache=cache)
+    for _ in range(2):
+        await pdp.evaluate(
+            _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()),
+            session=_SESSION,
+        )
+    assert reader.calls["bindings_for"] == 1
+    cache.invalidate()
+    await pdp.evaluate(
+        _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()),
+        session=_SESSION,
+    )
+    assert reader.calls["bindings_for"] == 2
+    assert reader.calls["principal_active"] == 2
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -844,7 +1011,7 @@ class AuthzCache:
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import NamedTuple, Protocol
 
 import sqlalchemy as sa
@@ -876,9 +1043,9 @@ class AccessReader(Protocol):
         scope_chain: Collection[tuple[ScopeType, uuid.UUID | None]],
     ) -> Sequence[Binding]: ...
 
-    async def permissions_for_roles(
+    async def permissions_by_role(
         self, tenant_id: uuid.UUID, role_ids: Collection[uuid.UUID]
-    ) -> frozenset[str]: ...
+    ) -> Mapping[uuid.UUID, frozenset[str]]: ...
 
     async def grants_for(
         self, principal: Principal, tenant_id: uuid.UUID, resource_type: str, resource_id: uuid.UUID
@@ -886,6 +1053,13 @@ class AccessReader(Protocol):
 
 
 class ControlAccessReader:
+    """Reads authorization state from the control plane.
+
+    Platform operators are never tenant-PDP principals (docs/jdlib/04 section
+    6): ``principal_active`` and ``membership_active`` deny them explicitly
+    without touching the database.
+    """
+
     def __init__(self, session_factory: Callable[[], AsyncSession]) -> None:
         self._session_factory = session_factory
 
@@ -902,6 +1076,8 @@ class ControlAccessReader:
         return status or "missing"
 
     async def principal_active(self, principal: Principal) -> bool:
+        if principal.kind is PrincipalKind.PLATFORM_OPERATOR:
+            return False
         if principal.kind is PrincipalKind.USER:
             from jdlib.control.models import User
 
@@ -913,15 +1089,16 @@ class ControlAccessReader:
             return status == "active"
         from jdlib.control.models import ServiceAccount
 
+        query = sa.select(ServiceAccount.status).where(ServiceAccount.id == principal.id)
+        if principal.tenant_id is not None:
+            query = query.where(ServiceAccount.tenant_id == principal.tenant_id)
         async with await self._session() as session:
-            status = (
-                await session.execute(
-                    sa.select(ServiceAccount.status).where(ServiceAccount.id == principal.id)
-                )
-            ).scalar_one_or_none()
+            status = (await session.execute(query)).scalar_one_or_none()
         return status == "active"
 
     async def membership_active(self, principal: Principal, tenant_id: uuid.UUID) -> bool:
+        if principal.kind is PrincipalKind.PLATFORM_OPERATOR:
+            return False
         if principal.kind is PrincipalKind.SERVICE_ACCOUNT:
             return True
         user_id = principal.user_id if principal.user_id is not None else principal.id
@@ -961,21 +1138,24 @@ class ControlAccessReader:
                 bindings.append(Binding(role_id, scope, scope_id))
         return bindings
 
-    async def permissions_for_roles(
+    async def permissions_by_role(
         self, tenant_id: uuid.UUID, role_ids: Collection[uuid.UUID]
-    ) -> frozenset[str]:
+    ) -> Mapping[uuid.UUID, frozenset[str]]:
         if not role_ids:
-            return frozenset()
+            return {}
         async with await self._session() as session:
             rows = (
                 await session.execute(
-                    sa.select(RolePermission.permission_code).where(
+                    sa.select(RolePermission.role_id, RolePermission.permission_code).where(
                         RolePermission.tenant_id == tenant_id,
                         RolePermission.role_id.in_(list(role_ids)),
                     )
                 )
-            ).scalars().all()
-        return frozenset(rows)
+            ).all()
+        by_role: dict[uuid.UUID, set[str]] = {}
+        for role_id, permission_code in rows:
+            by_role.setdefault(role_id, set()).add(permission_code)
+        return {role_id: frozenset(codes) for role_id, codes in by_role.items()}
 
     async def grants_for(
         self, principal: Principal, tenant_id: uuid.UUID, resource_type: str, resource_id: uuid.UUID
@@ -995,15 +1175,16 @@ class ControlAccessReader:
         return frozenset(rows)
 ```
 
-Note for the implementer: resolve the user id explicitly everywhere (`user_id = principal.user_id if principal.user_id is not None else principal.id`) and compare `principal.kind` against `PrincipalKind` from `jdlib.context` (`PrincipalType` is only the DB check-constraint enum; `is` across the two StrEnums is always false). `bindings_for` filters in Python against the chain; keep it (bindings per principal are few).
+Note for the implementer: resolve the user id explicitly everywhere (`user_id = principal.user_id if principal.user_id is not None else principal.id`) and compare `principal.kind` against `PrincipalKind` from `jdlib.context` (`PrincipalType` is only the DB check-constraint enum; `is` across the two StrEnums is always false). `permissions_by_role` returns the permission set per role so the PDP can attribute `matched` rules per binding; the union-based `permissions_for_roles` is not kept. `ControlAccessReader` denies `PrincipalKind.PLATFORM_OPERATOR` explicitly in `principal_active`/`membership_active` (operators are never tenant-PDP principals, docs/jdlib/04 section 6) and looks up service accounts by the composite `(tenant_id, id)` when `principal.tenant_id` is set. `bindings_for` filters in Python against the chain; keep it (bindings per principal are few).
 
 - [ ] **Step 4: Implement `src/jdlib/authz/pdp.py`**
 
 ```python
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import NamedTuple, Protocol, cast
+from typing import NamedTuple, Protocol, TypeVar, cast
 
 from jdlib.authz.cache import AuthzCache
 from jdlib.authz.permissions import PermissionCatalog
@@ -1012,6 +1193,8 @@ from jdlib.authz.scopes import ResourceRef, ScopeResolver, Target
 from jdlib.context import Principal, TenantContext
 from jdlib.errors import MissingTenantContext
 from jdlib.persistence.session import TenantSession
+
+_T = TypeVar("_T")
 
 
 class MatchedRule(NamedTuple):
@@ -1039,6 +1222,19 @@ class PolicyDecisionPoint(Protocol):
 
 
 class DefaultPDP:
+    """Tenant-plane policy decision point.
+
+    Gates run in the frozen precedence order of docs/jdlib/04 section 2:
+    principal active, tenant active, membership active, binding validity, then
+    permission.
+
+    The injected ``AuthzCache`` is request-scoped only and must never be shared
+    across requests: this class memoizes the status gates, scope chains,
+    bindings, per-role permissions, and grants through it. ``invalidate()``
+    clears the memo and, fail-safe, does not re-enable it within the request;
+    there is no cross-request authorization cache in v1.
+    """
+
     def __init__(
         self,
         *,
@@ -1052,6 +1248,14 @@ class DefaultPDP:
         self._scopes = scopes
         self._cache = cache or AuthzCache()
 
+    async def _remember(self, key: tuple[object, ...], produce: Callable[[], Awaitable[_T]]) -> _T:
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cast(_T, cached)
+        value = await produce()
+        self._cache.put(key, value)
+        return value
+
     async def evaluate(
         self,
         principal: Principal,
@@ -1063,29 +1267,56 @@ class DefaultPDP:
     ) -> Decision:
         self._catalog.validate(permission)
         tenant_id = context.tenant_id
-        if await self._reader.tenant_status_of(tenant_id) != "active":
-            return Decision(False, "tenant_suspended", ())
-        if not await self._reader.principal_active(principal):
+        principal_active = await self._remember(
+            ("principal_active", principal),
+            lambda: self._reader.principal_active(principal),
+        )
+        if not principal_active:
             return Decision(False, "principal_inactive", ())
-        if not await self._reader.membership_active(principal, tenant_id):
+        tenant_status = await self._remember(
+            ("tenant_status", tenant_id),
+            lambda: self._reader.tenant_status_of(tenant_id),
+        )
+        if tenant_status != "active":
+            return Decision(False, "tenant_suspended", ())
+        membership_active = await self._remember(
+            ("membership_active", principal, tenant_id),
+            lambda: self._reader.membership_active(principal, tenant_id),
+        )
+        if not membership_active:
             return Decision(False, "membership_inactive", ())
         if session is None:
             raise MissingTenantContext("PDP requires a tenant session for scope resolution")
-        chain = await self._scopes.chain(cast(TenantSession, session), target)
-        scope_chain = {(scope.type, scope.id) for scope in chain}
-        bindings = await self._reader.bindings_for(principal, tenant_id, scope_chain)
-        role_perms = await self._reader.permissions_for_roles(
-            tenant_id, [binding.role_id for binding in bindings]
+        chain = await self._remember(
+            ("scope_chain", target),
+            lambda: self._scopes.chain(cast(TenantSession, session), target),
         )
+        scope_chain = frozenset((scope.type, scope.id) for scope in chain)
+        bindings = await self._remember(
+            ("bindings", tenant_id, principal, scope_chain),
+            lambda: self._reader.bindings_for(principal, tenant_id, scope_chain),
+        )
+        role_ids = frozenset(binding.role_id for binding in bindings)
+        perms_by_role = await self._remember(
+            ("role_permissions", tenant_id, role_ids),
+            lambda: self._reader.permissions_by_role(tenant_id, role_ids),
+        )
+        role_perms = frozenset(code for codes in perms_by_role.values() for code in codes)
         matched = [
-            MatchedRule("binding", f"role {binding.role_id} at {binding.scope_type.value}")
+            MatchedRule(
+                "binding",
+                f"role {binding.role_id} at {binding.scope_type.value}:{binding.scope_id}",
+            )
             for binding in bindings
-            if permission in role_perms
+            if permission in perms_by_role.get(binding.role_id, frozenset())
         ]
         granted: frozenset[str] = frozenset()
         if isinstance(target, ResourceRef):
-            granted = await self._reader.grants_for(
-                principal, tenant_id, target.resource_type, target.resource_id
+            granted = await self._remember(
+                ("grants", tenant_id, principal, target.resource_type, target.resource_id),
+                lambda: self._reader.grants_for(
+                    principal, tenant_id, target.resource_type, target.resource_id
+                ),
             )
             if permission in granted:
                 matched.append(
@@ -1104,7 +1335,7 @@ class DefaultPDP:
 - [ ] **Step 5: Run unit tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_pdp.py -v -W error`
-Expected: PASS (9 passed)
+Expected: PASS (15 passed)
 
 - [ ] **Step 6: Integration test for `ControlAccessReader`**
 
@@ -1169,7 +1400,9 @@ async def test_control_reader_reads_status_bindings_and_permissions(
     assert await reader.membership_active(principal, tenant_id) is True
     bindings = await reader.bindings_for(principal, tenant_id, {(ScopeType.TENANT, None)})
     assert [binding.role_id for binding in bindings] == [role_id]
-    assert await reader.permissions_for_roles(tenant_id, [role_id]) == frozenset({"resource:read"})
+    assert await reader.permissions_by_role(tenant_id, [role_id]) == {
+        role_id: frozenset({"resource:read"})
+    }
     assert await reader.grants_for(principal, tenant_id, "invoice", uuid.uuid4()) == frozenset()
 
 
@@ -1207,9 +1440,34 @@ async def test_control_reader_handles_service_accounts_and_grants(control_sessio
     assert await reader.grants_for(principal, tenant_id, "invoice", resource_id) == frozenset(
         {"resource:read"}
     )
+
+    other_tenant_id = uuid.uuid4()
+    async with control_session_factory() as session:
+        session.add(
+            Tenant(
+                id=other_tenant_id,
+                slug=f"authz-{other_tenant_id.hex[:8]}",
+                name="C",
+                status="active",
+            )
+        )
+        await session.commit()
+    foreign = Principal(
+        kind=PrincipalKind.SERVICE_ACCOUNT, id=account_id, tenant_id=other_tenant_id
+    )
+    assert await reader.principal_active(foreign) is False
+
+
+async def test_control_reader_denies_platform_operators(control_session_factory):
+    reader = ControlAccessReader(control_session_factory)
+    operator = Principal(kind=PrincipalKind.PLATFORM_OPERATOR, id=uuid.uuid4())
+    assert await reader.principal_active(operator) is False
+    assert await reader.membership_active(operator, uuid.uuid4()) is False
 ```
 
-Note: the `control_session_factory` fixture creates the control tables; use a unique tenant id per test to stay idempotent. Commit the `Tenant` before inserting rows that reference it (control models declare bare FKs, so flush order is not dependency-sorted), and flush `User`/`Role` before their dependents. `DefaultPDP` asserts a session is present before scope resolution, so unit tests that reach the scope chain pass a non-`None` session stand-in while the precedence-denial tests keep `session=None` to prove no session is touched. `DefaultPDP.evaluate` keeps the `session: object` protocol signature and `cast`s to `TenantSession` after the guard.
+Note: the `control_session_factory` fixture creates the control tables; use a unique tenant id per test to stay idempotent. Commit the `Tenant` before inserting rows that reference it (control models declare bare FKs, so flush order is not dependency-sorted), and flush `User`/`Role` before their dependents. The file also covers platform-operator denial (`principal_active`/`membership_active` return `False` without opening a session) and a service account principal whose pinned `tenant_id` does not own the account id. `DefaultPDP` asserts a session is present before scope resolution, so unit tests that reach the scope chain pass a non-`None` session stand-in while the precedence-denial tests keep `session=None` to prove no session is touched. `DefaultPDP.evaluate` keeps the `session: object` protocol signature and `cast`s to `TenantSession` after the guard.
+
+Review-fix round (shipped as `fix: pdp precedence, matched provenance, cache memoization`): the Task 4 blocks above already include the fixes. (1) Precedence follows docs/jdlib/04 section 2 exactly — principal active → tenant active → membership active → binding validity → permission — proven by a unit test where principal-inactive wins over tenant-suspended. (2) `matched` is built per binding from `permissions_by_role`; the detail is `role <id> at <scope_type>:<scope_id>`, and a multi-binding test asserts one matched rule when only one role grants the permission. (3) `DefaultPDP` memoizes status gates, scope chains, bindings, per-role permissions, and grants through the injected request-scoped `AuthzCache`; `invalidate()` clears the memo and, fail-safe, it does not re-enable within the request. A counting reader proves repeated `evaluate` calls issue no extra reads and refetch after `invalidate()`. Counts: 15 unit tests (was 9), 3 integration tests (was 2).
 
 - [ ] **Step 7: Full suite, lint, type check, commit**
 

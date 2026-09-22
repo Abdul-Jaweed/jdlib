@@ -86,7 +86,8 @@ src/jdlib/
 ├── authz/
 │   ├── permissions.py          # Permission, PermissionCatalog, builtin catalog
 │   ├── resource_types.py       # ResourceTypeDefinition, ResourceTypeRegistry
-│   ├── scopes.py               # ScopeRef, ScopeType, ScopeResolver
+│   ├── scopes.py               # ScopeRef, ResourceRef, ScopeType, ScopeResolver
+│   ├── reader.py               # Binding, AccessReader, ControlAccessReader
 │   ├── pdp.py                  # PolicyDecisionPoint, DefaultPDP, Decision, MatchedRule
 │   ├── cache.py                # AuthzCache (request-scoped, invalidatable)
 │   ├── guards.py               # Enforcer, requires(), authorize()
@@ -573,21 +574,30 @@ class PermissionCatalog:
 class ResourceTypeDefinition:
     resource_type: str; model: type; tenant_owned: bool
     tenant_routed: bool; permission_namespace: str
-    def __post_init__(self) -> None: ...  # tenant_routed ⇒ tenant_owned
+    def __post_init__(self) -> None: ...
+    # tenant_routed ⇒ tenant_owned; a routed model must expose
+    # organization_id and team_id (ScopeResolver reads both)
 
-class ScopeRef(NamedTuple):
-    type: ScopeType; id: uuid.UUID | None
+@dataclass(frozen=True, slots=True)
+class ScopeRef:
+    type: ScopeType
+    id: uuid.UUID | None
 
-class ResourceRef(NamedTuple):
-    resource_type: str; resource_id: uuid.UUID
+@dataclass(frozen=True, slots=True)
+class ResourceRef:
+    resource_type: str
+    resource_id: uuid.UUID
 
 Target = ScopeRef | ResourceRef
 
 class ScopeResolver:
     async def chain(self, session: TenantSession, target: Target) -> tuple[ScopeRef, ...]: ...
 
-class Decision(NamedTuple):
-    allowed: bool; reason: str; matched: tuple[MatchedRule, ...]
+@dataclass(frozen=True, slots=True)
+class Decision:
+    allowed: bool
+    reason: str
+    matched: tuple[MatchedRule, ...]
 
 class PolicyDecisionPoint(Protocol):
     async def evaluate(self, principal: Principal, permission: str,
@@ -615,7 +625,7 @@ Declaration and explicit use:
 @requires("invoice:approve", target=ResourceScope("invoice"))
 async def approve(...): ...
 
-decision = await authorize("invoice:approve", target=ScopeRef.resource("invoice", id))
+decision = await authorize("invoice:approve", target=ResourceRef("invoice", id))
 ```
 
 Enforcement points are exactly two: the guard decorator (HTTP) and `authorize`

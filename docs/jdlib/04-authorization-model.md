@@ -295,19 +295,23 @@ tenant PDP exclusively. No principal is ever authorized by both layers.
 class PolicyDecisionPoint(Protocol):
     async def evaluate(self, principal, permission, target, context) -> Decision
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Decision:
     allowed: bool
-    reason: str                  # "no_binding" | "membership_suspended" | "grant" | ...
-    matched: tuple[MatchedRule, ...]   # scope, role, grant that produced the allow
+    reason: str                  # allowed | principal_inactive | tenant_suspended |
+                                 # membership_inactive | outside_key_scopes | no_allow
+    matched: tuple[MatchedRule, ...]   # role binding / grant provenance
 ```
 
 - Guards: `@requires("invoice:approve", scope=ResourceScope())` for endpoints;
   `authorize(principal, permission, target)` for jobs, CLI, and service code.
 - Every decision carries its reasoning; denials and allows on sensitive actions
   are auditable.
-- Resolution is memoized **per request** (scope chain, bindings, role
-  permissions) through a request-scoped `AuthzCache`. No cross-request cache in
+- Resolution is memoized **per request** through a request-scoped `AuthzCache`:
+  status gates keyed by principal/tenant, scope chains keyed by target,
+  bindings keyed by `(tenant, principal, scope chain)`, per-role permissions
+  keyed by `(tenant, role-id set)`, and grants keyed by
+  `(tenant, principal, resource type, resource id)`. No cross-request cache in
   v1.
 - Cache invalidation (frozen, conservative): any attempted authorization-state
   mutation within a request invalidates the request-scoped cache immediately —
@@ -318,7 +322,9 @@ class Decision:
   mutation must never be followed by a stale cached allow.
 - Tests: `test_authorization_cache_invalidated_after_role_mutation`,
   `..._after_binding_mutation`, `..._after_grant_mutation`,
-  `..._after_ownership_change`, plus a direct `test_pdp_cache_invalidation`.
+  `..._after_ownership_change`, plus direct PDP tests
+  `test_evaluate_memoizes_reader_and_scope_calls` and
+  `test_cache_invalidate_forces_refetch`.
 - `Decision` is advisory to the PEP; the framework guards and `AccessControl`
   are the only supported enforcement points.
 
