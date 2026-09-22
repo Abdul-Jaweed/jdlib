@@ -452,6 +452,12 @@ git commit -m "feat: access control roles with anti-escalation"
 **Interfaces:**
 - Produces: `bind_role(tenant_id, role_id, *, principal_type, principal_id, scope_type, scope_id, actor_id, actor_principal) -> RoleBinding`; `unbind_role(tenant_id, binding_id, *, actor_id, actor_principal) -> None`.
 
+**Additional required work (from Task 1 review — spec-mandated, must be in this task):**
+- `role:manage` gate: every role/binding mutation (`create_role`, `update_role`, `delete_role`, `bind_role`, `unbind_role`) must call a `_require_permission(tenant_id, "role:manage", actor_principal)` helper that raises `AuthorizationError` when the actor lacks it (seed `role:manage` in test harnesses accordingly; owner template includes it).
+- Rule 7 (owner protection): `bind_role` may assign a role named `owner` only when the actor holds the full catalog (`len(actor_permissions) == len(catalog.all())`), else `AuthorizationError`; `unbind_role` must refuse to remove the tenant's last active `owner` binding (`AuthorizationError("cannot remove the last owner")`). Add tests for both.
+- Task 1 review minors to close here: positive `delete_role` path test (no bindings/invitations; assert `role.deleted` audit); tighten the update-escalation test to `RoleEscalationBlocked`; qualify `07`'s envelope claim (USER `id != user_id` resolves via `id` today; envelope `user_id` is a future addition) or track it.
+- Sync the Task 1 plan body with the shipped code (remove the stale `AuthorizationError("missing permissions…")` snippet and the `status == "pending"` filter) so regenerators get the fixed behavior.
+
 - [ ] **Step 1: Write the failing tests**
 
 `tests/integration/test_access_bindings.py`:
