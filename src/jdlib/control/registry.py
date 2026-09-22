@@ -430,7 +430,6 @@ class TenantRegistry:
             placement: TenantPlacement | None = await session.get(TenantPlacement, tenant_id)
             if placement is None:
                 raise ProvisioningError("tenant is missing a placement record")
-            record = _record(tenant, placement)
             metadata: dict[str, object] = {"mode": mode.value}
             if mode is DeprovisionMode.ARCHIVE:
                 if children:
@@ -446,6 +445,7 @@ class TenantRegistry:
                 )
                 await session.commit()
                 return tenant
+            record = _record(tenant, placement)
             strategy = self._strategy_for(placement)
             _apply_status(tenant, TenantStatus.DEPROVISIONING, reason=None)
             await session.commit()
@@ -460,6 +460,10 @@ class TenantRegistry:
                     sa.select(Tenant.id).where(Tenant.parent_tenant_id == tenant_id)
                 )
             ).scalars().all()
+            if children and not detach_children:
+                raise TenantOperationInProgress(
+                    f"tenant {tenant.slug} gained children during deprovision"
+                )
             if children:
                 await self._detach_children(session, tenant_id)
                 metadata["detach_children"] = True
@@ -493,7 +497,7 @@ class TenantRegistry:
             counts[name] = int(getattr(result, "rowcount", 0) or 0)
         return counts
 
-    async def assert_servable(self, tenant_id: uuid.UUID) -> Tenant:
+    async def assert_servable(self, tenant_id: uuid.UUID) -> TenantRecord:
         async with await self._control() as session:
             tenant = await self._tenant(session, tenant_id)
             state: TenantMigrationState | None = await session.get(
@@ -504,7 +508,10 @@ class TenantRegistry:
             )
             if error is not None:
                 raise TenantSuspended(error)
-            return tenant
+            placement: TenantPlacement | None = await session.get(TenantPlacement, tenant_id)
+            if placement is None:
+                raise ProvisioningError("tenant is missing a placement record")
+            return _record(tenant, placement)
 
     async def list_for_user(self, user_id: uuid.UUID) -> list[Tenant]:
         async with await self._control() as session:

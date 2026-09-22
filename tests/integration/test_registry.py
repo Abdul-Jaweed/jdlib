@@ -8,6 +8,7 @@ import pytest
 import sqlalchemy as sa
 
 from jdlib._uuid import uuid7
+from jdlib.context import TenantRecord
 from jdlib.control.audit import RecordingPlatformAudit
 from jdlib.control.enums import MigrationStatus, PlacementStrategy, TenantStatus
 from jdlib.control.models import (
@@ -485,7 +486,24 @@ async def test_failure_audit_error_prevents_failure_state_commit(control_session
 async def test_assert_servable_returns_active_tenant(control_session_factory):
     registry, _ = _registry(control_session_factory)
     tenant = await _active(registry, "servable")
-    assert (await registry.assert_servable(tenant.id)).id == tenant.id
+    record = await registry.assert_servable(tenant.id)
+    assert record == TenantRecord(
+        id=tenant.id,
+        slug=tenant.slug,
+        status=TenantStatus.ACTIVE,
+        strategy=PlacementStrategy.SHARED,
+    )
+
+
+async def test_assert_servable_missing_placement_raises(control_session_factory):
+    registry, _ = _registry(control_session_factory)
+    tenant = await _active(registry, "servable-noplace")
+    await _execute(
+        control_session_factory,
+        sa.delete(TenantPlacement).where(TenantPlacement.tenant_id == tenant.id),
+    )
+    with pytest.raises(ProvisioningError):
+        await registry.assert_servable(tenant.id)
 
 
 async def test_assert_servable_requires_migration_success(control_session_factory):
@@ -684,6 +702,37 @@ async def test_deprovision_superseded_after_lock_release_raises(
     assert (await registry.get(parent.id)).status == TenantStatus.ARCHIVED
     assert (await registry.get(child.id)).parent_tenant_id == parent.id
     assert set((await _access_counts(control_session_factory, parent.id)).values()) == {1}
+
+
+async def test_deprovision_child_race_fails_closed(control_session_factory, monkeypatch):
+    registry, _ = _registry(control_session_factory)
+    parent = await _active(registry, "childrace")
+    await registry.archive(parent.id)
+    original_lock = registry._lock
+    lock_calls = 0
+    child_id: uuid.UUID | None = None
+
+    async def racing_lock(session, tenant_id):
+        nonlocal lock_calls, child_id
+        lock_calls += 1
+        if lock_calls == 2:
+            child = await registry.create(
+                slug="late-child",
+                name="Late Child",
+                strategy=PlacementStrategy.SHARED,
+                target_handle="default",
+                parent_tenant_id=tenant_id,
+            )
+            child_id = child.id
+        await original_lock(session, tenant_id)
+
+    monkeypatch.setattr(registry, "_lock", racing_lock)
+    with pytest.raises(TenantOperationInProgress):
+        await registry.deprovision(parent.id, mode=DeprovisionMode.PURGE)
+    assert lock_calls == 2
+    assert child_id is not None
+    assert (await registry.get(parent.id)).status == TenantStatus.DEPROVISIONING
+    assert (await registry.get(child_id)).parent_tenant_id == parent.id
 
 
 async def test_deprovision_archive_ignores_unregistered_strategy(control_session_factory):

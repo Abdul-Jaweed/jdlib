@@ -443,7 +443,7 @@ class TenantRegistry:
                        actor: Principal) -> TenantRelocation: ...
     async def resume_relocation(self, tenant_id: uuid.UUID, *, actor: Principal) -> TenantRelocation: ...
     async def rollback_relocation(self, tenant_id: uuid.UUID, *, actor: Principal) -> TenantRelocation: ...
-    async def assert_servable(self, tenant_id: uuid.UUID) -> Tenant: ...
+    async def assert_servable(self, tenant_id: uuid.UUID) -> TenantRecord: ...
     async def list_for_user(self, user_id: uuid.UUID) -> Sequence[Tenant]: ...
 
 class AccessControl:
@@ -473,9 +473,10 @@ a raw control-plane session.
 `jdlib.persistence.strategies.deprovision` — the registry imports it from the
 strategy layer because the mode selects the `IsolationStrategy.deprovision`
 behavior. `deprovision` returns the control-plane `Tenant` row after re-reading
-it under the (re-acquired) lifecycle lock; `assert_servable` loads the row,
-migration state, and relocation in one session without taking the lifecycle
-lock and returns the loaded row.
+it under the (re-acquired) lifecycle lock; `assert_servable` loads the tenant,
+migration state, relocation, and placement in one session without taking the
+lifecycle lock and returns the loaded row as a `TenantRecord` (missing placement
+raises `ProvisioningError`).
 
 Relocation record and phases:
 
