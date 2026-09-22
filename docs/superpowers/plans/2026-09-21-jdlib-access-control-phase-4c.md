@@ -1179,7 +1179,7 @@ git commit -m "feat: resource grants and ownership transfer"
 - Create: `tests/integration/test_access_invitations.py`
 
 **Interfaces:**
-- Produces: `invite(tenant_id, *, email, role_id, scope_type, scope_id, invited_by, ttl=timedelta(days=7)) -> tuple[Invitation, str]` (returns raw token once); `accept_invitation(token, *, user_id) -> Membership`.
+- Produces: `invite(tenant_id, *, email, role_id, scope_type, scope_id, invited_by, actor_principal, ttl=timedelta(days=7)) -> tuple[Invitation, str]` (returns raw token once; `member:invite` gate); `accept_invitation(token, *, user_id) -> Membership` (self-service, no gate).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1417,7 +1417,16 @@ git commit -m "feat: invitations with hashed single-use tokens"
 - Interfaces correction: `invite(..., ttl=timedelta(days=7))` accepts the request-scoped TTL; `accept_invitation(token, *, user_id) -> Membership` has no `actor_principal` — the invitee `user_id` is the audit actor.
 - Token format: `build_invitation_token()` uses `secrets.token_hex(16)` for the id and `secrets.token_hex(32)` for the secret (the sketch's `token_urlsafe` was dropped); at rest the secret is Argon2id-hashed through a module-level `PasswordHasher`.
 - `accept_invitation` validates the invitation's scope placement before the atomic membership + binding write: tenant scope must not carry a `scope_id`; org/team scopes require one and resolve through the injected `ScopeLookup` (`InvalidReference` when missing, `CrossTenantReferenceError` when foreign/soft-deleted, `AuthorizationError` when the lookup is not configured). `invitation.created`/`invitation.accepted` are recorded before commit.
-- Shipped tests: 11 integration tests plus 3 unit tests (not the 2-test sketch), covering Argon2id hash-at-rest, token uniqueness, malformed/tampered tokens, expiry and terminal status, org-scope failure modes, and audit entries. Authoritative snippets live in `src/jdlib/authz/access.py`, `tests/integration/test_access_invitations.py`, and `tests/unit/test_invitation_tokens.py`.
+- Shipped tests: 20 integration tests plus 4 unit tests, covering Argon2id hash-at-rest, token uniqueness, malformed/tampered/invalid-hash tokens, expiry and terminal status, scope failure modes, invite authorization, role↔scope compatibility at invite and accept, re-invite and existing-member idempotency, cache invalidation, and audit entries. Authoritative snippets live in `src/jdlib/authz/access.py`, `tests/integration/test_access_invitations.py`, and `tests/unit/test_invitation_tokens.py`.
+- Final-wave counts: full suite `359 passed`; `ruff` and strict `mypy` clean.
+
+**Final review wave (fix commit — `fix: invitation idempotency, scope compatibility, invite gate`):** authoritative snippets live in `src/jdlib/authz/access.py`, `tests/integration/test_access_invitations.py`, and `tests/unit/test_invitation_tokens.py`; deltas only below.
+
+- Invite authorization: `invite` takes a required `actor_principal` and gates on `member:invite` through `_require_permission` (`AuthorizationError`); `accept_invitation` stays self-service (acceptance needs no gate). Call sites/tests pass the inviter principal.
+- Duplicate pending invites: `invite` revokes any pending invitation for the same `(tenant, email, scope_type, scope_id)` (`status='revoked'`, `revoked_at`) before inserting, and holds the per-tenant advisory lock, so re-inviting replaces instead of raising `IntegrityError`.
+- Existing-member accept: `accept_invitation` reuses an active `Membership` (same row/id) instead of inserting a duplicate, creates the `RoleBinding` only when that exact binding is absent, and rejects non-active memberships with `InvalidReference("membership is <status>")`.
+- L16 role↔scope compatibility: the `allowed_scopes` check from `bind_role` (`RoleScopeMismatch`) runs at `invite` and is re-checked at `accept_invitation`; scope placement (shape + `_validate_scope`) is shared via `_validate_scope_placement`, also used by `bind_role`.
+- Minor inclusions: `verify_invitation` returns `False` for malformed stored hashes — argon2-cffi 25.1.0 has `InvalidHashError(ValueError)`, **not** a `VerificationError` subclass, so both are caught; invite/accept tests probe the shared `AuthzCache` to assert invalidation; `invite` validates scope shape before insert.
 
 ---
 

@@ -41,3 +41,10 @@ def test_verify_rejects_malformed_and_mismatched_tokens():
     assert verify_invitation(f"pat_{token_id}_{secret}", token_id, stored) is False
     assert verify_invitation(f"inv_other_{secret}", token_id, stored) is False
     assert verify_invitation(token, "other", stored) is False
+
+
+def test_verify_rejects_invalid_stored_hash():
+    token = build_invitation_token()
+    token_id, _ = _split(token)
+    assert verify_invitation(token, token_id, "not-a-password-hash") is False
+    assert verify_invitation(token, token_id, "") is False

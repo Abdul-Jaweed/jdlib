@@ -9,7 +9,7 @@ from typing import Any, Protocol, cast
 
 import sqlalchemy as sa
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
+from argon2.exceptions import InvalidHashError, VerificationError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -113,7 +113,7 @@ def verify_invitation(token: str, token_id: str, stored_hash: str) -> bool:
         return False
     try:
         return _HASHER.verify(stored_hash, parts[2])
-    except VerifyMismatchError:
+    except (VerificationError, InvalidHashError):
         return False
 
 
@@ -187,6 +187,22 @@ class AccessControl:
             raise CrossTenantReferenceError(
                 f"{scope_type} scope {scope_id}", str(tenant_id), str(record.tenant_id)
             )
+
+    async def _validate_scope_placement(
+        self, tenant_id: uuid.UUID, scope_type: str, scope_id: uuid.UUID | None
+    ) -> ScopeType:
+        try:
+            scope = ScopeType(scope_type)
+        except ValueError as exc:
+            raise InvalidReference(f"unsupported scope type: {scope_type}") from exc
+        if scope is ScopeType.TENANT:
+            if scope_id is not None:
+                raise InvalidReference("tenant scope must not carry a scope id")
+        elif scope_id is None:
+            raise InvalidReference(f"{scope_type} scope requires a scope id")
+        else:
+            await self._validate_scope(tenant_id, scope.value, scope_id)
+        return scope
 
     async def _validate_resource(
         self, tenant_id: uuid.UUID, resource_type: str, resource_id: uuid.UUID
@@ -363,17 +379,7 @@ class AccessControl:
         actor_principal: Principal,
     ) -> RoleBinding:
         held = await self._require_permission(tenant_id, "role:manage", actor_principal)
-        try:
-            scope = ScopeType(scope_type)
-        except ValueError as exc:
-            raise InvalidReference(f"unsupported scope type: {scope_type}") from exc
-        if scope is ScopeType.TENANT:
-            if scope_id is not None:
-                raise InvalidReference("tenant scope must not carry a scope id")
-        elif scope_id is None:
-            raise InvalidReference(f"{scope_type} scope requires a scope id")
-        else:
-            await self._validate_scope(tenant_id, scope.value, scope_id)
+        scope = await self._validate_scope_placement(tenant_id, scope_type, scope_id)
         async with await self._session() as session:
             role = await session.get(Role, {"tenant_id": tenant_id, "id": role_id})
             if role is None:
@@ -762,16 +768,46 @@ class AccessControl:
         scope_type: str,
         scope_id: uuid.UUID | None,
         invited_by: uuid.UUID | None,
+        actor_principal: Principal,
         ttl: timedelta = timedelta(days=7),
     ) -> tuple[Invitation, str]:
+        await self._require_permission(tenant_id, "member:invite", actor_principal)
+        scope = await self._validate_scope_placement(tenant_id, scope_type, scope_id)
         token = build_invitation_token()
         token_id = token.split("_")[1]
         secret = token.rsplit("_", 1)[1]
         self._cache.invalidate()
+        now = datetime.now(UTC)
         async with await self._session() as session:
+            await self._lock(session, tenant_id)
             role = await session.get(Role, {"tenant_id": tenant_id, "id": role_id})
             if role is None:
                 raise InvalidReference(f"role not found: {role_id}")
+            codes = (
+                await session.execute(
+                    sa.select(RolePermission.permission_code).where(
+                        RolePermission.tenant_id == tenant_id,
+                        RolePermission.role_id == role_id,
+                    )
+                )
+            ).scalars().all()
+            for code in codes:
+                permission = self._catalog.validate(code)
+                if scope not in permission.allowed_scopes:
+                    raise RoleScopeMismatch(f"{code} cannot be bound at {scope_type} scope")
+            conditions = [
+                Invitation.tenant_id == tenant_id,
+                Invitation.email == email,
+                Invitation.scope_type == scope_type,
+                Invitation.status == "pending",
+            ]
+            if scope_id is None:
+                conditions.append(Invitation.scope_id.is_(None))
+            else:
+                conditions.append(Invitation.scope_id == scope_id)
+            await session.execute(
+                sa.update(Invitation).where(*conditions).values(status="revoked", revoked_at=now)
+            )
             invitation = Invitation(
                 tenant_id=tenant_id,
                 email=email,
@@ -781,7 +817,7 @@ class AccessControl:
                 token_id=token_id,
                 token_hash=hash_invitation_secret(secret),
                 status="pending",
-                expires_at=datetime.now(UTC) + ttl,
+                expires_at=now + ttl,
                 invited_by=invited_by,
             )
             session.add(invitation)
@@ -811,38 +847,67 @@ class AccessControl:
                 raise InvalidReference(f"invitation is {invitation.status}")
             if invitation.expires_at <= datetime.now(UTC):
                 raise InvalidReference("invitation expired")
-            try:
-                scope = ScopeType(invitation.scope_type)
-            except ValueError as exc:
-                raise InvalidReference(
-                    f"unsupported scope type: {invitation.scope_type}"
-                ) from exc
-            scope_id = invitation.scope_id
-            if scope is ScopeType.TENANT:
-                if scope_id is not None:
-                    raise InvalidReference("tenant scope must not carry a scope id")
-            elif scope_id is None:
-                raise InvalidReference(f"{scope.value} scope requires a scope id")
-            else:
-                await self._validate_scope(invitation.tenant_id, scope.value, scope_id)
-            membership = Membership(
-                tenant_id=invitation.tenant_id,
-                user_id=user_id,
-                status="active",
+            scope = await self._validate_scope_placement(
+                invitation.tenant_id, invitation.scope_type, invitation.scope_id
             )
-            session.add(membership)
-            await session.flush()
-            session.add(
-                RoleBinding(
-                    tenant_id=invitation.tenant_id,
-                    role_id=invitation.role_id,
-                    principal_type="user",
-                    principal_id=user_id,
-                    scope_type=invitation.scope_type,
-                    scope_id=invitation.scope_id,
-                    created_by=invitation.invited_by,
+            codes = (
+                await session.execute(
+                    sa.select(RolePermission.permission_code).where(
+                        RolePermission.tenant_id == invitation.tenant_id,
+                        RolePermission.role_id == invitation.role_id,
+                    )
                 )
-            )
+            ).scalars().all()
+            for code in codes:
+                permission = self._catalog.validate(code)
+                if scope not in permission.allowed_scopes:
+                    raise RoleScopeMismatch(
+                        f"{code} cannot be bound at {invitation.scope_type} scope"
+                    )
+            membership = (
+                await session.execute(
+                    sa.select(Membership).where(
+                        Membership.tenant_id == invitation.tenant_id,
+                        Membership.user_id == user_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if membership is not None and membership.status != "active":
+                raise InvalidReference(f"membership is {membership.status}")
+            if membership is None:
+                membership = Membership(
+                    tenant_id=invitation.tenant_id,
+                    user_id=user_id,
+                    status="active",
+                )
+                session.add(membership)
+                await session.flush()
+            binding_conditions = [
+                RoleBinding.tenant_id == invitation.tenant_id,
+                RoleBinding.role_id == invitation.role_id,
+                RoleBinding.principal_type == "user",
+                RoleBinding.principal_id == user_id,
+                RoleBinding.scope_type == invitation.scope_type,
+            ]
+            if invitation.scope_id is None:
+                binding_conditions.append(RoleBinding.scope_id.is_(None))
+            else:
+                binding_conditions.append(RoleBinding.scope_id == invitation.scope_id)
+            existing = (
+                await session.execute(sa.select(RoleBinding).where(*binding_conditions))
+            ).scalar_one_or_none()
+            if existing is None:
+                session.add(
+                    RoleBinding(
+                        tenant_id=invitation.tenant_id,
+                        role_id=invitation.role_id,
+                        principal_type="user",
+                        principal_id=user_id,
+                        scope_type=invitation.scope_type,
+                        scope_id=invitation.scope_id,
+                        created_by=invitation.invited_by,
+                    )
+                )
             invitation.status = "accepted"
             invitation.accepted_at = datetime.now(UTC)
             await self._audit.record(
