@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import secrets
 import uuid
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, cast
 
 import sqlalchemy as sa
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -90,6 +94,27 @@ class TenantWriteSession(Protocol):
     async def execute(self, statement: sa.Executable) -> sa.Result[Any]: ...
 
     async def flush(self) -> None: ...
+
+
+_HASHER = PasswordHasher()
+
+
+def build_invitation_token() -> str:
+    return f"inv_{secrets.token_hex(16)}_{secrets.token_hex(32)}"
+
+
+def hash_invitation_secret(secret: str) -> str:
+    return _HASHER.hash(secret)
+
+
+def verify_invitation(token: str, token_id: str, stored_hash: str) -> bool:
+    parts = token.split("_")
+    if len(parts) != 3 or parts[0] != "inv" or parts[1] != token_id:
+        return False
+    try:
+        return _HASHER.verify(stored_hash, parts[2])
+    except VerifyMismatchError:
+        return False
 
 
 class AccessControl:
@@ -727,3 +752,104 @@ class AccessControl:
                     ResourceGrant.resource_id.in_(resource_ids),
                 )
             )
+
+    async def invite(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        email: str,
+        role_id: uuid.UUID,
+        scope_type: str,
+        scope_id: uuid.UUID | None,
+        invited_by: uuid.UUID | None,
+        ttl: timedelta = timedelta(days=7),
+    ) -> tuple[Invitation, str]:
+        token = build_invitation_token()
+        token_id = token.split("_")[1]
+        secret = token.rsplit("_", 1)[1]
+        self._cache.invalidate()
+        async with await self._session() as session:
+            role = await session.get(Role, {"tenant_id": tenant_id, "id": role_id})
+            if role is None:
+                raise InvalidReference(f"role not found: {role_id}")
+            invitation = Invitation(
+                tenant_id=tenant_id,
+                email=email,
+                scope_type=scope_type,
+                scope_id=scope_id,
+                role_id=role_id,
+                token_id=token_id,
+                token_hash=hash_invitation_secret(secret),
+                status="pending",
+                expires_at=datetime.now(UTC) + ttl,
+                invited_by=invited_by,
+            )
+            session.add(invitation)
+            await self._audit.record(
+                action="invitation.created",
+                tenant_id=tenant_id,
+                actor_id=invited_by,
+                metadata={"email": email, "role_id": str(role_id)},
+            )
+            await session.commit()
+            return invitation, token
+
+    async def accept_invitation(self, token: str, *, user_id: uuid.UUID) -> Membership:
+        token_id = token.split("_")[1] if token.startswith("inv_") else ""
+        self._cache.invalidate()
+        async with await self._session() as session:
+            invitation = (
+                await session.execute(
+                    sa.select(Invitation).where(Invitation.token_id == token_id)
+                )
+            ).scalar_one_or_none()
+            if invitation is None or not verify_invitation(
+                token, invitation.token_id, invitation.token_hash
+            ):
+                raise InvalidReference("invalid invitation token")
+            if invitation.status != "pending":
+                raise InvalidReference(f"invitation is {invitation.status}")
+            if invitation.expires_at <= datetime.now(UTC):
+                raise InvalidReference("invitation expired")
+            try:
+                scope = ScopeType(invitation.scope_type)
+            except ValueError as exc:
+                raise InvalidReference(
+                    f"unsupported scope type: {invitation.scope_type}"
+                ) from exc
+            scope_id = invitation.scope_id
+            if scope is ScopeType.TENANT:
+                if scope_id is not None:
+                    raise InvalidReference("tenant scope must not carry a scope id")
+            elif scope_id is None:
+                raise InvalidReference(f"{scope.value} scope requires a scope id")
+            else:
+                await self._validate_scope(invitation.tenant_id, scope.value, scope_id)
+            membership = Membership(
+                tenant_id=invitation.tenant_id,
+                user_id=user_id,
+                status="active",
+            )
+            session.add(membership)
+            await session.flush()
+            session.add(
+                RoleBinding(
+                    tenant_id=invitation.tenant_id,
+                    role_id=invitation.role_id,
+                    principal_type="user",
+                    principal_id=user_id,
+                    scope_type=invitation.scope_type,
+                    scope_id=invitation.scope_id,
+                    created_by=invitation.invited_by,
+                )
+            )
+            invitation.status = "accepted"
+            invitation.accepted_at = datetime.now(UTC)
+            await self._audit.record(
+                action="invitation.accepted",
+                tenant_id=invitation.tenant_id,
+                actor_id=user_id,
+                metadata={"invitation_id": str(invitation.id)},
+            )
+            await session.commit()
+            return membership
