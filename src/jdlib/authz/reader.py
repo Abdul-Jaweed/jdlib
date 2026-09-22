@@ -19,6 +19,12 @@ class Binding(NamedTuple):
     scope_id: uuid.UUID | None
 
 
+def principal_key(principal: Principal) -> uuid.UUID:
+    if principal.kind is PrincipalKind.USER and principal.user_id is not None:
+        return principal.user_id
+    return principal.id
+
+
 class AccessReader(Protocol):
     async def tenant_status_of(self, tenant_id: uuid.UUID) -> str: ...
 
@@ -71,7 +77,7 @@ class ControlAccessReader:
         if principal.kind is PrincipalKind.USER:
             from jdlib.control.models import User
 
-            user_id = principal.user_id if principal.user_id is not None else principal.id
+            user_id = principal_key(principal)
             async with await self._session() as session:
                 status = (
                     await session.execute(sa.select(User.status).where(User.id == user_id))
@@ -79,7 +85,9 @@ class ControlAccessReader:
             return status == "active"
         from jdlib.control.models import ServiceAccount
 
-        query = sa.select(ServiceAccount.status).where(ServiceAccount.id == principal.id)
+        query = sa.select(ServiceAccount.status).where(
+            ServiceAccount.id == principal_key(principal)
+        )
         if principal.tenant_id is not None:
             query = query.where(ServiceAccount.tenant_id == principal.tenant_id)
         async with await self._session() as session:
@@ -91,7 +99,7 @@ class ControlAccessReader:
             return False
         if principal.kind is PrincipalKind.SERVICE_ACCOUNT:
             return True
-        user_id = principal.user_id if principal.user_id is not None else principal.id
+        user_id = principal_key(principal)
         async with await self._session() as session:
             status = (
                 await session.execute(
@@ -116,7 +124,7 @@ class ControlAccessReader:
                     .where(
                         RoleBinding.tenant_id == tenant_id,
                         RoleBinding.principal_type == principal.kind.value,
-                        RoleBinding.principal_id == principal.id,
+                        RoleBinding.principal_id == principal_key(principal),
                     )
                 )
             ).all()
@@ -158,7 +166,7 @@ class ControlAccessReader:
                         ResourceGrant.resource_type == resource_type,
                         ResourceGrant.resource_id == resource_id,
                         ResourceGrant.principal_type == principal.kind.value,
-                        ResourceGrant.principal_id == principal.id,
+                        ResourceGrant.principal_id == principal_key(principal),
                     )
                 )
             ).scalars().all()

@@ -26,6 +26,7 @@ from jdlib.errors import (
     AuthorizationError,
     CrossTenantReferenceError,
     InvalidReference,
+    RoleEscalationBlocked,
     RoleScopeMismatch,
 )
 
@@ -58,7 +59,10 @@ class AccessControl:
         by_role = await self._reader.permissions_by_role(
             tenant_id, [binding.role_id for binding in bindings]
         )
-        return frozenset().union(*by_role.values()) if by_role else frozenset()
+        held = frozenset().union(*by_role.values()) if by_role else frozenset()
+        if principal.scopes is not None:
+            return held & principal.scopes
+        return held
 
     async def _require_subset(
         self, tenant_id: uuid.UUID, permissions: Collection[str], principal: Principal
@@ -66,7 +70,7 @@ class AccessControl:
         held = await self.actor_permissions(tenant_id, principal)
         missing = set(permissions) - held
         if missing:
-            raise AuthorizationError(f"missing permissions: {sorted(missing)}")
+            raise RoleEscalationBlocked(f"missing permissions: {sorted(missing)}")
 
     def _validate_codes(self, permissions: Collection[str]) -> None:
         for code in permissions:
@@ -127,6 +131,18 @@ class AccessControl:
                 raise InvalidReference(f"role not found: {role_id}")
             if role.is_system:
                 raise AuthorizationError("system roles are immutable")
+            existing_codes = set(
+                (
+                    await session.execute(
+                        sa.select(RolePermission.permission_code).where(
+                            RolePermission.tenant_id == tenant_id,
+                            RolePermission.role_id == role_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
             await session.execute(
                 sa.delete(RolePermission).where(
                     RolePermission.tenant_id == tenant_id, RolePermission.role_id == role_id
@@ -136,11 +152,17 @@ class AccessControl:
                 session.add(
                     RolePermission(tenant_id=tenant_id, role_id=role_id, permission_code=code)
                 )
+            new_codes = set(permissions)
             await self._audit.record(
                 action="role.permissions_changed",
                 tenant_id=tenant_id,
                 actor_id=actor_id,
-                metadata={"role_id": str(role_id), "permissions": sorted(permissions)},
+                metadata={
+                    "role_id": str(role_id),
+                    "permissions": sorted(new_codes),
+                    "added": sorted(new_codes - existing_codes),
+                    "removed": sorted(existing_codes - new_codes),
+                },
             )
             await session.commit()
             return role
@@ -172,12 +194,11 @@ class AccessControl:
                     sa.select(sa.func.count()).select_from(Invitation).where(
                         Invitation.tenant_id == tenant_id,
                         Invitation.role_id == role_id,
-                        Invitation.status == "pending",
                     )
                 )
             ).scalar_one()
             if bindings or invitations:
-                raise AuthorizationError("role has bindings or pending invitations")
+                raise AuthorizationError("role has bindings or invitations")
             await session.execute(
                 sa.delete(RolePermission).where(
                     RolePermission.tenant_id == tenant_id, RolePermission.role_id == role_id

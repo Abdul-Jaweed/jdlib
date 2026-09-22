@@ -608,6 +608,12 @@ class DefaultPDP(PolicyDecisionPoint):
     # Namespace/scope validation for binding/grants lives in AccessControl.
     # Memoization goes through AuthzCache.
 
+# ControlAccessReader keys every principal-owned lookup (bindings, grants,
+# activity, membership) through one canonical principal id: for USER
+# principals `principal.user_id if principal.user_id is not None else
+# principal.id`, for SERVICE_ACCOUNT principals `principal.id` — so
+# envelope/job reconstruction that carries only `id` still resolves.
+
 class AuthzCache:
     """Request-scoped only. AccessControl calls invalidate() before any
     authorization-state mutation (role, permission, binding, grant, membership,

@@ -119,3 +119,68 @@ async def test_control_reader_denies_platform_operators(control_session_factory)
     operator = Principal(kind=PrincipalKind.PLATFORM_OPERATOR, id=uuid.uuid4())
     assert await reader.principal_active(operator) is False
     assert await reader.membership_active(operator, uuid.uuid4()) is False
+
+
+async def test_control_reader_keys_user_lookups_by_canonical_user_id(control_session_factory):
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    principal_id = uuid.uuid4()
+    role_id = uuid.uuid4()
+    resource_id = uuid.uuid4()
+    async with control_session_factory() as session:
+        session.add(
+            Tenant(id=tenant_id, slug=f"authz-{tenant_id.hex[:8]}", name="D", status="active")
+        )
+        await session.commit()
+
+    async with control_session_factory() as session:
+        session.add(User(id=user_id, status="active"))
+        session.add(Role(tenant_id=tenant_id, id=role_id, name=f"canon-{role_id.hex[:6]}"))
+        await session.flush()
+        session.add(
+            Membership(tenant_id=tenant_id, id=uuid.uuid4(), user_id=user_id, status="active")
+        )
+        session.add(
+            RolePermission(tenant_id=tenant_id, role_id=role_id, permission_code="resource:read")
+        )
+        session.add(
+            RoleBinding(
+                tenant_id=tenant_id,
+                id=uuid.uuid4(),
+                role_id=role_id,
+                principal_type="user",
+                principal_id=user_id,
+                scope_type="tenant",
+            )
+        )
+        session.add(
+            ResourceGrant(
+                tenant_id=tenant_id,
+                id=uuid.uuid4(),
+                resource_type="invoice",
+                resource_id=resource_id,
+                principal_type="user",
+                principal_id=user_id,
+                permission_code="resource:read",
+            )
+        )
+        await session.commit()
+
+    reader = ControlAccessReader(control_session_factory)
+    envelope_principal = Principal(kind=PrincipalKind.USER, id=principal_id, user_id=user_id)
+    assert await reader.principal_active(envelope_principal) is True
+    assert await reader.membership_active(envelope_principal, tenant_id) is True
+    bindings = await reader.bindings_for(envelope_principal, tenant_id, {(ScopeType.TENANT, None)})
+    assert [binding.role_id for binding in bindings] == [role_id]
+    assert await reader.grants_for(envelope_principal, tenant_id, "invoice", resource_id) == (
+        frozenset({"resource:read"})
+    )
+
+    job_principal = Principal(kind=PrincipalKind.USER, id=user_id)
+    assert await reader.principal_active(job_principal) is True
+    assert await reader.membership_active(job_principal, tenant_id) is True
+    bindings = await reader.bindings_for(job_principal, tenant_id, {(ScopeType.TENANT, None)})
+    assert [binding.role_id for binding in bindings] == [role_id]
+    assert await reader.grants_for(job_principal, tenant_id, "invoice", resource_id) == (
+        frozenset({"resource:read"})
+    )

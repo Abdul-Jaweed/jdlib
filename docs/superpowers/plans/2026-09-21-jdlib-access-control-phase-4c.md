@@ -431,6 +431,16 @@ git add src/jdlib/authz/access.py tests/integration/test_access_roles.py
 git commit -m "feat: access control roles with anti-escalation"
 ```
 
+**Review fixes applied (follow-up commit):**
+
+- Key-scope narrowing: `actor_permissions` intersects the role-permission union with `principal.scopes` when scopes are set (04 §3 rule 7).
+- Escalation errors: `_require_subset` raises `RoleEscalationBlocked` (message unchanged; existing `AuthorizationError` assertions hold by inheritance).
+- Audit diff: `update_role` reads the existing codes before replacing and records `added`/`removed` in `role.permissions_changed`.
+- Terminal invitations: `delete_role` blocks on any invitation row referencing the role (accepted/expired/revoked included), not only `pending`.
+- Canonical principal id back-port: `ControlAccessReader` keys all principal-owned lookups (bindings, grants, activity, membership) through `principal_key()` — USER: `user_id if user_id is not None else id`; SERVICE_ACCOUNT: `id` — so envelope/job reconstruction carrying only `id` still resolves.
+
+**Deferred (assigned, no code in Task 1):** rule 7 owner-only assignment and last-owner protection, plus the `role:manage` gate on role mutations, are Task 2 work; the `PlatformAudit` write sharing the mutation transaction is convention only (no same-transaction guarantee) — tracked for Plan 6 audit sinks.
+
 ---
 
 ### Task 2: Bindings with scope compatibility
