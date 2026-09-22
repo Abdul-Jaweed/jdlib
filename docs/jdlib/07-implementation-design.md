@@ -611,8 +611,10 @@ class DefaultPDP(PolicyDecisionPoint):
 # ControlAccessReader keys every principal-owned lookup (bindings, grants,
 # activity, membership) through one canonical principal id: for USER
 # principals `principal.user_id if principal.user_id is not None else
-# principal.id`, for SERVICE_ACCOUNT principals `principal.id` — so
-# envelope/job reconstruction that carries only `id` still resolves.
+# principal.id`, for SERVICE_ACCOUNT principals `principal.id`. Envelope and
+# job reconstruction carry only `id`, so they resolve via `id` today;
+# carrying `user_id` on the envelope for USER principals whose `id` differs
+# from their `user_id` is a future addition.
 
 class AuthzCache:
     """Request-scoped only. AccessControl calls invalidate() before any

@@ -243,7 +243,7 @@ from jdlib.control.models import (
 from jdlib.control.session import ControlPlaneSession
 from jdlib.context import Principal
 from jdlib.control.enums import PrincipalType
-from jdlib.errors import AuthorizationError, InvalidReference
+from jdlib.errors import AuthorizationError, InvalidReference, RoleEscalationBlocked
 
 
 class AccessControl:
@@ -284,7 +284,7 @@ class AccessControl:
         held = await self.actor_permissions(tenant_id, principal)
         missing = set(permissions) - held
         if missing:
-            raise AuthorizationError(f"missing permissions: {sorted(missing)}")
+            raise RoleEscalationBlocked(f"missing permissions: {sorted(missing)}")
 
     def _validate_codes(self, permissions: Collection[str]) -> None:
         for code in permissions:
@@ -394,12 +394,11 @@ class AccessControl:
                     sa.select(sa.func.count()).select_from(Invitation).where(
                         Invitation.tenant_id == tenant_id,
                         Invitation.role_id == role_id,
-                        Invitation.status == "pending",
                     )
                 )
             ).scalar_one()
             if bindings or invitations:
-                raise AuthorizationError("role has bindings or pending invitations")
+                raise AuthorizationError("role has bindings or invitations")
             await session.execute(
                 sa.delete(RolePermission).where(
                     RolePermission.tenant_id == tenant_id, RolePermission.role_id == role_id
@@ -437,7 +436,7 @@ git commit -m "feat: access control roles with anti-escalation"
 - Escalation errors: `_require_subset` raises `RoleEscalationBlocked` (message unchanged; existing `AuthorizationError` assertions hold by inheritance).
 - Audit diff: `update_role` reads the existing codes before replacing and records `added`/`removed` in `role.permissions_changed`.
 - Terminal invitations: `delete_role` blocks on any invitation row referencing the role (accepted/expired/revoked included), not only `pending`.
-- Canonical principal id back-port: `ControlAccessReader` keys all principal-owned lookups (bindings, grants, activity, membership) through `principal_key()` — USER: `user_id if user_id is not None else id`; SERVICE_ACCOUNT: `id` — so envelope/job reconstruction carrying only `id` still resolves.
+- Canonical principal id back-port: `ControlAccessReader` keys all principal-owned lookups (bindings, grants, activity, membership) through `principal_key()` — USER: `user_id if user_id is not None else id`; SERVICE_ACCOUNT: `id` — so envelope/job reconstruction, which carries only `id`, resolves via `id` today (carrying `user_id` on the envelope for USER principals whose `id` differs from their `user_id` is a future addition).
 
 **Deferred (assigned, no code in Task 1):** rule 7 owner-only assignment and last-owner protection, plus the `role:manage` gate on role mutations, are Task 2 work; the `PlatformAudit` write sharing the mutation transaction is convention only (no same-transaction guarantee) — tracked for Plan 6 audit sinks.
 

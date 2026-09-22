@@ -72,6 +72,14 @@ class AccessControl:
         if missing:
             raise RoleEscalationBlocked(f"missing permissions: {sorted(missing)}")
 
+    async def _require_permission(
+        self, tenant_id: uuid.UUID, permission: str, principal: Principal
+    ) -> frozenset[str]:
+        held = await self.actor_permissions(tenant_id, principal)
+        if permission not in held:
+            raise AuthorizationError(f"missing permission: {permission}")
+        return held
+
     def _validate_codes(self, permissions: Collection[str]) -> None:
         for code in permissions:
             self._catalog.validate(code)
@@ -86,6 +94,7 @@ class AccessControl:
         actor_principal: Principal,
         is_system: bool = False,
     ) -> Role:
+        await self._require_permission(tenant_id, "role:manage", actor_principal)
         self._validate_codes(permissions)
         await self._require_subset(tenant_id, permissions, actor_principal)
         self._cache.invalidate()
@@ -122,6 +131,7 @@ class AccessControl:
         actor_id: uuid.UUID | None,
         actor_principal: Principal,
     ) -> Role:
+        await self._require_permission(tenant_id, "role:manage", actor_principal)
         self._validate_codes(permissions)
         await self._require_subset(tenant_id, permissions, actor_principal)
         self._cache.invalidate()
@@ -175,6 +185,7 @@ class AccessControl:
         actor_id: uuid.UUID | None,
         actor_principal: Principal,
     ) -> None:
+        await self._require_permission(tenant_id, "role:manage", actor_principal)
         self._cache.invalidate()
         async with await self._session() as session:
             role = await session.get(Role, {"tenant_id": tenant_id, "id": role_id})
@@ -225,6 +236,7 @@ class AccessControl:
         actor_id: uuid.UUID | None,
         actor_principal: Principal,
     ) -> RoleBinding:
+        held = await self._require_permission(tenant_id, "role:manage", actor_principal)
         if scope_type == "tenant" and scope_id is not None:
             raise InvalidReference("tenant scope must not carry a scope id")
         if scope_type in {"org", "team"} and scope_id is None:
@@ -233,6 +245,8 @@ class AccessControl:
             role = await session.get(Role, {"tenant_id": tenant_id, "id": role_id})
             if role is None:
                 raise InvalidReference(f"role not found: {role_id}")
+            if role.name == "owner" and len(held) != len(self._catalog.all()):
+                raise AuthorizationError("only a full-catalog actor may assign the owner role")
             codes = (
                 await session.execute(
                     sa.select(RolePermission.permission_code).where(
@@ -298,3 +312,50 @@ class AccessControl:
         ).scalar_one_or_none()
         if membership is None:
             raise CrossTenantReferenceError("membership", str(tenant_id), str(principal_id))
+
+    async def unbind_role(
+        self,
+        tenant_id: uuid.UUID,
+        binding_id: uuid.UUID,
+        *,
+        actor_id: uuid.UUID | None,
+        actor_principal: Principal,
+    ) -> None:
+        await self._require_permission(tenant_id, "role:manage", actor_principal)
+        self._cache.invalidate()
+        async with await self._session() as session:
+            binding = await session.get(
+                RoleBinding, {"tenant_id": tenant_id, "id": binding_id}
+            )
+            if binding is None:
+                raise InvalidReference(f"binding not found: {binding_id}")
+            role = await session.get(Role, {"tenant_id": tenant_id, "id": binding.role_id})
+            if role is not None and role.name == "owner":
+                remaining = (
+                    await session.execute(
+                        sa.select(sa.func.count())
+                        .select_from(RoleBinding)
+                        .join(
+                            Role,
+                            sa.and_(
+                                Role.tenant_id == RoleBinding.tenant_id,
+                                Role.id == RoleBinding.role_id,
+                            ),
+                        )
+                        .where(
+                            RoleBinding.tenant_id == tenant_id,
+                            Role.name == "owner",
+                            RoleBinding.id != binding_id,
+                        )
+                    )
+                ).scalar_one()
+                if remaining == 0:
+                    raise AuthorizationError("cannot remove the last owner")
+            await session.delete(binding)
+            await self._audit.record(
+                action="binding.removed",
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                metadata={"binding_id": str(binding_id)},
+            )
+            await session.commit()

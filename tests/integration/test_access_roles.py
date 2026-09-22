@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+import sqlalchemy as sa
 
 from jdlib.authz.access import AccessControl
 from jdlib.authz.cache import AuthzCache
@@ -38,6 +39,14 @@ async def _tenant(control_session_factory) -> uuid.UUID:
 
 
 async def _seed_actor(control_session_factory, tenant_id: uuid.UUID, permissions: set[str]):
+    return await _seed_principal_actor(
+        control_session_factory, tenant_id, permissions | {"role:manage"}
+    )
+
+
+async def _seed_principal_actor(
+    control_session_factory, tenant_id: uuid.UUID, permissions: set[str]
+):
     actor = _principal("owner")
     role_id = uuid.uuid4()
     async with control_session_factory() as session:
@@ -167,7 +176,7 @@ async def test_update_role_revalidates_subset_and_invalidates_cache(control_sess
         actor_principal=actor,
     )
     assert updated.id == role.id
-    with pytest.raises(AuthorizationError):
+    with pytest.raises(RoleEscalationBlocked):
         await control.update_role(
             tenant_id,
             role.id,
@@ -245,8 +254,8 @@ async def test_scoped_service_account_cannot_create_role_outside_scopes(control_
     actor = await _seed_service_account_actor(
         control_session_factory,
         tenant_id,
-        {"resource:read", "resource:update"},
-        {"resource:read"},
+        {"resource:read", "resource:update", "role:manage"},
+        {"resource:read", "role:manage"},
     )
     control, _ = _access(control_session_factory)
     with pytest.raises(RoleEscalationBlocked):
@@ -264,8 +273,8 @@ async def test_scoped_service_account_cannot_bind_role_outside_scopes(control_se
     actor = await _seed_service_account_actor(
         control_session_factory,
         tenant_id,
-        {"resource:read", "resource:update"},
-        {"resource:read"},
+        {"resource:read", "resource:update", "role:manage"},
+        {"resource:read", "role:manage"},
     )
     control, _ = _access(control_session_factory)
     target_role_id = uuid.uuid4()
@@ -346,3 +355,82 @@ async def test_delete_role_blocked_by_terminal_invitation(control_session_factor
         await session.commit()
     with pytest.raises(AuthorizationError):
         await control.delete_role(tenant_id, role.id, actor_id=actor.user_id, actor_principal=actor)
+
+
+async def test_delete_role_removes_role_and_audits(control_session_factory):
+    tenant_id = await _tenant(control_session_factory)
+    actor = await _seed_actor(control_session_factory, tenant_id, {"resource:read"})
+    control, audit = _access(control_session_factory)
+    role = await control.create_role(
+        tenant_id, "disposable", {"resource:read"}, actor_id=actor.user_id, actor_principal=actor
+    )
+    await control.delete_role(tenant_id, role.id, actor_id=actor.user_id, actor_principal=actor)
+    assert audit.entries[-1]["action"] == "role.deleted"
+    async with control_session_factory() as session:
+        remaining = await session.get(Role, {"tenant_id": tenant_id, "id": role.id})
+        codes = (
+            await session.execute(
+                sa.select(RolePermission.permission_code).where(
+                    RolePermission.tenant_id == tenant_id, RolePermission.role_id == role.id
+                )
+            )
+        ).scalars().all()
+    assert remaining is None
+    assert codes == []
+
+
+async def test_role_manage_gate_blocks_role_and_binding_mutations(control_session_factory):
+    tenant_id = await _tenant(control_session_factory)
+    actor = await _seed_principal_actor(control_session_factory, tenant_id, {"resource:read"})
+    role_id = uuid.uuid4()
+    binding_id = uuid.uuid4()
+    member = _principal("member")
+    async with control_session_factory() as session:
+        session.add(User(id=member.user_id, status="active"))
+        session.add(Role(tenant_id=tenant_id, id=role_id, name="gated"))
+        await session.flush()
+        session.add(
+            Membership(
+                tenant_id=tenant_id, id=uuid.uuid4(), user_id=member.user_id, status="active"
+            )
+        )
+        session.add(
+            RolePermission(tenant_id=tenant_id, role_id=role_id, permission_code="resource:read")
+        )
+        session.add(
+            RoleBinding(
+                tenant_id=tenant_id,
+                id=binding_id,
+                role_id=role_id,
+                principal_type="user",
+                principal_id=member.user_id,
+                scope_type="tenant",
+            )
+        )
+        await session.commit()
+    control, _ = _access(control_session_factory)
+    with pytest.raises(AuthorizationError, match="missing permission: role:manage"):
+        await control.create_role(
+            tenant_id, "gated-new", {"resource:read"}, actor_id=actor.user_id, actor_principal=actor
+        )
+    with pytest.raises(AuthorizationError, match="missing permission: role:manage"):
+        await control.update_role(
+            tenant_id, role_id, {"resource:read"}, actor_id=actor.user_id, actor_principal=actor
+        )
+    with pytest.raises(AuthorizationError, match="missing permission: role:manage"):
+        await control.delete_role(tenant_id, role_id, actor_id=actor.user_id, actor_principal=actor)
+    with pytest.raises(AuthorizationError, match="missing permission: role:manage"):
+        await control.bind_role(
+            tenant_id,
+            role_id,
+            principal_type="user",
+            principal_id=member.user_id,
+            scope_type="tenant",
+            scope_id=None,
+            actor_id=actor.user_id,
+            actor_principal=actor,
+        )
+    with pytest.raises(AuthorizationError, match="missing permission: role:manage"):
+        await control.unbind_role(
+            tenant_id, binding_id, actor_id=actor.user_id, actor_principal=actor
+        )
