@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,12 +12,13 @@ from jdlib.authz.cache import AuthzCache
 from jdlib.authz.permissions import PermissionCatalog
 from jdlib.authz.reader import AccessReader
 from jdlib.authz.resource_types import ResourceTypeRegistry
-from jdlib.context import Principal
+from jdlib.context import Principal, TenantContext
 from jdlib.control.audit import PlatformAudit
 from jdlib.control.enums import ScopeType
 from jdlib.control.models import (
     Invitation,
     Membership,
+    ResourceGrant,
     Role,
     RoleBinding,
     RolePermission,
@@ -28,9 +29,11 @@ from jdlib.errors import (
     AuthorizationError,
     CrossTenantReferenceError,
     InvalidReference,
+    InvalidResourcePermission,
     RoleEscalationBlocked,
     RoleScopeMismatch,
 )
+from jdlib.models.org import Team
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +54,20 @@ class ScopeLookup(Protocol):
     async def __call__(
         self, tenant_id: uuid.UUID, scope_type: str, scope_id: uuid.UUID
     ) -> ScopeRecord | None: ...
+
+
+class TenantWriteSession(Protocol):
+    """The tenant-plane session surface ownership changes require.
+
+    ``TenantSession`` satisfies this structurally; AccessControl never opens
+    the tenant plane itself.
+    """
+
+    context: TenantContext
+
+    async def execute(self, statement: sa.Executable) -> sa.Result[Any]: ...
+
+    async def flush(self) -> None: ...
 
 
 class AccessControl:
@@ -412,3 +429,185 @@ class AccessControl:
                 metadata={"binding_id": str(binding_id)},
             )
             await session.commit()
+
+    async def grant_resource(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        resource_type: str,
+        resource_id: uuid.UUID,
+        principal_type: str,
+        principal_id: uuid.UUID,
+        permission: str,
+        actor_id: uuid.UUID | None,
+        actor_principal: Principal,
+    ) -> ResourceGrant:
+        definition = self._registry.get(resource_type)
+        if self._catalog.validate(permission).namespace != definition.permission_namespace:
+            raise InvalidResourcePermission(
+                f"{permission} is not valid for resource type {resource_type}"
+            )
+        await self._require_subset(tenant_id, [permission, "resource:share"], actor_principal)
+        self._cache.invalidate()
+        async with await self._session() as session:
+            existing: ResourceGrant | None = (
+                await session.execute(
+                    sa.select(ResourceGrant).where(
+                        ResourceGrant.tenant_id == tenant_id,
+                        ResourceGrant.resource_type == resource_type,
+                        ResourceGrant.resource_id == resource_id,
+                        ResourceGrant.principal_type == principal_type,
+                        ResourceGrant.principal_id == principal_id,
+                        ResourceGrant.permission_code == permission,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                return existing
+            grant = ResourceGrant(
+                tenant_id=tenant_id,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                principal_type=principal_type,
+                principal_id=principal_id,
+                permission_code=permission,
+                created_by=actor_id,
+            )
+            session.add(grant)
+            await self._audit.record(
+                action="grant.created",
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                metadata={
+                    "resource": f"{resource_type}:{resource_id}",
+                    "permission": permission,
+                    "principal_id": str(principal_id),
+                },
+            )
+            await session.commit()
+            return grant
+
+    async def revoke_grant(
+        self,
+        tenant_id: uuid.UUID,
+        grant_id: uuid.UUID,
+        *,
+        actor_id: uuid.UUID | None,
+        actor_principal: Principal,
+    ) -> None:
+        self._cache.invalidate()
+        async with await self._session() as session:
+            grant = await session.get(ResourceGrant, {"tenant_id": tenant_id, "id": grant_id})
+            if grant is None:
+                raise InvalidReference(f"grant not found: {grant_id}")
+            await session.delete(grant)
+            await self._audit.record(
+                action="grant.revoked",
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                metadata={"grant_id": str(grant_id)},
+            )
+            await session.commit()
+
+    async def transfer_resource(
+        self,
+        session: TenantWriteSession,
+        *,
+        resource_type: str,
+        resource_id: uuid.UUID,
+        to_organization_id: uuid.UUID | None,
+        to_team_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
+        actor_principal: Principal,
+        revoke_grants: bool = False,
+    ) -> None:
+        definition = self._registry.get(resource_type)
+        model = cast(Any, definition.model)
+        context = getattr(session, "context", None)
+        if context is None:
+            raise InvalidReference("transfer requires a tenant session")
+        if to_team_id is not None and to_organization_id is None:
+            raise InvalidReference("team ownership requires an organization")
+        self._cache.invalidate()
+        row = (
+            await session.execute(sa.select(model).where(model.id == resource_id))
+        ).scalar_one_or_none()
+        if row is None:
+            raise InvalidReference(f"resource not found: {resource_id}")
+        previous = (row.organization_id, row.team_id)
+        row.organization_id = to_organization_id
+        row.team_id = to_team_id
+        if revoke_grants:
+            await session.execute(
+                sa.delete(ResourceGrant).where(
+                    ResourceGrant.tenant_id == context.tenant_id,
+                    ResourceGrant.resource_type == resource_type,
+                    ResourceGrant.resource_id == resource_id,
+                )
+            )
+        await session.flush()
+        await self._audit.record(
+            action="resource.owner_changed",
+            tenant_id=context.tenant_id,
+            actor_id=actor_id,
+            metadata={
+                "resource": f"{resource_type}:{resource_id}",
+                "from": f"{previous[0]}:{previous[1]}",
+                "to": f"{to_organization_id}:{to_team_id}",
+            },
+        )
+
+    async def move_team(
+        self,
+        session: TenantWriteSession,
+        *,
+        team_id: uuid.UUID,
+        to_organization_id: uuid.UUID,
+        actor_id: uuid.UUID | None,
+        actor_principal: Principal,
+        revoke_grants: bool = False,
+    ) -> None:
+        context = getattr(session, "context", None)
+        if context is None:
+            raise InvalidReference("team move requires a tenant session")
+        self._cache.invalidate()
+        team = (
+            await session.execute(sa.select(Team).where(Team.id == team_id))
+        ).scalar_one_or_none()
+        if team is None:
+            raise InvalidReference(f"team not found: {team_id}")
+        previous = team.organization_id
+        team.organization_id = to_organization_id
+        if revoke_grants:
+            await self._revoke_team_grants(session, context.tenant_id, team_id)
+        await session.flush()
+        await self._audit.record(
+            action="team.moved",
+            tenant_id=context.tenant_id,
+            actor_id=actor_id,
+            metadata={
+                "team": str(team_id),
+                "from": str(previous),
+                "to": str(to_organization_id),
+            },
+        )
+
+    async def _revoke_team_grants(
+        self, session: TenantWriteSession, tenant_id: uuid.UUID, team_id: uuid.UUID
+    ) -> None:
+        for definition in self._registry.all():
+            model = cast(Any, definition.model)
+            if not hasattr(model, "team_id"):
+                continue
+            resource_ids = (
+                await session.execute(sa.select(model.id).where(model.team_id == team_id))
+            ).scalars().all()
+            if not resource_ids:
+                continue
+            await session.execute(
+                sa.delete(ResourceGrant).where(
+                    ResourceGrant.tenant_id == tenant_id,
+                    ResourceGrant.resource_type == definition.resource_type,
+                    ResourceGrant.resource_id.in_(resource_ids),
+                )
+            )
