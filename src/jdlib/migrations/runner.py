@@ -11,6 +11,7 @@ from jdlib.control.base import CONTROL_SCHEMA
 from jdlib.errors import ProvisioningError
 
 _TENANT_SCHEMA_RE = re.compile(r"t_[a-z0-9][a-z0-9_]{0,50}")
+DEPLOYMENT_SCHEMA_RE = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 
 class MigrationRunner:
@@ -28,9 +29,14 @@ class MigrationRunner:
         return config
 
     @staticmethod
-    def _validate_schema(schema: str) -> None:
+    def _validate_tenant_schema(schema: str) -> None:
         if _TENANT_SCHEMA_RE.fullmatch(schema) is None:
             raise ProvisioningError(f"invalid tenant schema name: {schema!r}")
+
+    @staticmethod
+    def _validate_deployment_schema(schema: str) -> None:
+        if DEPLOYMENT_SCHEMA_RE.fullmatch(schema) is None:
+            raise ProvisioningError(f"invalid schema name: {schema!r}")
 
     def upgrade_control(self, revision: str = "head") -> None:
         engine = sa.create_engine(self._database_url, future=True)
@@ -40,12 +46,12 @@ class MigrationRunner:
         command.upgrade(self._config("control"), revision)
 
     def upgrade_tenant(self, schema: str, revision: str = "head") -> None:
-        self._validate_schema(schema)
+        self._validate_deployment_schema(schema)
         config = self._config("tenant", tenant_schema=schema)
         command.upgrade(config, revision)
 
     def provision_tenant_schema(self, schema: str, revision: str = "head") -> None:
-        self._validate_schema(schema)
+        self._validate_tenant_schema(schema)
         engine = sa.create_engine(self._database_url, future=True)
         with engine.begin() as connection:
             connection.execute(sa.schema.CreateSchema(schema, if_not_exists=True))

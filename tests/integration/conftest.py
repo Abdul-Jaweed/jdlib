@@ -69,3 +69,16 @@ async def session_factory(async_engine):
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     return async_sessionmaker(async_engine, expire_on_commit=False)
+
+
+@pytest.fixture()
+async def control_session_factory(async_engine, control_engine):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from jdlib.control.base import ControlBase
+    from jdlib.control.models import Tenant  # noqa: F401
+
+    async with async_engine.begin() as connection:
+        await connection.execute(sa.text(f'SET search_path TO "{TENANT_SCHEMA}", public'))
+        await connection.run_sync(ControlBase.metadata.create_all)
+    return async_sessionmaker(async_engine, expire_on_commit=False)
