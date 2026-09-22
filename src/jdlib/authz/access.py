@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from jdlib._uuid import uuid7
 from jdlib.authz.cache import AuthzCache
 from jdlib.authz.permissions import PermissionCatalog
 from jdlib.authz.reader import AccessReader
@@ -56,6 +58,26 @@ class ScopeLookup(Protocol):
     ) -> ScopeRecord | None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class ResourceRecord:
+    """Ownership facts about a tenant-owned resource row (tenant plane)."""
+
+    tenant_id: uuid.UUID
+    deleted: bool = False
+
+
+class ResourceLookup(Protocol):
+    """Resolves a resource id to its owning tenant.
+
+    Returns ``None`` when no row with the given id exists anywhere;
+    otherwise the owning tenant and whether the row is soft-deleted.
+    """
+
+    async def __call__(
+        self, tenant_id: uuid.UUID, resource_type: str, resource_id: uuid.UUID
+    ) -> ResourceRecord | None: ...
+
+
 class TenantWriteSession(Protocol):
     """The tenant-plane session surface ownership changes require.
 
@@ -81,6 +103,7 @@ class AccessControl:
         audit: PlatformAudit,
         registry: ResourceTypeRegistry | None = None,
         scope_lookup: ScopeLookup | None = None,
+        resource_lookup: ResourceLookup | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._catalog = catalog
@@ -90,6 +113,7 @@ class AccessControl:
         self._audit = audit
         self._registry = registry or ResourceTypeRegistry()
         self._scope_lookup = scope_lookup
+        self._resource_lookup = resource_lookup
 
     async def _session(self) -> ControlPlaneSession:
         return ControlPlaneSession(self._session_factory())
@@ -137,6 +161,21 @@ class AccessControl:
         if record.tenant_id != tenant_id or record.deleted:
             raise CrossTenantReferenceError(
                 f"{scope_type} scope {scope_id}", str(tenant_id), str(record.tenant_id)
+            )
+
+    async def _validate_resource(
+        self, tenant_id: uuid.UUID, resource_type: str, resource_id: uuid.UUID
+    ) -> None:
+        if self._resource_lookup is None:
+            raise AuthorizationError("resource validation is not configured")
+        record = await self._resource_lookup(tenant_id, resource_type, resource_id)
+        if record is None:
+            raise InvalidReference(f"resource not found: {resource_type}:{resource_id}")
+        if record.tenant_id != tenant_id or record.deleted:
+            raise CrossTenantReferenceError(
+                f"{resource_type} resource {resource_id}",
+                str(tenant_id),
+                str(record.tenant_id),
             )
 
     async def _lock(self, session: ControlPlaneSession, tenant_id: uuid.UUID) -> None:
@@ -430,6 +469,31 @@ class AccessControl:
             )
             await session.commit()
 
+    async def _find_grant(
+        self,
+        session: ControlPlaneSession,
+        tenant_id: uuid.UUID,
+        *,
+        resource_type: str,
+        resource_id: uuid.UUID,
+        principal_type: str,
+        principal_id: uuid.UUID,
+        permission: str,
+    ) -> ResourceGrant | None:
+        existing: ResourceGrant | None = (
+            await session.execute(
+                sa.select(ResourceGrant).where(
+                    ResourceGrant.tenant_id == tenant_id,
+                    ResourceGrant.resource_type == resource_type,
+                    ResourceGrant.resource_id == resource_id,
+                    ResourceGrant.principal_type == principal_type,
+                    ResourceGrant.principal_id == principal_id,
+                    ResourceGrant.permission_code == permission,
+                )
+            )
+        ).scalar_one_or_none()
+        return existing
+
     async def grant_resource(
         self,
         tenant_id: uuid.UUID,
@@ -448,23 +512,22 @@ class AccessControl:
                 f"{permission} is not valid for resource type {resource_type}"
             )
         await self._require_subset(tenant_id, [permission, "resource:share"], actor_principal)
+        await self._validate_resource(tenant_id, resource_type, resource_id)
         self._cache.invalidate()
         async with await self._session() as session:
-            existing: ResourceGrant | None = (
-                await session.execute(
-                    sa.select(ResourceGrant).where(
-                        ResourceGrant.tenant_id == tenant_id,
-                        ResourceGrant.resource_type == resource_type,
-                        ResourceGrant.resource_id == resource_id,
-                        ResourceGrant.principal_type == principal_type,
-                        ResourceGrant.principal_id == principal_id,
-                        ResourceGrant.permission_code == permission,
-                    )
-                )
-            ).scalar_one_or_none()
+            existing = await self._find_grant(
+                session,
+                tenant_id,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                principal_type=principal_type,
+                principal_id=principal_id,
+                permission=permission,
+            )
             if existing is not None:
                 return existing
             grant = ResourceGrant(
+                id=uuid7(),
                 tenant_id=tenant_id,
                 resource_type=resource_type,
                 resource_id=resource_id,
@@ -473,7 +536,38 @@ class AccessControl:
                 permission_code=permission,
                 created_by=actor_id,
             )
-            session.add(grant)
+            inserted: uuid.UUID | None = (
+                await session.execute(
+                    pg_insert(ResourceGrant)
+                    .values(
+                        id=grant.id,
+                        tenant_id=grant.tenant_id,
+                        resource_type=grant.resource_type,
+                        resource_id=grant.resource_id,
+                        principal_type=grant.principal_type,
+                        principal_id=grant.principal_id,
+                        permission_code=grant.permission_code,
+                        created_by=grant.created_by,
+                    )
+                    .on_conflict_do_nothing()
+                    .returning(ResourceGrant.id)
+                )
+            ).scalar_one_or_none()
+            if inserted is None:
+                existing = await self._find_grant(
+                    session,
+                    tenant_id,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    principal_type=principal_type,
+                    principal_id=principal_id,
+                    permission=permission,
+                )
+                if existing is None:
+                    raise AuthorizationError(
+                        f"grant conflict without a stored row: {resource_type}:{resource_id}"
+                    )
+                return existing
             await self._audit.record(
                 action="grant.created",
                 tenant_id=tenant_id,
@@ -495,6 +589,7 @@ class AccessControl:
         actor_id: uuid.UUID | None,
         actor_principal: Principal,
     ) -> None:
+        await self._require_permission(tenant_id, "resource:share", actor_principal)
         self._cache.invalidate()
         async with await self._session() as session:
             grant = await session.get(ResourceGrant, {"tenant_id": tenant_id, "id": grant_id})
@@ -526,6 +621,7 @@ class AccessControl:
         context = getattr(session, "context", None)
         if context is None:
             raise InvalidReference("transfer requires a tenant session")
+        await self._require_permission(context.tenant_id, "resource:share", actor_principal)
         if to_team_id is not None and to_organization_id is None:
             raise InvalidReference("team ownership requires an organization")
         self._cache.invalidate()
@@ -571,13 +667,33 @@ class AccessControl:
         if context is None:
             raise InvalidReference("team move requires a tenant session")
         self._cache.invalidate()
-        team = (
-            await session.execute(sa.select(Team).where(Team.id == team_id))
+        previous = (
+            await session.execute(
+                sa.select(Team.organization_id).where(
+                    Team.tenant_id == context.tenant_id, Team.id == team_id
+                )
+            )
         ).scalar_one_or_none()
-        if team is None:
+        if previous is None:
             raise InvalidReference(f"team not found: {team_id}")
-        previous = team.organization_id
-        team.organization_id = to_organization_id
+        statement = (
+            sa.update(Team)
+            .where(Team.tenant_id == context.tenant_id, Team.id == team_id)
+            .values(organization_id=to_organization_id)
+            .execution_options(jdlib_scoped=True)
+        )
+        for index, definition in enumerate(self._registry.all()):
+            model = cast(Any, definition.model)
+            if not (hasattr(model, "team_id") and hasattr(model, "organization_id")):
+                continue
+            cascade = (
+                sa.update(model)
+                .where(model.tenant_id == context.tenant_id, model.team_id == team_id)
+                .values(organization_id=to_organization_id)
+                .cte(f"moved_resource_{index}")
+            )
+            statement = statement.add_cte(cascade)
+        await session.execute(statement)
         if revoke_grants:
             await self._revoke_team_grants(session, context.tenant_id, team_id)
         await session.flush()

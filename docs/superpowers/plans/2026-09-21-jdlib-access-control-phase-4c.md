@@ -1150,7 +1150,7 @@ Note: `move_team` follows the same shape for `Team.organization_id` with audit `
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_access_grants.py -v -W error`
-Expected: PASS (3 passed)
+Expected: PASS (15 passed)
 
 - [ ] **Step 5: Full suite, lint, type check, commit**
 
@@ -1160,6 +1160,14 @@ Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -
 git add src/jdlib/authz/access.py tests/integration/test_access_grants.py
 git commit -m "feat: resource grants and ownership transfer"
 ```
+
+**Review fixes applied (follow-up commit):** authoritative snippets live in `src/jdlib/authz/access.py` and `tests/integration/test_access_grants.py` (15 tests); the notes below are the frozen contract deltas.
+
+- **I11/L14 resource validation:** `grant_resource` resolves the target through an injected `ResourceLookup` collaborator (`ResourceRecord` ownership facts), same pattern as `ScopeLookup`. Missing row → `InvalidReference`; other tenant or soft-deleted → `CrossTenantReferenceError`; absent collaborator → `AuthorizationError` (fail closed). Validation runs after the grant-subset check, before insert. Tests cover missing, other-tenant, soft-deleted, and the unconfigured collaborator.
+- **`move_team` ownership cascade:** the move updates `Team.organization_id` and `organization_id` on every registered type owning rows with `team_id == team.id` in one data-modifying-CTE statement (`UPDATE teams ... WITH moved_resource_N AS (UPDATE <type> ...)`), so the immediate composite FK `(tenant_id, team_id, organization_id) → teams` holds at end-of-statement. Separate statements cannot work in either order (both raise `IntegrityError`; verified). The statement carries an explicit `tenant_id` filter plus `execution_options(jdlib_scoped=True)` to pass the tenant-session bulk-DML guard. `revoke_grants` semantics unchanged; the attached-team test now exercises the non-empty `_revoke_team_grants` path. Unattached-team case kept.
+- **Race-safe grants:** `grant_resource` inserts with `INSERT ... ON CONFLICT DO NOTHING RETURNING id`; on conflict it re-selects and returns the stored row without a second `grant.created` audit. The unique constraint remains the arbiter; the conflict-without-row branch is defensive. Covered by a true concurrency test (second connection holds the unique-index lock; the API call blocks, then returns the winner's row).
+- **`resource:share` held-permission checks:** `revoke_grant` and `transfer_resource` require the caller to hold `resource:share` (`AuthorizationError` otherwise); `grant_resource` keeps the `[permission, resource:share]` subset rule. Tests cover the missing-share denial for both operations.
+- **Counts:** `test_access_grants.py` 15 passed; full suite 333 passed; `ruff` and strict `mypy` clean.
 
 ---
 
