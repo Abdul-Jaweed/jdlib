@@ -4,6 +4,7 @@ from jdlib.authz.permissions import Permission, PermissionCatalog
 from jdlib.authz.resource_types import ResourceTypeDefinition, ResourceTypeRegistry
 from jdlib.control.enums import ScopeType
 from jdlib.errors import InvalidResourcePermission, UnknownResourceType
+from jdlib.models.settings import TenantSetting
 from tests.support.invoice import Invoice
 
 
@@ -22,6 +23,19 @@ def _definition(**overrides: object) -> ResourceTypeDefinition:
 def test_definition_rejects_routed_without_owned():
     with pytest.raises(ValueError):
         _definition(tenant_owned=False, tenant_routed=True)
+
+
+def test_registry_rejects_routed_model_without_ownership_columns():
+    with pytest.raises(ValueError):
+        ResourceTypeRegistry().register(
+            ResourceTypeDefinition(
+                "tenant_setting",
+                TenantSetting,
+                tenant_owned=True,
+                tenant_routed=True,
+                permission_namespace="tenant_setting",
+            )
+        )
 
 
 def test_registry_duplicate_and_unknown():

@@ -397,9 +397,10 @@ Append-only: runtime role holds only `INSERT` and `SELECT`.
 `PRIMARY KEY (tenant_id, id)`;
 partial `UNIQUE (tenant_id, slug) WHERE deleted_at IS NULL`;
 `INDEX (tenant_id, parent_organization_id)`.
-Tree may be arbitrary depth; ancestry is computed with a recursive CTE in
-`authz.scopes` (organizations are low-cardinality per tenant; no materialized
-path in v1).
+Tree may be arbitrary depth; ancestry is resolved in `authz.scopes` by
+tenant-scoped ORM traversal from the nearest organization toward the root
+(via `parent_organization_id`, cycle-guarded; organizations are
+low-cardinality per tenant, so there is no materialized path in v1).
 
 ### 4.2 `teams`
 

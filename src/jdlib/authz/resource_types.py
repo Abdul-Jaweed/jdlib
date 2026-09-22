@@ -19,6 +19,12 @@ class ResourceTypeDefinition:
             raise ValueError("resource_type and permission_namespace are required")
         if self.tenant_routed and not self.tenant_owned:
             raise ValueError("tenant_routed requires tenant_owned")
+        if self.tenant_routed and not (
+            hasattr(self.model, "organization_id") and hasattr(self.model, "team_id")
+        ):
+            raise ValueError(
+                "tenant_routed requires a model with organization_id and team_id"
+            )
 
 
 class ResourceTypeRegistry:

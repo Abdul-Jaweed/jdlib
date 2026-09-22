@@ -578,15 +578,20 @@ class ResourceTypeDefinition:
 class ScopeRef(NamedTuple):
     type: ScopeType; id: uuid.UUID | None
 
+class ResourceRef(NamedTuple):
+    resource_type: str; resource_id: uuid.UUID
+
+Target = ScopeRef | ResourceRef
+
 class ScopeResolver:
-    async def chain(self, session: TenantSession, target: ScopeRef) -> tuple[ScopeRef, ...]: ...
+    async def chain(self, session: TenantSession, target: Target) -> tuple[ScopeRef, ...]: ...
 
 class Decision(NamedTuple):
     allowed: bool; reason: str; matched: tuple[MatchedRule, ...]
 
 class PolicyDecisionPoint(Protocol):
     async def evaluate(self, principal: Principal, permission: str,
-                       target: ScopeRef, ctx: TenantContext) -> Decision: ...
+                       target: Target, ctx: TenantContext) -> Decision: ...
 
 class DefaultPDP(PolicyDecisionPoint):
     # Precedence chain → bindings → role permissions → grants → API-key scopes
@@ -601,7 +606,7 @@ class AuthzCache:
     def invalidate(self) -> None: ...
 
 class Enforcer:
-    async def require(self, permission: str, target: ScopeRef) -> Decision: ...  # raises AuthorizationError
+    async def require(self, permission: str, target: Target) -> Decision: ...  # raises AuthorizationError
 ```
 
 Declaration and explicit use:

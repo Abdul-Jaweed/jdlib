@@ -204,7 +204,7 @@ git commit -m "feat: permission catalog with frozen builtin matrix"
 
 **Interfaces:**
 - Consumes: `PermissionCatalog`, `Permission`; `jdlib.models.base.TenantRouted`; errors `UnknownResourceType`, `InvalidResourcePermission`.
-- Produces: `ResourceTypeDefinition(resource_type, model, tenant_owned, tenant_routed, permission_namespace)` with validation; `ResourceTypeRegistry` with `register`, `get`, `all`, `validate_permission(resource_type, permission_code, catalog)`.
+- Produces: `ResourceTypeDefinition(resource_type, model, tenant_owned, tenant_routed, permission_namespace)` with validation (routed ⇒ owned; a routed model must expose `organization_id` and `team_id`); `ResourceTypeRegistry` with `register`, `get`, `all`, `validate_permission(resource_type, permission_code, catalog)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -217,6 +217,7 @@ from jdlib.authz.permissions import Permission, PermissionCatalog
 from jdlib.authz.resource_types import ResourceTypeDefinition, ResourceTypeRegistry
 from jdlib.control.enums import ScopeType
 from jdlib.errors import InvalidResourcePermission, UnknownResourceType
+from jdlib.models.settings import TenantSetting
 from tests.support.invoice import Invoice
 
 
@@ -235,6 +236,19 @@ def _definition(**overrides: object) -> ResourceTypeDefinition:
 def test_definition_rejects_routed_without_owned():
     with pytest.raises(ValueError):
         _definition(tenant_owned=False, tenant_routed=True)
+
+
+def test_registry_rejects_routed_model_without_ownership_columns():
+    with pytest.raises(ValueError):
+        ResourceTypeRegistry().register(
+            ResourceTypeDefinition(
+                "tenant_setting",
+                TenantSetting,
+                tenant_owned=True,
+                tenant_routed=True,
+                permission_namespace="tenant_setting",
+            )
+        )
 
 
 def test_registry_duplicate_and_unknown():
@@ -293,6 +307,12 @@ class ResourceTypeDefinition:
             raise ValueError("resource_type and permission_namespace are required")
         if self.tenant_routed and not self.tenant_owned:
             raise ValueError("tenant_routed requires tenant_owned")
+        if self.tenant_routed and not (
+            hasattr(self.model, "organization_id") and hasattr(self.model, "team_id")
+        ):
+            raise ValueError(
+                "tenant_routed requires a model with organization_id and team_id"
+            )
 
 
 class ResourceTypeRegistry:
@@ -324,12 +344,12 @@ class ResourceTypeRegistry:
             )
 ```
 
-Note for the implementer: `tests/support/invoice.py` already defines `Invoice` on `TenantBase`; the registry does not require the model to be `TenantRouted` for the unit test, but the definition contract does (`tenant_routed=True` here). If importing `Invoice` into a unit test drags in SQLAlchemy metadata construction, that is acceptable (Phase 1 tests do the same). Remove the unused `Any` import if ruff flags it.
+Note for the implementer: `tests/support/invoice.py` already defines `Invoice` on `TenantBase`; the registry does not require the model to be `TenantRouted` for the unit test, but the definition contract does (`tenant_routed=True` here). A `tenant_routed=True` definition additionally requires the model to expose `organization_id` and `team_id` because `ScopeResolver` reads those attributes when resolving resource ownership; `TenantSetting` (tenant-routed but not ownable) is the rejection counterexample. If importing `Invoice` into a unit test drags in SQLAlchemy metadata construction, that is acceptable (Phase 1 tests do the same). Remove the unused `Any` import if ruff flags it.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_resource_types.py -v -W error`
-Expected: PASS (3 passed)
+Expected: PASS (4 passed)
 
 - [ ] **Step 5: Lint, type check, commit**
 
@@ -466,11 +486,13 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import Any, cast
 
 import sqlalchemy as sa
 
 from jdlib.authz.resource_types import ResourceTypeRegistry
 from jdlib.control.enums import ScopeType
+from jdlib.models.org import Organization, Team
 from jdlib.persistence.session import TenantSession
 
 
@@ -488,21 +510,6 @@ class ResourceRef:
 
 Target = ScopeRef | ResourceRef
 
-_ORG_ANCESTORS = sa.text(
-    """
-    WITH RECURSIVE ancestors AS (
-        SELECT id, parent_organization_id
-        FROM organizations
-        WHERE id = :org_id
-        UNION ALL
-        SELECT o.id, o.parent_organization_id
-        FROM organizations o
-        JOIN ancestors a ON o.id = a.parent_organization_id
-    )
-    SELECT id FROM ancestors
-    """
-)
-
 
 class ScopeResolver:
     def __init__(self, registry: ResourceTypeRegistry) -> None:
@@ -513,26 +520,26 @@ class ScopeResolver:
         if isinstance(target, ScopeRef):
             if target.type is ScopeType.TENANT:
                 return (tenant,)
+            if target.id is None:
+                raise ValueError(f"{target.type} scope requires a scope id")
             if target.type is ScopeType.ORG:
                 return (tenant, *await self._org_chain(session, target.id))
             if target.type is ScopeType.TEAM:
-                organization_id = (
-                    await session.execute(
-                        sa.text("SELECT organization_id FROM teams WHERE id = :id"),
-                        {"id": target.id},
-                    )
-                ).scalar_one()
+                team = await session.get(Team, target.id)
+                if team is None:
+                    return (tenant,)
                 return (
                     tenant,
-                    *await self._org_chain(session, organization_id),
+                    *await self._org_chain(session, team.organization_id),
                     ScopeRef(ScopeType.TEAM, target.id),
                 )
             raise ValueError(f"unsupported scope type: {target.type}")
         definition = self._registry.get(target.resource_type)
+        model = cast(Any, definition.model)
         row = (
             await session.execute(
-                sa.select(definition.model.organization_id, definition.model.team_id).where(
-                    definition.model.id == target.resource_id
+                sa.select(model.organization_id, model.team_id).where(
+                    model.id == target.resource_id
                 )
             )
         ).first()
@@ -547,13 +554,20 @@ class ScopeResolver:
         return tuple(chain)
 
     async def _org_chain(self, session: TenantSession, org_id: uuid.UUID) -> list[ScopeRef]:
-        rows = (
-            await session.execute(_ORG_ANCESTORS, {"org_id": org_id})
-        ).scalars().all()
-        return [ScopeRef(ScopeType.ORG, row) for row in rows]
+        chain: list[ScopeRef] = []
+        seen: set[uuid.UUID] = set()
+        current: uuid.UUID | None = org_id
+        while current is not None and current not in seen:
+            seen.add(current)
+            organization = await session.get(Organization, current)
+            if organization is None:
+                break
+            chain.append(ScopeRef(ScopeType.ORG, organization.id))
+            current = organization.parent_organization_id
+        return chain
 ```
 
-Note for the implementer: keep `ScopeType.TENANT` handling and the recursive CTE as written; the CTE relies on the session's `search_path` pointing at the tenant schema (the integration fixture does this). Drop unused imports per ruff.
+Note for the implementer: the recursive CTE originally sketched here was replaced by tenant-scoped ORM traversal because tenant sessions reject raw text/table statements: `TenantSession.execute` raises on `sa.TextClause` and `raw_sql` refuses CTEs in tenant-bound mode. `_org_chain` therefore walks nearest→root with `session.get(Organization, current)` following `parent_organization_id`, guarded by a `seen` set against parent cycles; the team lookup uses `session.get(Team, ...)`; resource ownership reads `organization_id`/`team_id` off the registry model. Tenant scoping is enforced by the composite PKs rather than by `search_path`. Drop unused imports per ruff.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -590,23 +604,23 @@ git commit -m "feat: tenant-plane scope resolution with org ancestry and resourc
 
 ```python
 import uuid
-from datetime import datetime, timezone
 
 import pytest
 
 from jdlib.authz.cache import AuthzCache
-from jdlib.authz.permissions import PermissionCatalog
 from jdlib.authz.pdp import DefaultPDP
-from jdlib.authz.resource_types import ResourceTypeRegistry
-from jdlib.authz.scopes import ResourceRef, ScopeRef, ScopeResolver
-from jdlib.context import Principal, TenantContext
-from jdlib.control.enums import PlacementStrategy, PrincipalKind, ScopeType
+from jdlib.authz.permissions import PermissionCatalog
+from jdlib.authz.reader import Binding
+from jdlib.authz.scopes import ResourceRef, ScopeRef
+from jdlib.context import Principal, PrincipalKind, TenantContext
+from jdlib.control.enums import PlacementStrategy, ScopeType
+from jdlib.errors import MissingTenantContext
 
 TENANT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
-ORG_ID = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
-TEAM_ID = uuid.UUID("00000000-0000-0000-0000-0000000000cc")
 USER_ID = uuid.uuid4()
 RESOURCE_ID = uuid.uuid4()
+_SESSION = object()
+_TENANT_CHAIN = (ScopeRef(ScopeType.TENANT, None),)
 
 
 def _context(principal: Principal) -> TenantContext:
@@ -648,10 +662,12 @@ class _Reader:
         return self._membership_active
 
     async def bindings_for(self, principal, tenant_id, scope_chain):
-        return [b for b in self.bindings if (b[1], b[2]) in scope_chain]
+        return [Binding(*b) for b in self.bindings if (b[1], b[2]) in scope_chain]
 
     async def permissions_for_roles(self, tenant_id, role_ids):
-        return frozenset().union(*(self.role_permissions.get(r, frozenset()) for r in role_ids))
+        return frozenset().union(
+            *(self.role_permissions.get(role, frozenset()) for role in role_ids)
+        )
 
     async def grants_for(self, principal, tenant_id, resource_type, resource_id):
         return self.grants
@@ -659,13 +675,13 @@ class _Reader:
 
 class _Scopes:
     def __init__(self, chain):
-        self.chain = chain
+        self._chain = chain
 
     async def chain(self, session, target):
-        return self.chain
+        return self._chain
 
 
-def _pdp(reader, chain=(ScopeRef(ScopeType.TENANT, None),)) -> DefaultPDP:
+def _pdp(reader, chain=_TENANT_CHAIN) -> DefaultPDP:
     return DefaultPDP(
         catalog=PermissionCatalog.with_builtins(),
         reader=reader,
@@ -678,9 +694,21 @@ def _user(scopes: frozenset[str] | None = None) -> Principal:
     return Principal(kind=PrincipalKind.USER, id=USER_ID, user_id=USER_ID, scopes=scopes)
 
 
+def test_cache_memoizes_until_invalidated():
+    cache = AuthzCache()
+    assert cache.get("k") is None
+    cache.put("k", "v")
+    assert cache.get("k") == "v"
+    cache.invalidate()
+    assert cache.get("k") is None
+    cache.put("k", "v2")
+    assert cache.get("k") is None
+
+
 async def test_denies_when_tenant_not_active():
     decision = await _pdp(_Reader(tenant_status="suspended")).evaluate(
-        _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()), session=None
+        _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()),
+        session=None,
     )
     assert decision.allowed is False
     assert decision.reason == "tenant_suspended"
@@ -688,14 +716,16 @@ async def test_denies_when_tenant_not_active():
 
 async def test_denies_when_principal_inactive():
     decision = await _pdp(_Reader(principal_active=False)).evaluate(
-        _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()), session=None
+        _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()),
+        session=None,
     )
     assert decision.reason == "principal_inactive"
 
 
 async def test_denies_when_membership_inactive():
     decision = await _pdp(_Reader(membership_active=False)).evaluate(
-        _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()), session=None
+        _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()),
+        session=None,
     )
     assert decision.reason == "membership_inactive"
 
@@ -707,15 +737,25 @@ async def test_allows_tenant_scope_binding():
         role_permissions={role_id: frozenset({"resource:read"})},
     )
     decision = await _pdp(reader).evaluate(
-        _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()), session=None
+        _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()),
+        session=_SESSION,
     )
     assert decision.allowed is True
     assert decision.matched[0].kind == "binding"
 
 
+async def test_denies_without_session_for_scope_resolution():
+    with pytest.raises(MissingTenantContext):
+        await _pdp(_Reader()).evaluate(
+            _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()),
+            session=None,
+        )
+
+
 async def test_denies_without_allow():
     decision = await _pdp(_Reader()).evaluate(
-        _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()), session=None
+        _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()),
+        session=_SESSION,
     )
     assert decision.allowed is False
     assert decision.reason == "no_allow"
@@ -728,7 +768,7 @@ async def test_grants_apply_only_to_the_exact_resource():
         "resource:read",
         ResourceRef("invoice", RESOURCE_ID),
         _context(_user()),
-        session=None,
+        session=_SESSION,
     )
     assert decision.allowed is True
     assert any(rule.kind == "grant" for rule in decision.matched)
@@ -749,15 +789,18 @@ async def test_api_key_scopes_narrow_everything():
     )
     pdp = _pdp(reader)
     allowed = await pdp.evaluate(
-        principal, "resource:read", ScopeRef(ScopeType.TENANT, None), _context(principal),
-        session=None,
+        principal,
+        "resource:read",
+        ScopeRef(ScopeType.TENANT, None),
+        _context(principal),
+        session=_SESSION,
     )
     denied = await pdp.evaluate(
         principal,
         "resource:delete",
         ResourceRef("invoice", RESOURCE_ID),
         _context(principal),
-        session=None,
+        session=_SESSION,
     )
     assert allowed.allowed is True
     assert denied.allowed is False
@@ -807,10 +850,10 @@ from typing import NamedTuple, Protocol
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jdlib.context import Principal
+from jdlib.context import Principal, PrincipalKind
+from jdlib.control.enums import ScopeType
 from jdlib.control.models import Membership, ResourceGrant, RoleBinding, RolePermission
 from jdlib.control.session import ControlPlaneSession
-from jdlib.control.enums import PrincipalType, ScopeType
 
 
 class Binding(NamedTuple):
@@ -827,7 +870,10 @@ class AccessReader(Protocol):
     async def membership_active(self, principal: Principal, tenant_id: uuid.UUID) -> bool: ...
 
     async def bindings_for(
-        self, principal: Principal, tenant_id: uuid.UUID, scope_chain: Collection[tuple[ScopeType, uuid.UUID | None]]
+        self,
+        principal: Principal,
+        tenant_id: uuid.UUID,
+        scope_chain: Collection[tuple[ScopeType, uuid.UUID | None]],
     ) -> Sequence[Binding]: ...
 
     async def permissions_for_roles(
@@ -856,15 +902,13 @@ class ControlAccessReader:
         return status or "missing"
 
     async def principal_active(self, principal: Principal) -> bool:
-        if principal.kind is PrincipalType.USER:
+        if principal.kind is PrincipalKind.USER:
             from jdlib.control.models import User
 
             user_id = principal.user_id if principal.user_id is not None else principal.id
             async with await self._session() as session:
                 status = (
-                    await session.execute(
-                        sa.select(User.status).where(User.id == user_id)
-                    )
+                    await session.execute(sa.select(User.status).where(User.id == user_id))
                 ).scalar_one_or_none()
             return status == "active"
         from jdlib.control.models import ServiceAccount
@@ -878,21 +922,25 @@ class ControlAccessReader:
         return status == "active"
 
     async def membership_active(self, principal: Principal, tenant_id: uuid.UUID) -> bool:
-        if principal.kind is PrincipalType.SERVICE_ACCOUNT:
+        if principal.kind is PrincipalKind.SERVICE_ACCOUNT:
             return True
+        user_id = principal.user_id if principal.user_id is not None else principal.id
         async with await self._session() as session:
             status = (
                 await session.execute(
                     sa.select(Membership.status).where(
                         Membership.tenant_id == tenant_id,
-                        Membership.user_id == (principal.user_id or principal.id),
+                        Membership.user_id == user_id,
                     )
                 )
             ).scalar_one_or_none()
         return status == "active"
 
     async def bindings_for(
-        self, principal: Principal, tenant_id: uuid.UUID, scope_chain
+        self,
+        principal: Principal,
+        tenant_id: uuid.UUID,
+        scope_chain: Collection[tuple[ScopeType, uuid.UUID | None]],
     ) -> Sequence[Binding]:
         async with await self._session() as session:
             rows = (
@@ -947,7 +995,7 @@ class ControlAccessReader:
         return frozenset(rows)
 ```
 
-Note for the implementer: `principal.user_id or principal.id` works but is loose; resolve the user id explicitly (`principal.user_id if principal.user_id is not None else principal.id`) and keep it typed. `bindings_for` filters in Python against the chain; keep it (bindings per principal are few).
+Note for the implementer: resolve the user id explicitly everywhere (`user_id = principal.user_id if principal.user_id is not None else principal.id`) and compare `principal.kind` against `PrincipalKind` from `jdlib.context` (`PrincipalType` is only the DB check-constraint enum; `is` across the two StrEnums is always false). `bindings_for` filters in Python against the chain; keep it (bindings per principal are few).
 
 - [ ] **Step 4: Implement `src/jdlib/authz/pdp.py`**
 
@@ -955,15 +1003,15 @@ Note for the implementer: `principal.user_id or principal.id` works but is loose
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import NamedTuple, Protocol
+from typing import NamedTuple, Protocol, cast
 
 from jdlib.authz.cache import AuthzCache
 from jdlib.authz.permissions import PermissionCatalog
 from jdlib.authz.reader import AccessReader
-from jdlib.authz.scopes import ResourceRef, ScopeRef, ScopeResolver, Target
+from jdlib.authz.scopes import ResourceRef, ScopeResolver, Target
 from jdlib.context import Principal, TenantContext
-from jdlib.control.enums import PrincipalType, ScopeType
 from jdlib.errors import MissingTenantContext
+from jdlib.persistence.session import TenantSession
 
 
 class MatchedRule(NamedTuple):
@@ -980,7 +1028,13 @@ class Decision:
 
 class PolicyDecisionPoint(Protocol):
     async def evaluate(
-        self, principal: Principal, permission: str, target: Target, context: TenantContext, *, session: object
+        self,
+        principal: Principal,
+        permission: str,
+        target: Target,
+        context: TenantContext,
+        *,
+        session: object,
     ) -> Decision: ...
 
 
@@ -1017,7 +1071,7 @@ class DefaultPDP:
             return Decision(False, "membership_inactive", ())
         if session is None:
             raise MissingTenantContext("PDP requires a tenant session for scope resolution")
-        chain = await self._scopes.chain(session, target)
+        chain = await self._scopes.chain(cast(TenantSession, session), target)
         scope_chain = {(scope.type, scope.id) for scope in chain}
         bindings = await self._reader.bindings_for(principal, tenant_id, scope_chain)
         role_perms = await self._reader.permissions_for_roles(
@@ -1034,7 +1088,9 @@ class DefaultPDP:
                 principal, tenant_id, target.resource_type, target.resource_id
             )
             if permission in granted:
-                matched.append(MatchedRule("grant", f"{target.resource_type}:{target.resource_id}"))
+                matched.append(
+                    MatchedRule("grant", f"{target.resource_type}:{target.resource_id}")
+                )
         base = role_perms | granted
         if principal.scopes is not None:
             if permission not in principal.scopes:
@@ -1048,7 +1104,7 @@ class DefaultPDP:
 - [ ] **Step 5: Run unit tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_pdp.py -v -W error`
-Expected: PASS (7 passed)
+Expected: PASS (9 passed)
 
 - [ ] **Step 6: Integration test for `ControlAccessReader`**
 
@@ -1057,14 +1113,12 @@ Expected: PASS (7 passed)
 ```python
 import uuid
 
-import pytest
-import sqlalchemy as sa
-
 from jdlib.authz.reader import ControlAccessReader
-from jdlib.context import Principal
-from jdlib.control.enums import PrincipalType, ScopeType
+from jdlib.context import Principal, PrincipalKind
+from jdlib.control.enums import ScopeType
 from jdlib.control.models import (
     Membership,
+    ResourceGrant,
     Role,
     RoleBinding,
     RolePermission,
@@ -1081,11 +1135,21 @@ async def test_control_reader_reads_status_bindings_and_permissions(
     user_id = uuid.uuid4()
     role_id = uuid.uuid4()
     async with control_session_factory() as session:
-        session.add(Tenant(id=tenant_id, slug=f"authz-{tenant_id.hex[:8]}", name="A", status="active"))
+        session.add(
+            Tenant(id=tenant_id, slug=f"authz-{tenant_id.hex[:8]}", name="A", status="active")
+        )
+        await session.commit()
+
+    async with control_session_factory() as session:
         session.add(User(id=user_id, status="active"))
-        session.add(Membership(tenant_id=tenant_id, id=uuid.uuid4(), user_id=user_id, status="active"))
         session.add(Role(tenant_id=tenant_id, id=role_id, name="member"))
-        session.add(RolePermission(tenant_id=tenant_id, role_id=role_id, permission_code="resource:read"))
+        await session.flush()
+        session.add(
+            Membership(tenant_id=tenant_id, id=uuid.uuid4(), user_id=user_id, status="active")
+        )
+        session.add(
+            RolePermission(tenant_id=tenant_id, role_id=role_id, permission_code="resource:read")
+        )
         session.add(
             RoleBinding(
                 tenant_id=tenant_id,
@@ -1099,7 +1163,7 @@ async def test_control_reader_reads_status_bindings_and_permissions(
         await session.commit()
 
     reader = ControlAccessReader(control_session_factory)
-    principal = Principal(kind=PrincipalType.USER, id=user_id, user_id=user_id)
+    principal = Principal(kind=PrincipalKind.USER, id=user_id, user_id=user_id)
     assert await reader.tenant_status_of(tenant_id) == "active"
     assert await reader.principal_active(principal) is True
     assert await reader.membership_active(principal, tenant_id) is True
@@ -1107,9 +1171,45 @@ async def test_control_reader_reads_status_bindings_and_permissions(
     assert [binding.role_id for binding in bindings] == [role_id]
     assert await reader.permissions_for_roles(tenant_id, [role_id]) == frozenset({"resource:read"})
     assert await reader.grants_for(principal, tenant_id, "invoice", uuid.uuid4()) == frozenset()
+
+
+async def test_control_reader_handles_service_accounts_and_grants(control_session_factory):
+    tenant_id = uuid.uuid4()
+    account_id = uuid.uuid4()
+    resource_id = uuid.uuid4()
+    async with control_session_factory() as session:
+        session.add(
+            Tenant(id=tenant_id, slug=f"authz-{tenant_id.hex[:8]}", name="B", status="active")
+        )
+        await session.commit()
+
+    async with control_session_factory() as session:
+        session.add(
+            ServiceAccount(tenant_id=tenant_id, id=account_id, name="bot", status="active")
+        )
+        session.add(
+            ResourceGrant(
+                tenant_id=tenant_id,
+                id=uuid.uuid4(),
+                resource_type="invoice",
+                resource_id=resource_id,
+                principal_type="service_account",
+                principal_id=account_id,
+                permission_code="resource:read",
+            )
+        )
+        await session.commit()
+
+    reader = ControlAccessReader(control_session_factory)
+    principal = Principal(kind=PrincipalKind.SERVICE_ACCOUNT, id=account_id, tenant_id=tenant_id)
+    assert await reader.principal_active(principal) is True
+    assert await reader.membership_active(principal, tenant_id) is True
+    assert await reader.grants_for(principal, tenant_id, "invoice", resource_id) == frozenset(
+        {"resource:read"}
+    )
 ```
 
-Note: the `control_session_factory` fixture creates the control tables; use a unique tenant id per test to stay idempotent.
+Note: the `control_session_factory` fixture creates the control tables; use a unique tenant id per test to stay idempotent. Commit the `Tenant` before inserting rows that reference it (control models declare bare FKs, so flush order is not dependency-sorted), and flush `User`/`Role` before their dependents. `DefaultPDP` asserts a session is present before scope resolution, so unit tests that reach the scope chain pass a non-`None` session stand-in while the precedence-denial tests keep `session=None` to prove no session is touched. `DefaultPDP.evaluate` keeps the `session: object` protocol signature and `cast`s to `TenantSession` after the guard.
 
 - [ ] **Step 7: Full suite, lint, type check, commit**
 
@@ -1299,7 +1399,7 @@ git commit -m "feat: authorization enforcer and guard decorator"
 
 - [ ] Full suite green on real PostgreSQL 16.
 - [ ] Catalog and resource registry enforce unknown/duplicate/namespace rules.
-- [ ] Scope chains: tenant; org ancestors via recursive CTE; team → org → ancestors; resource → ownership chain.
+- [ ] Scope chains: tenant; org ancestors via tenant-scoped ORM traversal (nearest→root, cycle-guarded); team → org → ancestors; resource → ownership chain.
 - [ ] PDP precedence chain and effective-permission algorithm (bindings ∪ grants, ∩ key scopes) proven by tests, including the API-key narrowing case.
 - [ ] `Enforcer`/`requires` raise `PermissionDenied` and never call the guarded function on denial.
 - [ ] `ruff` and strict `mypy` clean.
