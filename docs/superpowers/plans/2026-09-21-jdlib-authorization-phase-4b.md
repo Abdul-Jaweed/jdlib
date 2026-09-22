@@ -16,7 +16,7 @@
 - `ResourceTypeDefinition` requires `tenant_routed ⇒ tenant_owned`; unknown resource types raise `UnknownResourceType`; grants validate `permission.namespace == definition.permission_namespace` (`InvalidResourcePermission`).
 - Precedence chain (first failure denies with its reason): principal active → tenant active → membership active → binding validity → permission. Effective permissions = `(role bindings at target scope and ancestors ∪ exact-resource grants)`, then `∩ api_key.scopes` when the principal has scopes.
 - Inheritance is downward only; no deny rules; absence of allow = deny.
-- `AuthzCache` is request-scoped only; `invalidate()` is called by access-control mutations (Plan 4c) and by the PDP itself on miss.
+- `AuthzCache` is request-scoped only; `DefaultPDP` exposes its instance as `cache` so Plan 4c's `AccessControl` can share one per request, and `invalidate()` is called by access-control mutations (Plan 4c), never by the PDP itself.
 - Commands: `.venv/Scripts/python -m pytest ...`, `ruff check .`, `mypy src/jdlib`; integration tests need `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1` and a fresh DB.
 - No comments in source; docstrings only where shown; pristine test output; commit after every task.
 
@@ -1246,14 +1246,14 @@ class DefaultPDP:
         self._catalog = catalog
         self._reader = reader
         self._scopes = scopes
-        self._cache = cache or AuthzCache()
+        self.cache = cache or AuthzCache()
 
     async def _remember(self, key: tuple[object, ...], produce: Callable[[], Awaitable[_T]]) -> _T:
-        cached = self._cache.get(key)
+        cached = self.cache.get(key)
         if cached is not None:
             return cast(_T, cached)
         value = await produce()
-        self._cache.put(key, value)
+        self.cache.put(key, value)
         return value
 
     async def evaluate(
@@ -1568,6 +1568,8 @@ async def test_target_factory_receives_kwargs():
     await handler(resource_id=uuid.UUID(int=7), session=None)
     assert pdp.calls[0][1] == ScopeRef(ScopeType.TEAM, uuid.UUID(int=7))
 ```
+
+Note: `Enforcer.require` reads the ambient tenant context via `current_tenant()`, so `tests/unit/test_guards.py` installs one with an autouse `context_scope` fixture (a local `_context()` plus the fixture; the five assertions are exactly as shown).
 
 - [ ] **Step 2: Run tests to verify they fail**
 

@@ -64,14 +64,14 @@ class DefaultPDP:
         self._catalog = catalog
         self._reader = reader
         self._scopes = scopes
-        self._cache = cache or AuthzCache()
+        self.cache = cache or AuthzCache()
 
     async def _remember(self, key: tuple[object, ...], produce: Callable[[], Awaitable[_T]]) -> _T:
-        cached = self._cache.get(key)
+        cached = self.cache.get(key)
         if cached is not None:
             return cast(_T, cached)
         value = await produce()
-        self._cache.put(key, value)
+        self.cache.put(key, value)
         return value
 
     async def evaluate(

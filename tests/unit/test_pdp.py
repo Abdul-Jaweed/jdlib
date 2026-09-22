@@ -144,6 +144,11 @@ def test_cache_memoizes_until_invalidated():
     assert cache.get("k") is None
 
 
+def test_pdp_exposes_injected_cache():
+    cache = AuthzCache()
+    assert _pdp(_Reader(), cache=cache).cache is cache
+
+
 async def test_denies_when_tenant_not_active():
     decision = await _pdp(_Reader(tenant_status="suspended")).evaluate(
         _user(), "resource:read", ScopeRef(ScopeType.TENANT, None), _context(_user()),
