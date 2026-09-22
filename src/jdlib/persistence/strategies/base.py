@@ -6,6 +6,8 @@ from typing import Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jdlib.context import TenantRecord
+from jdlib.migrations.runner import MigrationRunner
+from jdlib.persistence.strategies.deprovision import DeprovisionMode
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,3 +21,9 @@ class IsolationStrategy(Protocol):
     capabilities: StrategyCapabilities
 
     async def session(self, tenant: TenantRecord) -> AsyncSession: ...
+
+    async def provision(self, tenant: TenantRecord) -> None: ...
+
+    async def migrate(self, tenant: TenantRecord, runner: MigrationRunner) -> None: ...
+
+    async def deprovision(self, tenant: TenantRecord, mode: DeprovisionMode) -> None: ...
