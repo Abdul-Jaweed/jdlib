@@ -75,12 +75,12 @@ def test_provision_tenant_schema_keeps_strict_tenant_prefix(monkeypatch, schema)
 @pytest.mark.parametrize("schema", ["Bad-Schema", "T_UP", 'x"; DROP', "", "1x", "x" * 64])
 def test_shared_strategy_rejects_invalid_schema(schema):
     with pytest.raises(StrategyCapabilityError):
-        SharedSchemaStrategy(engine=None, schema=schema)  # type: ignore[arg-type]
+        SharedSchemaStrategy(engine=None, schema=schema)
 
 
 @pytest.mark.parametrize("schema", ["public", "jt_test"])
 def test_shared_strategy_accepts_deployment_configured_schemas(schema):
-    SharedSchemaStrategy(engine=None, schema=schema)  # type: ignore[arg-type]
+    SharedSchemaStrategy(engine=None, schema=schema)
 
 
 def _record() -> TenantRecord:
@@ -94,23 +94,23 @@ def test_deprovision_modes_are_frozen():
 
 
 async def test_shared_provision_is_a_noop():
-    strategy = SharedSchemaStrategy(engine=None, schema="jt_test")  # type: ignore[arg-type]
+    strategy = SharedSchemaStrategy(engine=None, schema="jt_test")
     await strategy.provision(_record())
 
 
 async def test_shared_migrate_runs_tenant_chain_for_schema():
-    strategy = SharedSchemaStrategy(engine=None, schema="jt_test")  # type: ignore[arg-type]
+    strategy = SharedSchemaStrategy(engine=None, schema="jt_test")
     runner = _Runner()
     await strategy.migrate(_record(), runner)  # type: ignore[arg-type]
     assert runner.calls == [("jt_test", "head")]
 
 
 def test_shared_migration_schema_returns_configured_schema():
-    strategy = SharedSchemaStrategy(engine=None, schema="jt_test")  # type: ignore[arg-type]
+    strategy = SharedSchemaStrategy(engine=None, schema="jt_test")
     assert strategy.migration_schema(_record()) == "jt_test"
 
 
 async def test_shared_deprovision_is_a_noop_for_all_modes():
-    strategy = SharedSchemaStrategy(engine=None, schema="jt_test")  # type: ignore[arg-type]
+    strategy = SharedSchemaStrategy(engine=None, schema="jt_test")
     for mode in DeprovisionMode:
         await strategy.deprovision(_record(), mode)

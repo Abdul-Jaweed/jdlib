@@ -28,6 +28,7 @@ from jdlib.control.models import (
 from jdlib.control.session import ControlPlaneSession
 from jdlib.errors import (
     ProvisioningError,
+    StrategyCapabilityError,
     TenantNotFound,
     TenantNotWritable,
     TenantOperationInProgress,
@@ -93,6 +94,37 @@ def _apply_status(tenant: Tenant, target: TenantStatus, *, reason: str | None) -
         tenant.archived_at = datetime.now(UTC)
 
 
+async def _relocating(session: ControlPlaneSession, tenant_id: uuid.UUID) -> bool:
+    relocation = (
+        await session.execute(
+            sa.select(TenantRelocation.id).where(
+                TenantRelocation.tenant_id == tenant_id,
+                TenantRelocation.status.in_(CRITICAL_RELOCATION_PHASES),
+            )
+        )
+    ).scalar_one_or_none()
+    return relocation is not None
+
+
+def _servability_error(
+    tenant: Tenant,
+    state: TenantMigrationState | None,
+    *,
+    relocating: bool,
+) -> str | None:
+    if tenant.status != TenantStatus.ACTIVE.value:
+        return f"tenant {tenant.slug} is {tenant.status}"
+    if (
+        state is None
+        or state.status != MigrationStatus.SUCCESS.value
+        or state.current_version != state.desired_version
+    ):
+        return f"tenant {tenant.slug} migration is not current"
+    if relocating:
+        return f"tenant {tenant.slug} relocation in progress"
+    return None
+
+
 class TenantRegistry:
     def __init__(
         self,
@@ -114,7 +146,7 @@ class TenantRegistry:
     def _strategy_for(self, placement: TenantPlacement) -> IsolationStrategy:
         strategy = self._strategies.get(PlacementStrategy(placement.strategy))
         if strategy is None:
-            raise ProvisioningError("no strategy registered for tenant placement")
+            raise StrategyCapabilityError("no strategy registered for tenant placement")
         return strategy
 
     async def _control(self) -> ControlPlaneSession:
@@ -122,6 +154,18 @@ class TenantRegistry:
 
     async def _tenant(self, session: ControlPlaneSession, tenant_id: uuid.UUID) -> Tenant:
         tenant: Tenant | None = await session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise TenantNotFound(str(tenant_id))
+        return tenant
+
+    async def _reread_tenant(self, session: ControlPlaneSession, tenant_id: uuid.UUID) -> Tenant:
+        tenant: Tenant | None = (
+            await session.execute(
+                sa.select(Tenant)
+                .where(Tenant.id == tenant_id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
         if tenant is None:
             raise TenantNotFound(str(tenant_id))
         return tenant
@@ -392,27 +436,39 @@ class TenantRegistry:
             placement: TenantPlacement | None = await session.get(TenantPlacement, tenant_id)
             if placement is None:
                 raise ProvisioningError("tenant is missing a placement record")
+            strategy = self._strategy_for(placement)
             record = _record(tenant, placement)
+            metadata: dict[str, object] = {"mode": mode.value}
+            if children:
+                metadata["detach_children"] = True
+                metadata["detached_children"] = [str(child) for child in children]
             if mode is DeprovisionMode.ARCHIVE:
                 _apply_status(tenant, TenantStatus.ARCHIVED, reason=None)
                 await self._audit.record(
                     action="tenant.deprovisioned",
                     tenant_id=tenant_id,
                     actor_id=actor_id,
-                    metadata={"mode": mode.value},
+                    metadata=metadata,
                 )
                 await session.commit()
                 return tenant
             _apply_status(tenant, TenantStatus.DEPROVISIONING, reason=None)
             await session.commit()
+            await self._lock(session, tenant_id)
+            tenant = await self._reread_tenant(session, tenant_id)
+            if tenant.status != TenantStatus.DEPROVISIONING.value:
+                raise TenantOperationInProgress(
+                    f"tenant {tenant.slug} deprovision was superseded by state {tenant.status}"
+                )
             counts = await self._delete_access_rows(session, tenant_id)
-            await self._strategy_for(placement).deprovision(record, mode)
+            await strategy.deprovision(record, mode)
             tenant.status = TenantStatus.DELETED.value
+            metadata["counts"] = counts
             await self._audit.record(
                 action="tenant.deprovisioned",
                 tenant_id=tenant_id,
                 actor_id=actor_id,
-                metadata={"mode": mode.value, "counts": counts},
+                metadata=metadata,
             )
             await session.commit()
             return tenant
@@ -432,24 +488,11 @@ class TenantRegistry:
             state: TenantMigrationState | None = await session.get(
                 TenantMigrationState, tenant_id
             )
-            relocating = (
-                await session.execute(
-                    sa.select(TenantRelocation.id).where(
-                        TenantRelocation.tenant_id == tenant_id,
-                        TenantRelocation.status.in_(CRITICAL_RELOCATION_PHASES),
-                    )
-                )
-            ).scalar_one_or_none()
-            if tenant.status != TenantStatus.ACTIVE.value:
-                raise TenantSuspended(f"tenant {tenant.slug} is {tenant.status}")
-            if (
-                state is None
-                or state.status != MigrationStatus.SUCCESS.value
-                or state.current_version != state.desired_version
-            ):
-                raise TenantSuspended(f"tenant {tenant.slug} migration is not current")
-            if relocating is not None:
-                raise TenantSuspended(f"tenant {tenant.slug} relocation in progress")
+            error = _servability_error(
+                tenant, state, relocating=await _relocating(session, tenant_id)
+            )
+            if error is not None:
+                raise TenantSuspended(error)
             return tenant
 
     async def list_for_user(self, user_id: uuid.UUID) -> list[Tenant]:
@@ -483,21 +526,8 @@ class RegistryWriteFence:
             state: TenantMigrationState | None = await session.get(
                 TenantMigrationState, tenant_id
             )
-            relocating = (
-                await session.execute(
-                    sa.select(TenantRelocation.id).where(
-                        TenantRelocation.tenant_id == tenant_id,
-                        TenantRelocation.status.in_(CRITICAL_RELOCATION_PHASES),
-                    )
-                )
-            ).scalar_one_or_none()
-            if tenant.status != TenantStatus.ACTIVE.value:
-                raise TenantNotWritable(f"tenant {tenant.slug} is {tenant.status}")
-            if (
-                state is None
-                or state.status != MigrationStatus.SUCCESS.value
-                or state.current_version != state.desired_version
-            ):
-                raise TenantNotWritable(f"tenant {tenant.slug} migration is not current")
-            if relocating is not None:
-                raise TenantNotWritable(f"tenant {tenant.slug} relocation in progress")
+            error = _servability_error(
+                tenant, state, relocating=await _relocating(session, tenant_id)
+            )
+            if error is not None:
+                raise TenantNotWritable(error)

@@ -125,20 +125,32 @@ Explicit operation with three modes:
 Ordering for `purge`/`destroy` (under lifecycle lock):
 
 ```
-1. status=deprovisioning (denies traffic)
-2. revoke sessions/keys: api_keys, invitations (control plane, CASCADE-safe)
-3. delete access rows: role_bindings, resource_grants, roles (control plane)
+1. status=deprovisioning (denies traffic); the lock is released by this commit
+   and re-acquired immediately after, with the state re-verified before any
+   destructive step
+2. revoke credentials: api_keys, service_accounts, invitations (control plane,
+   CASCADE-safe)
+3. delete access rows: role_bindings, resource_grants, role_permissions, roles
+   (control plane)
 4. delete memberships (control plane)
 5. strategy.deprovision: drop schema/database per mode (tenant plane)
 6. tenants.status=deleted; tenant_placements/migration_states retained for audit
-7. platform audit: tenant.deprovisioned with mode and counts
+7. platform audit: tenant.deprovisioned with mode and counts (plus
+   `detach_children`/`detached_children` when children were detached)
 ```
 
 - `archived` is reversible; `deleted` is terminal.
+- **Shared-schema `purge` limitation (tracked):** a shared-schema placement does
+  not physically separate the tenant plane, so `strategy.deprovision` is a no-op
+  and `purge` (and `destroy`) currently retain the tenant-plane rows.
+  Privileged, RLS-scoped tenant-plane deletion arrives with Plan 5; until then
+  this is a known compliance limitation. The `tenant.deprovisioned` audit record
+  proves the control-plane deletion only.
 - Parent/child: deleting a tenant that has `parent_tenant_id` children is
   blocked (`ON DELETE RESTRICT`) while children exist; the operation supports an
   explicit `detach_children=true` that clears their `parent_tenant_id` first
-  (audited). Cascade deletion of children never happens implicitly.
+  (audited, including the detached child ids). Cascade deletion of children
+  never happens implicitly.
 - Backups/retention are the deployment's responsibility; the framework emits
   the audit record needed to prove deletion.
 - Audit events (`platform_audit_events`) are never removed by tenant deletion;

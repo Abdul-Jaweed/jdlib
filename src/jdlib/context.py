@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 from jdlib.config import ContextConfig
 from jdlib.control.enums import OperatorLevel, PlacementStrategy, TenantStatus
+from jdlib.control.models import Tenant
 from jdlib.errors import (
     AuthorizationError,
     ExpiredToken,
@@ -140,7 +141,7 @@ class TenantDirectory(Protocol):
 
 
 class ServabilityChecker(Protocol):
-    async def assert_servable(self, tenant_id: uuid.UUID) -> None: ...
+    async def assert_servable(self, tenant_id: uuid.UUID) -> Tenant: ...
 
 
 class EntitlementChecker(Protocol):

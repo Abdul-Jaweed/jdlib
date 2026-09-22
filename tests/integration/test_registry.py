@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -20,12 +21,14 @@ from jdlib.control.models import (
     ServiceAccount,
     Tenant,
     TenantMigrationState,
+    TenantPlacement,
     TenantRelocation,
     User,
 )
 from jdlib.control.registry import RegistryWriteFence, TenantRegistry
 from jdlib.errors import (
     ProvisioningError,
+    StrategyCapabilityError,
     TenantNotFound,
     TenantNotWritable,
     TenantOperationInProgress,
@@ -88,17 +91,32 @@ class _FailingAudit(RecordingPlatformAudit):
         )
 
 
+class _FlakyStrategy(SharedSchemaStrategy):
+    def __init__(self, *, fail_times: int = 1) -> None:
+        super().__init__(engine=None, schema=TENANT_SCHEMA)
+        self._fail_times = fail_times
+        self.deprovision_calls = 0
+
+    async def deprovision(self, tenant, mode) -> None:
+        self.deprovision_calls += 1
+        if self.deprovision_calls <= self._fail_times:
+            raise RuntimeError("storage deprovision failed")
+        await super().deprovision(tenant, mode)
+
+
 def _registry(
     control_session_factory,
     runner: _Runner | None = None,
     seeder=None,
     audit: RecordingPlatformAudit | None = None,
+    strategy: SharedSchemaStrategy | None = None,
 ):
     audit = audit or RecordingPlatformAudit()
     registry = TenantRegistry(
         session_factory=control_session_factory,
         strategies={
-            PlacementStrategy.SHARED: SharedSchemaStrategy(engine=None, schema="jt_test")
+            PlacementStrategy.SHARED: strategy
+            or SharedSchemaStrategy(engine=None, schema="jt_test")
         },
         runner=runner or _Runner(),
         seeder=seeder or _Seeder(),
@@ -113,7 +131,6 @@ def _real_registry(
     desired_version: str = DESIRED_VERSION,
 ) -> TenantRegistry:
     runner = MigrationRunner(postgres_url)
-    runner.upgrade_tenant(TENANT_SCHEMA)
     return TenantRegistry(
         session_factory=control_session_factory,
         strategies={
@@ -315,6 +332,81 @@ async def test_provision_is_idempotent(control_session_factory):
     for _ in range(3):
         await registry.provision(tenant.id)
     assert (await registry.get(tenant.id)).status == TenantStatus.ACTIVE
+
+
+async def test_provision_unknown_strategy_raises_capability_error(control_session_factory):
+    registry = TenantRegistry(
+        session_factory=control_session_factory,
+        strategies={},
+        runner=_Runner(),
+        seeder=_Seeder(),
+        audit=RecordingPlatformAudit(),
+    )
+    tenant = await _create(registry, "nostrategy")
+    with pytest.raises(StrategyCapabilityError):
+        await registry.provision(tenant.id)
+    assert (await registry.get(tenant.id)).status == TenantStatus.PROVISIONING
+
+
+async def test_provision_missing_placement_raises(control_session_factory):
+    registry, _ = _registry(control_session_factory)
+    tenant = await _create(registry, "noplacement")
+    await _execute(
+        control_session_factory,
+        sa.delete(TenantPlacement).where(TenantPlacement.tenant_id == tenant.id),
+    )
+    with pytest.raises(ProvisioningError):
+        await registry.provision(tenant.id)
+    assert (await registry.get(tenant.id)).status == TenantStatus.PROVISIONING
+
+
+async def test_provision_missing_migration_state_raises(control_session_factory):
+    registry, _ = _registry(control_session_factory)
+    tenant = await _create(registry, "nostate")
+    await _execute(
+        control_session_factory,
+        sa.delete(TenantMigrationState).where(TenantMigrationState.tenant_id == tenant.id),
+    )
+    with pytest.raises(ProvisioningError):
+        await registry.provision(tenant.id)
+
+
+async def test_concurrent_provisions_serialize(control_session_factory):
+    runner = _Runner()
+    registry, audit = _registry(control_session_factory, runner=runner)
+    tenant = await _create(registry, "racing")
+    first, second = await asyncio.gather(
+        registry.provision(tenant.id), registry.provision(tenant.id)
+    )
+    assert first.status == TenantStatus.ACTIVE
+    assert second.status == TenantStatus.ACTIVE
+    assert runner.calls == [TENANT_SCHEMA]
+    assert runner.version_calls == [TENANT_SCHEMA]
+    assert [entry["action"] for entry in audit.entries] == [
+        "tenant.created",
+        "tenant.migration.succeeded",
+        "tenant.activated",
+    ]
+    state = await _migration_state(control_session_factory, tenant.id)
+    assert state.status == MigrationStatus.SUCCESS.value
+    assert (await registry.get(tenant.id)).status == TenantStatus.ACTIVE
+
+
+async def test_concurrent_provisions_of_distinct_tenants(control_session_factory):
+    runner = _Runner()
+    registry, _ = _registry(control_session_factory, runner=runner)
+
+    async def provision_new(prefix: str) -> Tenant:
+        tenant = await _create(registry, prefix)
+        return await registry.provision(tenant.id)
+
+    first, second = await asyncio.gather(
+        provision_new("parallel-a"), provision_new("parallel-b")
+    )
+    assert first.id != second.id
+    assert first.status == TenantStatus.ACTIVE
+    assert second.status == TenantStatus.ACTIVE
+    assert sorted(runner.calls) == [TENANT_SCHEMA, TENANT_SCHEMA]
 
 
 async def test_provision_health_check_failure_stays_provisioning(control_session_factory):
@@ -542,6 +634,53 @@ async def test_deprovision_archive_retains_access_rows(control_session_factory):
     assert set((await _access_counts(control_session_factory, tenant.id)).values()) == {1}
 
 
+async def test_deprovisioning_retry_resumes_after_strategy_failure(control_session_factory):
+    strategy = _FlakyStrategy()
+    registry, audit = _registry(control_session_factory, strategy=strategy)
+    tenant = await _active(registry, "retry")
+    await _seed_access_rows(control_session_factory, tenant.id)
+    await registry.archive(tenant.id)
+    with pytest.raises(RuntimeError, match="storage deprovision failed"):
+        await registry.deprovision(tenant.id, mode=DeprovisionMode.PURGE)
+    assert strategy.deprovision_calls == 1
+    assert (await registry.get(tenant.id)).status == TenantStatus.DEPROVISIONING
+    purged = await registry.deprovision(tenant.id, mode=DeprovisionMode.PURGE)
+    assert purged.status == TenantStatus.DELETED
+    assert strategy.deprovision_calls == 2
+    assert await _access_counts(control_session_factory, tenant.id) == dict.fromkeys(
+        ACCESS_MODELS, 0
+    )
+    assert audit.entries[-1]["metadata"]["counts"] == dict.fromkeys(ACCESS_MODELS, 1)
+
+
+async def test_deprovision_superseded_after_lock_release_raises(
+    control_session_factory, monkeypatch
+):
+    registry, _ = _registry(control_session_factory)
+    tenant = await _active(registry, "supersede")
+    await registry.archive(tenant.id)
+    original_lock = registry._lock
+    lock_calls = 0
+
+    async def racing_lock(session, tenant_id):
+        nonlocal lock_calls
+        lock_calls += 1
+        if lock_calls == 2:
+            await _execute(
+                control_session_factory,
+                sa.update(Tenant)
+                .where(Tenant.id == tenant_id)
+                .values(status=TenantStatus.ARCHIVED.value),
+            )
+        await original_lock(session, tenant_id)
+
+    monkeypatch.setattr(registry, "_lock", racing_lock)
+    with pytest.raises(TenantOperationInProgress):
+        await registry.deprovision(tenant.id, mode=DeprovisionMode.PURGE)
+    assert lock_calls == 2
+    assert (await registry.get(tenant.id)).status == TenantStatus.ARCHIVED
+
+
 async def test_list_for_user_returns_only_active_memberships(control_session_factory):
     registry, _ = _registry(control_session_factory)
     user_id = uuid7()
@@ -562,7 +701,7 @@ async def test_list_for_user_returns_only_active_memberships(control_session_fac
 
 
 async def test_parent_with_children_cannot_be_archived(control_session_factory):
-    registry, _ = _registry(control_session_factory)
+    registry, audit = _registry(control_session_factory)
     parent = await _create(registry, "parent")
     child = await _create(registry, "child", parent_tenant_id=parent.id)
     await registry.provision(parent.id)
@@ -572,3 +711,8 @@ async def test_parent_with_children_cannot_be_archived(control_session_factory):
     await registry.deprovision(parent.id, mode=DeprovisionMode.ARCHIVE, detach_children=True)
     assert (await registry.get(child.id)).parent_tenant_id is None
     assert (await registry.get(parent.id)).status == TenantStatus.ARCHIVED
+    entry = audit.entries[-1]
+    assert entry["action"] == "tenant.deprovisioned"
+    assert entry["metadata"]["mode"] == "archive"
+    assert entry["metadata"]["detach_children"] is True
+    assert entry["metadata"]["detached_children"] == [str(child.id)]
