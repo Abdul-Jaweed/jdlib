@@ -657,8 +657,11 @@ async def test_deprovision_superseded_after_lock_release_raises(
     control_session_factory, monkeypatch
 ):
     registry, _ = _registry(control_session_factory)
-    tenant = await _active(registry, "supersede")
-    await registry.archive(tenant.id)
+    parent = await _active(registry, "supersede")
+    child = await _create(registry, "attached", parent_tenant_id=parent.id)
+    await registry.provision(child.id)
+    await _seed_access_rows(control_session_factory, parent.id)
+    await registry.archive(parent.id)
     original_lock = registry._lock
     lock_calls = 0
 
@@ -676,8 +679,28 @@ async def test_deprovision_superseded_after_lock_release_raises(
 
     monkeypatch.setattr(registry, "_lock", racing_lock)
     with pytest.raises(TenantOperationInProgress):
-        await registry.deprovision(tenant.id, mode=DeprovisionMode.PURGE)
+        await registry.deprovision(parent.id, mode=DeprovisionMode.PURGE, detach_children=True)
     assert lock_calls == 2
+    assert (await registry.get(parent.id)).status == TenantStatus.ARCHIVED
+    assert (await registry.get(child.id)).parent_tenant_id == parent.id
+    assert set((await _access_counts(control_session_factory, parent.id)).values()) == {1}
+
+
+async def test_deprovision_archive_ignores_unregistered_strategy(control_session_factory):
+    registry = TenantRegistry(
+        session_factory=control_session_factory,
+        strategies={},
+        runner=_Runner(),
+        seeder=_Seeder(),
+        audit=RecordingPlatformAudit(),
+    )
+    tenant = await _create(registry, "nostrategy")
+    await _execute(
+        control_session_factory,
+        sa.update(Tenant).where(Tenant.id == tenant.id).values(status=TenantStatus.ACTIVE.value),
+    )
+    archived = await registry.deprovision(tenant.id, mode=DeprovisionMode.ARCHIVE)
+    assert archived.status == TenantStatus.ARCHIVED
     assert (await registry.get(tenant.id)).status == TenantStatus.ARCHIVED
 
 

@@ -371,13 +371,13 @@ git commit -m "feat: strategy lifecycle methods and deprovision modes"
 **Review-fix invariants (frozen docs `05-tenant-lifecycle.md` §1–§6):**
 - Tenant transitions are exactly `provisioning → active|deleted`; `active → suspended|archived`; `suspended → active|archived`; `archived → active|deprovisioning`; `deprovisioning → deleted|archived`; `deleted` terminal. Invalid transitions raise `TenantOperationInProgress`; a repeat in the target state is an idempotent no-op.
 - `create` is idempotent per `(strategy, target_handle, region)` on an existing slug and raises `ProvisioningError` on a conflicting placement; the create race is serialized by `pg_advisory_xact_lock(hashtextextended('jdlib:tenant-slug:' || slug, 0))`.
-- `purge`/`destroy` order: `deprovisioning` commit → access-row deletes in dependency order (`api_keys`, `service_accounts`, `invitations`, `role_bindings`, `resource_grants`, `role_permissions`, `roles`, `memberships`) → `strategy.deprovision` → `deleted` + audit with mode and counts. `archive` deletes nothing and sets `archived_at`. The ordered deletion block applies to both `purge` and `destroy` (see the §5 wording note below).
+- `purge`/`destroy` order: `deprovisioning` commit → re-acquired lock + state re-verify → re-query/detach children (when `detach_children=true`) → access-row deletes in dependency order (`api_keys`, `service_accounts`, `invitations`, `role_bindings`, `resource_grants`, `role_permissions`, `roles`, `memberships`) → `strategy.deprovision` → `deleted` + audit with mode, counts, and detached child ids. `archive` deletes nothing, never resolves the placement strategy, detaches children in its own transaction, and sets `archived_at`. The ordered deletion block applies to both `purge` and `destroy` (see the §5 wording note below).
 - Mandatory failure audits are recorded **before** committing the failure-state mutation (audit failure prevents the commit).
 - `provision` health step reads `MigrationRunner.tenant_version(strategy.migration_schema(record))` after migrate/seed and fails closed on any mismatch with `desired_version`.
 - `assert_servable(tenant_id)` loads tenant, migration state, and relocation in one control session (no stale caller snapshot); `RegistryWriteFence.assert_writable` enforces the same predicate with `TenantNotWritable`. Both call the one internal `_servability_error(tenant, state, relocating=...) -> str | None` helper and differ only in the raised error.
-- `deprovision(purge|destroy)` re-acquires the lifecycle advisory lock after committing `deprovisioning` (the xact-scoped lock is released by that commit), re-reads the tenant, and raises `TenantOperationInProgress` if the state changed; `strategy`/`record` are resolved before the first commit so no post-commit attribute read is needed.
-- `deprovision` audit metadata carries `detach_children=true` and `detached_children=[id, ...]` when children were detached.
-- A placement with no registered strategy raises `StrategyCapabilityError` (same error as `SessionRouter`) from `_strategy_for`, before any state change.
+- `deprovision(purge|destroy)` re-acquires the lifecycle advisory lock after committing `deprovisioning` (the xact-scoped lock is released by that commit), re-reads the tenant, and raises `TenantOperationInProgress` if the state changed; the child detach and access-row deletes run only in that post-re-lock transaction, so a superseded or failed purge rolls them back. `strategy` is resolved after the `archive` early-return and before the `deprovisioning` commit, so `archive` works without a registered strategy while `purge`/`destroy` still fail closed before any state change.
+- `deprovision` re-queries children inside the final transaction and its audit metadata carries `detach_children=true` and `detached_children=[id, ...]` when children were detached (same transaction as the detach, so the ids match what was actually detached).
+- A placement with no registered strategy raises `StrategyCapabilityError` (same error as `SessionRouter`) from `_strategy_for`, before any state change for `provision`/`migrate`/`purge`/`destroy`; `archive` never calls `_strategy_for`.
 
 - [ ] **Step 1: Add the control async fixture**
 
@@ -1060,8 +1060,11 @@ async def test_deprovision_superseded_after_lock_release_raises(
     control_session_factory, monkeypatch
 ):
     registry, _ = _registry(control_session_factory)
-    tenant = await _active(registry, "supersede")
-    await registry.archive(tenant.id)
+    parent = await _active(registry, "supersede")
+    child = await _create(registry, "attached", parent_tenant_id=parent.id)
+    await registry.provision(child.id)
+    await _seed_access_rows(control_session_factory, parent.id)
+    await registry.archive(parent.id)
     original_lock = registry._lock
     lock_calls = 0
 
@@ -1079,8 +1082,28 @@ async def test_deprovision_superseded_after_lock_release_raises(
 
     monkeypatch.setattr(registry, "_lock", racing_lock)
     with pytest.raises(TenantOperationInProgress):
-        await registry.deprovision(tenant.id, mode=DeprovisionMode.PURGE)
+        await registry.deprovision(parent.id, mode=DeprovisionMode.PURGE, detach_children=True)
     assert lock_calls == 2
+    assert (await registry.get(parent.id)).status == TenantStatus.ARCHIVED
+    assert (await registry.get(child.id)).parent_tenant_id == parent.id
+    assert set((await _access_counts(control_session_factory, parent.id)).values()) == {1}
+
+
+async def test_deprovision_archive_ignores_unregistered_strategy(control_session_factory):
+    registry = TenantRegistry(
+        session_factory=control_session_factory,
+        strategies={},
+        runner=_Runner(),
+        seeder=_Seeder(),
+        audit=RecordingPlatformAudit(),
+    )
+    tenant = await _create(registry, "nostrategy")
+    await _execute(
+        control_session_factory,
+        sa.update(Tenant).where(Tenant.id == tenant.id).values(status=TenantStatus.ACTIVE.value),
+    )
+    archived = await registry.deprovision(tenant.id, mode=DeprovisionMode.ARCHIVE)
+    assert archived.status == TenantStatus.ARCHIVED
     assert (await registry.get(tenant.id)).status == TenantStatus.ARCHIVED
 
 
@@ -1558,22 +1581,16 @@ class TenantRegistry:
             ).scalars().all()
             if children and not detach_children:
                 raise ProvisioningError("tenant has children; detach them explicitly")
-            if children:
-                await session.execute(
-                    sa.update(Tenant)
-                    .where(Tenant.parent_tenant_id == tenant_id)
-                    .values(parent_tenant_id=None)
-                )
             placement: TenantPlacement | None = await session.get(TenantPlacement, tenant_id)
             if placement is None:
                 raise ProvisioningError("tenant is missing a placement record")
-            strategy = self._strategy_for(placement)
             record = _record(tenant, placement)
             metadata: dict[str, object] = {"mode": mode.value}
-            if children:
-                metadata["detach_children"] = True
-                metadata["detached_children"] = [str(child) for child in children]
             if mode is DeprovisionMode.ARCHIVE:
+                if children:
+                    await self._detach_children(session, tenant_id)
+                    metadata["detach_children"] = True
+                    metadata["detached_children"] = [str(child) for child in children]
                 _apply_status(tenant, TenantStatus.ARCHIVED, reason=None)
                 await self._audit.record(
                     action="tenant.deprovisioned",
@@ -1583,6 +1600,7 @@ class TenantRegistry:
                 )
                 await session.commit()
                 return tenant
+            strategy = self._strategy_for(placement)
             _apply_status(tenant, TenantStatus.DEPROVISIONING, reason=None)
             await session.commit()
             await self._lock(session, tenant_id)
@@ -1591,6 +1609,15 @@ class TenantRegistry:
                 raise TenantOperationInProgress(
                     f"tenant {tenant.slug} deprovision was superseded by state {tenant.status}"
                 )
+            children = (
+                await session.execute(
+                    sa.select(Tenant.id).where(Tenant.parent_tenant_id == tenant_id)
+                )
+            ).scalars().all()
+            if children:
+                await self._detach_children(session, tenant_id)
+                metadata["detach_children"] = True
+                metadata["detached_children"] = [str(child) for child in children]
             counts = await self._delete_access_rows(session, tenant_id)
             await strategy.deprovision(record, mode)
             tenant.status = TenantStatus.DELETED.value
@@ -1603,6 +1630,13 @@ class TenantRegistry:
             )
             await session.commit()
             return tenant
+
+    async def _detach_children(self, session: ControlPlaneSession, tenant_id: uuid.UUID) -> None:
+        await session.execute(
+            sa.update(Tenant)
+            .where(Tenant.parent_tenant_id == tenant_id)
+            .values(parent_tenant_id=None)
+        )
 
     async def _delete_access_rows(
         self, session: ControlPlaneSession, tenant_id: uuid.UUID
@@ -1715,13 +1749,16 @@ Review-fix notes (frozen-doc compliance):
 - Failure audits are recorded before committing the failure-state mutation
   (`05` §5.1), so an unavailable audit sink leaves the previous state committed
   (fail closed).
-- `deprovision(purge|destroy)` commits `deprovisioning` first, then deletes
+- `deprovision(purge|destroy)` commits `deprovisioning` first, re-acquires the
+  lifecycle lock and re-verifies the state (superseded → `TenantOperationInProgress`),
+  then re-queries and detaches children (when `detach_children=true`) and deletes
   control-plane access rows in dependency order
   (`_ACCESS_ROW_DELETION_ORDER`: `api_keys`, `service_accounts`, `invitations`,
   `role_bindings`, `resource_grants`, `role_permissions`, `roles`,
   `memberships`), then calls `strategy.deprovision`, then commits `deleted`
-  with the mode and per-table counts in the audit metadata. `archive` deletes
-  nothing and sets `archived_at`.
+  with the mode, per-table counts, and detached child ids in the audit metadata.
+  `archive` deletes nothing, never resolves the placement strategy, detaches
+  children in its own transaction, and sets `archived_at`.
 - **§5 `purge` wording (frozen doc):** the §5 mode table says `purge` retains
   "control-plane rows"; the ordered deletion block in §5 (steps 2–4) is the
   authoritative operation sequence and the implementation follows it for both
@@ -1755,23 +1792,27 @@ Review-fix notes (frozen-doc compliance):
   concurrently, each migrating once), and
   `test_deprovision_superseded_after_lock_release_raises` (a state change
   between the `deprovisioning` commit and the re-acquired lock raises
-  `TenantOperationInProgress` — the lock-gap regression guard).
+  `TenantOperationInProgress`; with seeded access rows and an attached child,
+  both survive the rollback — the lock-gap regression guard).
 - Deprovision retry: `test_deprovisioning_retry_resumes_after_strategy_failure`
   (archive → failed purge leaves `deprovisioning` → retry purge resumes,
   deletes access rows, marks `deleted`).
 - `_strategy_for` direct paths: `test_provision_unknown_strategy_raises_capability_error`
   (`StrategyCapabilityError`), `test_provision_missing_placement_raises` and
-  `test_provision_missing_migration_state_raises` (`ProvisioningError`).
+  `test_provision_missing_migration_state_raises` (`ProvisioningError`), and
+  `test_deprovision_archive_ignores_unregistered_strategy` (`archive` succeeds
+  with `strategies={}`).
 - Detach audit: `test_parent_with_children_cannot_be_archived` asserts
   `detach_children=true` and `detached_children=[child_id]` in the
-  `tenant.deprovisioned` metadata.
+  `tenant.deprovisioned` metadata (children re-queried in the transaction that
+  performs the detach).
 - The end-to-end test is real: `_real_registry` no longer pre-runs
   `upgrade_tenant`; `provision` performs the migration itself.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_registry.py -v -W error`
-Expected: PASS (33 passed)
+Expected: PASS (34 passed)
 
 - [ ] **Step 6: Full suite, lint, type check, commit**
 

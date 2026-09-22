@@ -427,22 +427,16 @@ class TenantRegistry:
             ).scalars().all()
             if children and not detach_children:
                 raise ProvisioningError("tenant has children; detach them explicitly")
-            if children:
-                await session.execute(
-                    sa.update(Tenant)
-                    .where(Tenant.parent_tenant_id == tenant_id)
-                    .values(parent_tenant_id=None)
-                )
             placement: TenantPlacement | None = await session.get(TenantPlacement, tenant_id)
             if placement is None:
                 raise ProvisioningError("tenant is missing a placement record")
-            strategy = self._strategy_for(placement)
             record = _record(tenant, placement)
             metadata: dict[str, object] = {"mode": mode.value}
-            if children:
-                metadata["detach_children"] = True
-                metadata["detached_children"] = [str(child) for child in children]
             if mode is DeprovisionMode.ARCHIVE:
+                if children:
+                    await self._detach_children(session, tenant_id)
+                    metadata["detach_children"] = True
+                    metadata["detached_children"] = [str(child) for child in children]
                 _apply_status(tenant, TenantStatus.ARCHIVED, reason=None)
                 await self._audit.record(
                     action="tenant.deprovisioned",
@@ -452,6 +446,7 @@ class TenantRegistry:
                 )
                 await session.commit()
                 return tenant
+            strategy = self._strategy_for(placement)
             _apply_status(tenant, TenantStatus.DEPROVISIONING, reason=None)
             await session.commit()
             await self._lock(session, tenant_id)
@@ -460,6 +455,15 @@ class TenantRegistry:
                 raise TenantOperationInProgress(
                     f"tenant {tenant.slug} deprovision was superseded by state {tenant.status}"
                 )
+            children = (
+                await session.execute(
+                    sa.select(Tenant.id).where(Tenant.parent_tenant_id == tenant_id)
+                )
+            ).scalars().all()
+            if children:
+                await self._detach_children(session, tenant_id)
+                metadata["detach_children"] = True
+                metadata["detached_children"] = [str(child) for child in children]
             counts = await self._delete_access_rows(session, tenant_id)
             await strategy.deprovision(record, mode)
             tenant.status = TenantStatus.DELETED.value
@@ -472,6 +476,13 @@ class TenantRegistry:
             )
             await session.commit()
             return tenant
+
+    async def _detach_children(self, session: ControlPlaneSession, tenant_id: uuid.UUID) -> None:
+        await session.execute(
+            sa.update(Tenant)
+            .where(Tenant.parent_tenant_id == tenant_id)
+            .values(parent_tenant_id=None)
+        )
 
     async def _delete_access_rows(
         self, session: ControlPlaneSession, tenant_id: uuid.UUID

@@ -11,6 +11,7 @@ from jdlib.context import (
     TenantRecord,
     TenantRef,
 )
+from jdlib.control.enums import PlacementStrategy, TenantStatus
 
 
 class FrozenClock(Clock):
@@ -46,14 +47,28 @@ class DictTenants:
 
 
 class ServabilityStub:
-    def __init__(self, suspended: set[uuid.UUID] | None = None) -> None:
+    def __init__(
+        self,
+        suspended: set[uuid.UUID] | None = None,
+        records: dict[uuid.UUID, TenantRecord] | None = None,
+    ) -> None:
         self._suspended = suspended or set()
+        self._records = records or {}
 
-    async def assert_servable(self, tenant_id: uuid.UUID) -> None:
+    async def assert_servable(self, tenant_id: uuid.UUID) -> TenantRecord:
         if tenant_id in self._suspended:
             from jdlib.errors import TenantSuspended
 
             raise TenantSuspended(f"tenant {tenant_id} is not servable")
+        record = self._records.get(tenant_id)
+        if record is not None:
+            return record
+        return TenantRecord(
+            id=tenant_id,
+            slug=str(tenant_id),
+            status=TenantStatus.ACTIVE,
+            strategy=PlacementStrategy.SHARED,
+        )
 
 
 class EntitlementsStub:

@@ -91,7 +91,7 @@ Rules:
 - `blocked` means automated retry is unsafe (divergent schema detected); a
   platform operator must resolve and reset the state to `pending`.
 - Servability is a single predicate used by the health step, the router, and
-  `TenantRegistry.assert_servable(tenant)`:
+  `TenantRegistry.assert_servable(tenant_id) -> Tenant`:
   `tenants.status='active' AND migration.status='success' AND
   current_version = desired_version AND relocation permits serving`
   (relocation blocks serving in `copying`, `verifying`, `flipping`,
