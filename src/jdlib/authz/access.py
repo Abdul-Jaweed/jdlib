@@ -132,13 +132,16 @@ class AccessControl:
     ) -> None:
         self._session_factory = session_factory
         self._catalog = catalog
-        self._catalog_codes = frozenset(permission.code for permission in catalog.all())
         self._reader = reader
         self._cache = cache
         self._audit = audit
         self._registry = registry or ResourceTypeRegistry()
         self._scope_lookup = scope_lookup
         self._resource_lookup = resource_lookup
+
+    @property
+    def _catalog_codes(self) -> frozenset[str]:
+        return frozenset(permission.code for permission in self._catalog.all())
 
     async def _session(self) -> ControlPlaneSession:
         return ControlPlaneSession(self._session_factory())
@@ -183,10 +186,12 @@ class AccessControl:
         record = await self._scope_lookup(tenant_id, scope_type, scope_id)
         if record is None:
             raise InvalidReference(f"{scope_type} scope not found: {scope_id}")
-        if record.tenant_id != tenant_id or record.deleted:
+        if record.tenant_id != tenant_id:
             raise CrossTenantReferenceError(
                 f"{scope_type} scope {scope_id}", str(tenant_id), str(record.tenant_id)
             )
+        if record.deleted:
+            raise InvalidReference(f"{scope_type} scope is deleted: {scope_id}")
 
     async def _validate_scope_placement(
         self, tenant_id: uuid.UUID, scope_type: str, scope_id: uuid.UUID | None
@@ -655,6 +660,10 @@ class AccessControl:
         await self._require_permission(context.tenant_id, "resource:share", actor_principal)
         if to_team_id is not None and to_organization_id is None:
             raise InvalidReference("team ownership requires an organization")
+        if to_organization_id is not None:
+            await self._validate_scope(context.tenant_id, "org", to_organization_id)
+        if to_team_id is not None:
+            await self._validate_scope(context.tenant_id, "team", to_team_id)
         self._cache.invalidate()
         row = (
             await session.execute(sa.select(model).where(model.id == resource_id))
@@ -665,12 +674,12 @@ class AccessControl:
         row.organization_id = to_organization_id
         row.team_id = to_team_id
         if revoke_grants:
-            await session.execute(
-                sa.delete(ResourceGrant).where(
-                    ResourceGrant.tenant_id == context.tenant_id,
-                    ResourceGrant.resource_type == resource_type,
-                    ResourceGrant.resource_id == resource_id,
-                )
+            await self._revoke_grants(
+                session,
+                context.tenant_id,
+                ResourceGrant.resource_type == resource_type,
+                ResourceGrant.resource_id == resource_id,
+                actor_id=actor_id,
             )
         await session.flush()
         await self._audit.record(
@@ -697,6 +706,8 @@ class AccessControl:
         context = getattr(session, "context", None)
         if context is None:
             raise InvalidReference("team move requires a tenant session")
+        await self._require_permission(context.tenant_id, "team:manage", actor_principal)
+        await self._validate_scope(context.tenant_id, "org", to_organization_id)
         self._cache.invalidate()
         previous = (
             await session.execute(
@@ -713,10 +724,14 @@ class AccessControl:
             .values(organization_id=to_organization_id)
             .execution_options(jdlib_scoped=True)
         )
+        cascaded_tables: set[sa.Table] = set()
         for index, definition in enumerate(self._registry.all()):
             model = cast(Any, definition.model)
             if not (hasattr(model, "team_id") and hasattr(model, "organization_id")):
                 continue
+            if model.__table__ in cascaded_tables:
+                continue
+            cascaded_tables.add(model.__table__)
             cascade = (
                 sa.update(model)
                 .where(model.tenant_id == context.tenant_id, model.team_id == team_id)
@@ -726,7 +741,9 @@ class AccessControl:
             statement = statement.add_cte(cascade)
         await session.execute(statement)
         if revoke_grants:
-            await self._revoke_team_grants(session, context.tenant_id, team_id)
+            await self._revoke_team_grants(
+                session, context.tenant_id, team_id, actor_id=actor_id
+            )
         await session.flush()
         await self._audit.record(
             action="team.moved",
@@ -739,24 +756,67 @@ class AccessControl:
             },
         )
 
-    async def _revoke_team_grants(
-        self, session: TenantWriteSession, tenant_id: uuid.UUID, team_id: uuid.UUID
+    async def _revoke_grants(
+        self,
+        session: TenantWriteSession,
+        tenant_id: uuid.UUID,
+        *conditions: sa.ColumnElement[bool],
+        actor_id: uuid.UUID | None,
     ) -> None:
+        grant_ids = (
+            await session.execute(
+                sa.select(ResourceGrant.id).where(
+                    ResourceGrant.tenant_id == tenant_id, *conditions
+                )
+            )
+        ).scalars().all()
+        for grant_id in grant_ids:
+            await self._audit.record(
+                action="grant.revoked",
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                metadata={"grant_id": str(grant_id)},
+            )
+        if grant_ids:
+            await session.execute(
+                sa.delete(ResourceGrant).where(
+                    ResourceGrant.tenant_id == tenant_id, *conditions
+                )
+            )
+
+    async def _revoke_team_grants(
+        self,
+        session: TenantWriteSession,
+        tenant_id: uuid.UUID,
+        team_id: uuid.UUID,
+        *,
+        actor_id: uuid.UUID | None,
+    ) -> None:
+        resource_ids_by_table: dict[sa.Table, list[uuid.UUID]] = {}
         for definition in self._registry.all():
             model = cast(Any, definition.model)
             if not hasattr(model, "team_id"):
                 continue
-            resource_ids = (
-                await session.execute(sa.select(model.id).where(model.team_id == team_id))
-            ).scalars().all()
+            table: sa.Table = model.__table__
+            if table not in resource_ids_by_table:
+                resource_ids_by_table[table] = list(
+                    (
+                        await session.execute(
+                            sa.select(model.id).where(model.team_id == team_id)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            resource_ids = resource_ids_by_table[table]
             if not resource_ids:
                 continue
-            await session.execute(
-                sa.delete(ResourceGrant).where(
-                    ResourceGrant.tenant_id == tenant_id,
-                    ResourceGrant.resource_type == definition.resource_type,
-                    ResourceGrant.resource_id.in_(resource_ids),
-                )
+            await self._revoke_grants(
+                session,
+                tenant_id,
+                ResourceGrant.resource_type == definition.resource_type,
+                ResourceGrant.resource_id.in_(resource_ids),
+                actor_id=actor_id,
             )
 
     async def invite(
@@ -771,7 +831,7 @@ class AccessControl:
         actor_principal: Principal,
         ttl: timedelta = timedelta(days=7),
     ) -> tuple[Invitation, str]:
-        await self._require_permission(tenant_id, "member:invite", actor_principal)
+        held = await self._require_permission(tenant_id, "member:invite", actor_principal)
         scope = await self._validate_scope_placement(tenant_id, scope_type, scope_id)
         token = build_invitation_token()
         token_id = token.split("_")[1]
@@ -795,6 +855,9 @@ class AccessControl:
                 permission = self._catalog.validate(code)
                 if scope not in permission.allowed_scopes:
                     raise RoleScopeMismatch(f"{code} cannot be bound at {scope_type} scope")
+            if role.name == "owner" and not self._catalog_codes <= held:
+                raise AuthorizationError("only a full-catalog actor may assign the owner role")
+            await self._require_subset(tenant_id, codes, actor_principal)
             conditions = [
                 Invitation.tenant_id == tenant_id,
                 Invitation.email == email,
@@ -805,9 +868,22 @@ class AccessControl:
                 conditions.append(Invitation.scope_id.is_(None))
             else:
                 conditions.append(Invitation.scope_id == scope_id)
-            await session.execute(
-                sa.update(Invitation).where(*conditions).values(status="revoked", revoked_at=now)
-            )
+            stale_ids = (
+                await session.execute(sa.select(Invitation.id).where(*conditions))
+            ).scalars().all()
+            if stale_ids:
+                await session.execute(
+                    sa.update(Invitation)
+                    .where(*conditions)
+                    .values(status="revoked", revoked_at=now)
+                )
+                for stale_id in stale_ids:
+                    await self._audit.record(
+                        action="invitation.revoked",
+                        tenant_id=tenant_id,
+                        actor_id=invited_by,
+                        metadata={"invitation_id": str(stale_id)},
+                    )
             invitation = Invitation(
                 tenant_id=tenant_id,
                 email=email,
@@ -843,10 +919,31 @@ class AccessControl:
                 token, invitation.token_id, invitation.token_hash
             ):
                 raise InvalidReference("invalid invitation token")
+            now = datetime.now(UTC)
             if invitation.status != "pending":
                 raise InvalidReference(f"invitation is {invitation.status}")
-            if invitation.expires_at <= datetime.now(UTC):
+            if invitation.expires_at <= now:
                 raise InvalidReference("invitation expired")
+            claimed = cast(
+                sa.CursorResult[Any],
+                await session.execute(
+                    sa.update(Invitation)
+                    .where(
+                        Invitation.tenant_id == invitation.tenant_id,
+                        Invitation.id == invitation.id,
+                        Invitation.status == "pending",
+                    )
+                    .values(status="accepted", accepted_at=now)
+                    .execution_options(synchronize_session=False)
+                ),
+            )
+            if claimed.rowcount != 1:
+                current = (
+                    await session.execute(
+                        sa.select(Invitation.status).where(Invitation.id == invitation.id)
+                    )
+                ).scalar_one_or_none()
+                raise InvalidReference(f"invitation is {current or 'unavailable'}")
             scope = await self._validate_scope_placement(
                 invitation.tenant_id, invitation.scope_type, invitation.scope_id
             )
@@ -908,8 +1005,6 @@ class AccessControl:
                         created_by=invitation.invited_by,
                     )
                 )
-            invitation.status = "accepted"
-            invitation.accepted_at = datetime.now(UTC)
             await self._audit.record(
                 action="invitation.accepted",
                 tenant_id=invitation.tenant_id,

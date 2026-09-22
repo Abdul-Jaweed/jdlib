@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -28,9 +29,12 @@ from jdlib.errors import (
     AuthorizationError,
     CrossTenantReferenceError,
     InvalidReference,
+    RoleEscalationBlocked,
     RoleScopeMismatch,
 )
 from tests.integration.test_access_bindings import _org, _TenantScopeLookup
+
+_ALL_CODES = {permission.code for permission in PermissionCatalog.with_builtins().all()}
 
 
 def _access(
@@ -65,7 +69,7 @@ async def _actor(
 ) -> Principal:
     principal = Principal(kind=PrincipalKind.USER, id=uuid.uuid4(), user_id=uuid.uuid4())
     role_id = uuid.uuid4()
-    codes = {"member:invite"} if permissions is None else permissions
+    codes = _ALL_CODES if permissions is None else permissions
     async with control_session_factory() as session:
         session.add(User(id=principal.user_id, status="active"))
         session.add(Role(tenant_id=tenant_id, id=role_id, name=f"actor-{role_id.hex[:6]}"))
@@ -94,11 +98,17 @@ async def _actor(
 
 
 async def _role(
-    control_session_factory, tenant_id: uuid.UUID, *, permission: str = "resource:read"
+    control_session_factory,
+    tenant_id: uuid.UUID,
+    *,
+    permission: str = "resource:read",
+    name: str | None = None,
 ) -> uuid.UUID:
     role_id = uuid.uuid4()
     async with control_session_factory() as session:
-        session.add(Role(tenant_id=tenant_id, id=role_id, name=f"member-{role_id.hex[:6]}"))
+        session.add(
+            Role(tenant_id=tenant_id, id=role_id, name=name or f"member-{role_id.hex[:6]}")
+        )
         session.add(
             RolePermission(tenant_id=tenant_id, role_id=role_id, permission_code=permission)
         )
@@ -216,6 +226,41 @@ async def test_invite_requires_member_invite_permission(control_session_factory)
         await _invite(control, tenant_id, role_id, actor)
 
 
+async def test_invite_rejects_role_with_permissions_actor_lacks(control_session_factory):
+    tenant_id = await _tenant(control_session_factory)
+    actor = await _actor(
+        control_session_factory, tenant_id, permissions={"member:invite", "resource:read"}
+    )
+    role_id = await _role(control_session_factory, tenant_id, permission="tenant:manage")
+    control = _access(control_session_factory)
+    with pytest.raises(RoleEscalationBlocked, match="tenant:manage"):
+        await _invite(control, tenant_id, role_id, actor)
+
+
+async def test_invite_owner_role_requires_full_catalog_actor(control_session_factory):
+    tenant_id = await _tenant(control_session_factory)
+    actor = await _actor(
+        control_session_factory, tenant_id, permissions={"member:invite", "resource:read"}
+    )
+    owner_role = await _role(
+        control_session_factory, tenant_id, permission="resource:read", name="owner"
+    )
+    control = _access(control_session_factory)
+    with pytest.raises(AuthorizationError, match="full-catalog"):
+        await _invite(control, tenant_id, owner_role, actor)
+
+
+async def test_invite_owner_role_allowed_for_full_catalog_actor(control_session_factory):
+    tenant_id = await _tenant(control_session_factory)
+    actor = await _actor(control_session_factory, tenant_id)
+    owner_role = await _role(
+        control_session_factory, tenant_id, permission="tenant:manage", name="owner"
+    )
+    control = _access(control_session_factory)
+    invitation, _ = await _invite(control, tenant_id, owner_role, actor)
+    assert invitation.role_id == owner_role
+
+
 async def test_invite_rejects_unknown_role(control_session_factory):
     tenant_id = await _tenant(control_session_factory)
     actor = await _actor(control_session_factory, tenant_id)
@@ -268,7 +313,7 @@ async def test_invite_validates_org_scope_reference(control_session_factory):
         await _invite(
             control, tenant_id, role_id, actor, scope_type="org", scope_id=foreign_org
         )
-    with pytest.raises(CrossTenantReferenceError):
+    with pytest.raises(InvalidReference, match="org scope is deleted"):
         await _invite(
             control, tenant_id, role_id, actor, scope_type="org", scope_id=deleted_org
         )
@@ -329,10 +374,17 @@ async def test_reinvite_revokes_the_prior_pending_invitation(control_session_fac
     actor = await _actor(control_session_factory, tenant_id)
     first_role = await _role(control_session_factory, tenant_id)
     second_role = await _role(control_session_factory, tenant_id, permission="resource:update")
-    control = _access(control_session_factory)
+    audit = RecordingPlatformAudit()
+    control = _access(control_session_factory, audit=audit)
     first, first_token = await _invite(control, tenant_id, first_role, actor)
     second, second_token = await _invite(control, tenant_id, second_role, actor)
     assert second.status == "pending"
+    assert [entry["action"] for entry in audit.entries] == [
+        "invitation.created",
+        "invitation.revoked",
+        "invitation.created",
+    ]
+    assert audit.entries[1]["metadata"] == {"invitation_id": str(first.id)}
     async with control_session_factory() as session:
         stored_first = (
             await session.execute(sa.select(Invitation).where(Invitation.id == first.id))
@@ -531,7 +583,7 @@ async def test_accept_rejects_deleted_org_scope(control_session_factory):
     token = await _seed_invitation(
         control_session_factory, tenant_id, role_id, scope_type="org", scope_id=deleted_org
     )
-    with pytest.raises(CrossTenantReferenceError):
+    with pytest.raises(InvalidReference, match="org scope is deleted"):
         await control.accept_invitation(token, user_id=invitee)
 
 
@@ -586,3 +638,48 @@ async def test_invitation_audits_created_and_accepted(control_session_factory):
     assert accepted["tenant_id"] == tenant_id
     assert accepted["actor_id"] == invitee
     assert accepted["metadata"] == {"invitation_id": str(invitation.id)}
+
+
+async def test_accept_claim_is_race_safe(control_session_factory):
+    from tests.integration.test_access_grants import _wait_for_lock_wait
+
+    tenant_id = await _tenant(control_session_factory)
+    actor = await _actor(control_session_factory, tenant_id)
+    role_id = await _role(control_session_factory, tenant_id)
+    control = _access(control_session_factory)
+    invitation, token = await _invite(control, tenant_id, role_id, actor)
+    invitee = await _user(control_session_factory)
+
+    winner = control_session_factory()
+    try:
+        await winner.execute(
+            sa.update(Invitation)
+            .where(Invitation.tenant_id == tenant_id, Invitation.id == invitation.id)
+            .values(status="accepted", accepted_at=datetime.now(UTC))
+        )
+        loser = asyncio.create_task(control.accept_invitation(token, user_id=invitee))
+        blocked = await _wait_for_lock_wait(control_session_factory)
+        await winner.commit()
+        with pytest.raises(InvalidReference, match="invitation is accepted"):
+            await loser
+    finally:
+        await winner.close()
+
+    assert blocked, "concurrent accept did not wait on the invitation row lock"
+    async with control_session_factory() as session:
+        memberships = (
+            await session.execute(
+                sa.select(sa.func.count()).select_from(Membership).where(
+                    Membership.tenant_id == tenant_id, Membership.user_id == invitee
+                )
+            )
+        ).scalar_one()
+        bindings = (
+            await session.execute(
+                sa.select(sa.func.count()).select_from(RoleBinding).where(
+                    RoleBinding.tenant_id == tenant_id, RoleBinding.principal_id == invitee
+                )
+            )
+        ).scalar_one()
+    assert memberships == 0
+    assert bindings == 0

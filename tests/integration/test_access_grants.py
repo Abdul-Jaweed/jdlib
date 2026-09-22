@@ -32,9 +32,12 @@ from jdlib.errors import (
 )
 from jdlib.models.org import Organization, Team
 from jdlib.persistence.session import TenantSession
+from tests.integration.test_access_bindings import _org, _team, _TenantScopeLookup
 from tests.support.invoice import Invoice
 
-OWNER_PERMISSIONS = frozenset({"resource:read", "resource:share", "invoice:approve"})
+OWNER_PERMISSIONS = frozenset(
+    {"resource:read", "resource:share", "invoice:approve", "team:manage"}
+)
 TENANT_SCHEMA = "jt_test"
 
 
@@ -115,6 +118,7 @@ def _access(
         resource_lookup=(
             _TenantResourceLookup(control_session_factory, registry) if resource_lookup else None
         ),
+        scope_lookup=_TenantScopeLookup(control_session_factory),
     )
     return control, audit
 
@@ -469,7 +473,7 @@ async def test_transfer_resource_updates_ownership_and_audits(
                 team_id=team,
             )
         )
-        await session.flush()
+        await session.commit()
         await control.transfer_resource(
             session,
             resource_type="invoice",
@@ -500,7 +504,7 @@ async def test_transfer_preserves_and_revokes_grants(control_session_factory, as
 
     tenant_id = await _tenant(control_session_factory)
     owner = await _owner_with_grant_permissions(control_session_factory, tenant_id)
-    control, _ = _access(control_session_factory)
+    control, audit = _access(control_session_factory)
     member = await _member(control_session_factory, tenant_id)
     resource_id = await _invoice(control_session_factory, tenant_id)
     await _grant(
@@ -512,7 +516,7 @@ async def test_transfer_preserves_and_revokes_grants(control_session_factory, as
         await session.add(Organization(id=org_a, name="A", slug=f"a-{org_a.hex[:6]}"))
         await session.add(Organization(id=org_b, name="B", slug=f"b-{org_b.hex[:6]}"))
         await session.add(Team(id=team, organization_id=org_a, name="T", slug=f"t-{team.hex[:6]}"))
-        await session.flush()
+        await session.commit()
         await control.transfer_resource(
             session,
             resource_type="invoice",
@@ -537,6 +541,12 @@ async def test_transfer_preserves_and_revokes_grants(control_session_factory, as
         )
         await session.commit()
     assert not await _grant_exists(control_session_factory, tenant_id, resource_id)
+    assert [entry["action"] for entry in audit.entries] == [
+        "grant.created",
+        "resource.owner_changed",
+        "grant.revoked",
+        "resource.owner_changed",
+    ]
 
 
 async def test_transfer_requires_resource_share(control_session_factory, async_engine):
@@ -580,7 +590,7 @@ async def test_move_team_updates_organization_and_audits(control_session_factory
         await session.add(Organization(id=org_a, name="A", slug=f"a-{org_a.hex[:6]}"))
         await session.add(Organization(id=org_b, name="B", slug=f"b-{org_b.hex[:6]}"))
         await session.add(Team(id=team, organization_id=org_a, name="T", slug=f"t-{team.hex[:6]}"))
-        await session.flush()
+        await session.commit()
         await control.move_team(
             session,
             team_id=team,
@@ -643,8 +653,80 @@ async def test_move_team_cascades_owned_resources(control_session_factory, async
         ).one()
         await session.commit()
     assert row == (org_b, org_b)
-    assert [entry["action"] for entry in audit.entries] == ["grant.created", "team.moved"]
+    assert [entry["action"] for entry in audit.entries] == [
+        "grant.created",
+        "grant.revoked",
+        "team.moved",
+    ]
     assert not await _grant_exists(control_session_factory, tenant_id, resource_id)
+
+
+async def test_move_team_dedupes_cascade_models(control_session_factory, async_engine):
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from tests.integration.test_session_isolation import _session
+
+    tenant_id = await _tenant(control_session_factory)
+    owner = await _owner_with_grant_permissions(control_session_factory, tenant_id)
+    registry = ResourceTypeRegistry()
+    for resource_type in ("invoice", "invoice-alias"):
+        registry.register(
+            ResourceTypeDefinition(
+                resource_type,
+                Invoice,
+                tenant_owned=True,
+                tenant_routed=True,
+                permission_namespace="invoice",
+            )
+        )
+    control = AccessControl(
+        session_factory=control_session_factory,
+        catalog=PermissionCatalog.with_builtins(),
+        reader=ControlAccessReader(control_session_factory),
+        cache=AuthzCache(),
+        audit=RecordingPlatformAudit(),
+        registry=registry,
+        scope_lookup=_TenantScopeLookup(control_session_factory),
+    )
+    session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
+    org_a, org_b, team = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    async with await _session(session_factory, tenant_id) as session:
+        await session.add(Organization(id=org_a, name="A", slug=f"a-{org_a.hex[:6]}"))
+        await session.add(Organization(id=org_b, name="B", slug=f"b-{org_b.hex[:6]}"))
+        await session.add(Team(id=team, organization_id=org_a, name="T", slug=f"t-{team.hex[:6]}"))
+        await session.commit()
+    await _invoice(control_session_factory, tenant_id, organization_id=org_a, team_id=team)
+    captured: list[str] = []
+
+    def _capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        captured.append(statement)
+
+    event.listen(async_engine.sync_engine, "before_cursor_execute", _capture)
+    try:
+        async with await _session(session_factory, tenant_id) as session:
+            await control.move_team(
+                session,
+                team_id=team,
+                to_organization_id=org_b,
+                actor_id=owner.user_id,
+                actor_principal=owner,
+            )
+            row = (
+                await session.execute(
+                    sa.select(Team.organization_id, Invoice.organization_id)
+                    .select_from(Team)
+                    .join(Invoice, Invoice.team_id == Team.id)
+                    .where(Team.id == team)
+                )
+            ).one()
+            await session.commit()
+    finally:
+        event.remove(async_engine.sync_engine, "before_cursor_execute", _capture)
+    assert row == (org_b, org_b)
+    cascades = [statement for statement in captured if "moved_resource_" in statement]
+    assert len(cascades) == 1
+    assert cascades[0].count("moved_resource_") == 1
 
 
 async def test_transfer_and_move_team_require_tenant_session(control_session_factory):
@@ -668,3 +750,145 @@ async def test_transfer_and_move_team_require_tenant_session(control_session_fac
             actor_id=None,
             actor_principal=owner,
         )
+
+
+async def test_move_team_requires_team_manage(control_session_factory, async_engine):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from tests.integration.test_session_isolation import _session
+
+    tenant_id = await _tenant(control_session_factory)
+    actor = await _owner_with_grant_permissions(
+        control_session_factory, tenant_id, frozenset({"resource:read"})
+    )
+    control, _ = _access(control_session_factory)
+    team = await _team(control_session_factory, tenant_id)
+    destination = await _org(control_session_factory, tenant_id)
+    async with await _session(
+        async_sessionmaker(async_engine, expire_on_commit=False), tenant_id
+    ) as session:
+        original = (
+            await session.execute(sa.select(Team.organization_id).where(Team.id == team))
+        ).scalar_one()
+        with pytest.raises(AuthorizationError, match="team:manage"):
+            await control.move_team(
+                session,
+                team_id=team,
+                to_organization_id=destination,
+                actor_id=actor.user_id,
+                actor_principal=actor,
+            )
+        moved = (
+            await session.execute(sa.select(Team.organization_id).where(Team.id == team))
+        ).scalar_one()
+    assert moved == original
+
+
+async def test_transfer_rejects_invalid_destination_scope(
+    control_session_factory, async_engine
+):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from tests.integration.test_session_isolation import _session
+
+    tenant_id = await _tenant(control_session_factory)
+    other_tenant = await _tenant(control_session_factory)
+    owner = await _owner_with_grant_permissions(control_session_factory, tenant_id)
+    control, _ = _access(control_session_factory)
+    resource_id = await _invoice(control_session_factory, tenant_id)
+    valid_org = await _org(control_session_factory, tenant_id)
+    foreign_org = await _org(control_session_factory, other_tenant)
+    deleted_org = await _org(control_session_factory, tenant_id, deleted=True)
+    async with await _session(
+        async_sessionmaker(async_engine, expire_on_commit=False), tenant_id
+    ) as session:
+        with pytest.raises(InvalidReference, match="org scope not found"):
+            await control.transfer_resource(
+                session,
+                resource_type="invoice",
+                resource_id=resource_id,
+                to_organization_id=uuid.uuid4(),
+                to_team_id=None,
+                actor_id=owner.user_id,
+                actor_principal=owner,
+            )
+        with pytest.raises(CrossTenantReferenceError):
+            await control.transfer_resource(
+                session,
+                resource_type="invoice",
+                resource_id=resource_id,
+                to_organization_id=foreign_org,
+                to_team_id=None,
+                actor_id=owner.user_id,
+                actor_principal=owner,
+            )
+        with pytest.raises(InvalidReference, match="deleted"):
+            await control.transfer_resource(
+                session,
+                resource_type="invoice",
+                resource_id=resource_id,
+                to_organization_id=deleted_org,
+                to_team_id=None,
+                actor_id=owner.user_id,
+                actor_principal=owner,
+            )
+        with pytest.raises(InvalidReference, match="team scope not found"):
+            await control.transfer_resource(
+                session,
+                resource_type="invoice",
+                resource_id=resource_id,
+                to_organization_id=valid_org,
+                to_team_id=uuid.uuid4(),
+                actor_id=owner.user_id,
+                actor_principal=owner,
+            )
+
+
+async def test_move_team_rejects_invalid_destination_scope(
+    control_session_factory, async_engine
+):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from tests.integration.test_session_isolation import _session
+
+    tenant_id = await _tenant(control_session_factory)
+    other_tenant = await _tenant(control_session_factory)
+    owner = await _owner_with_grant_permissions(control_session_factory, tenant_id)
+    control, _ = _access(control_session_factory)
+    team = await _team(control_session_factory, tenant_id)
+    foreign_org = await _org(control_session_factory, other_tenant)
+    deleted_org = await _org(control_session_factory, tenant_id, deleted=True)
+    async with await _session(
+        async_sessionmaker(async_engine, expire_on_commit=False), tenant_id
+    ) as session:
+        original = (
+            await session.execute(sa.select(Team.organization_id).where(Team.id == team))
+        ).scalar_one()
+        with pytest.raises(InvalidReference, match="org scope not found"):
+            await control.move_team(
+                session,
+                team_id=team,
+                to_organization_id=uuid.uuid4(),
+                actor_id=owner.user_id,
+                actor_principal=owner,
+            )
+        with pytest.raises(CrossTenantReferenceError):
+            await control.move_team(
+                session,
+                team_id=team,
+                to_organization_id=foreign_org,
+                actor_id=owner.user_id,
+                actor_principal=owner,
+            )
+        with pytest.raises(InvalidReference, match="deleted"):
+            await control.move_team(
+                session,
+                team_id=team,
+                to_organization_id=deleted_org,
+                actor_id=owner.user_id,
+                actor_principal=owner,
+            )
+        moved = (
+            await session.execute(sa.select(Team.organization_id).where(Team.id == team))
+        ).scalar_one()
+    assert moved == original

@@ -315,7 +315,7 @@ async def test_bind_scope_reference_rejects_soft_deleted(control_session_factory
     )
     member = await _member(control_session_factory, tenant_id)
     deleted_org = await _org(control_session_factory, tenant_id, deleted=True)
-    with pytest.raises(CrossTenantReferenceError):
+    with pytest.raises(InvalidReference, match="org scope is deleted"):
         await control.bind_role(
             tenant_id,
             role.id,

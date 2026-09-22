@@ -1428,6 +1428,16 @@ git commit -m "feat: invitations with hashed single-use tokens"
 - L16 role↔scope compatibility: the `allowed_scopes` check from `bind_role` (`RoleScopeMismatch`) runs at `invite` and is re-checked at `accept_invitation`; scope placement (shape + `_validate_scope`) is shared via `_validate_scope_placement`, also used by `bind_role`.
 - Minor inclusions: `verify_invitation` returns `False` for malformed stored hashes — argon2-cffi 25.1.0 has `InvalidHashError(ValueError)`, **not** a `VerificationError` subclass, so both are caught; invite/accept tests probe the shared `AuthzCache` to assert invalidation; `invite` validates scope shape before insert.
 
+**Final review wave 2 (fix commit — `fix: move_team gate, invitation escalation guard, accept race, destination validation`):** authoritative snippets live in `src/jdlib/authz/access.py`, `tests/integration/test_access_grants.py`, `tests/integration/test_access_bindings.py`, and `tests/integration/test_access_invitations.py`; deltas only below.
+
+- `move_team` gate: requires `team:manage` through `_require_permission` after the tenant-session check and before any mutation; denial test proves the team is untouched.
+- Invitation anti-escalation (rules 3/7): `invite` resolves the role's permission codes and then applies `_require_subset` (`RoleEscalationBlocked`) plus the owner-assignment check (`role.name == "owner"` requires the actor to hold the full catalog, `AuthorizationError`); denial tests for both, plus a positive full-catalog owner invite.
+- `accept_invitation` race safety: the invitation is claimed with a conditional `UPDATE invitations SET status='accepted', accepted_at=now() WHERE tenant_id=... AND id=... AND status='pending'` and the membership/binding write proceeds only when `rowcount == 1`; a losing concurrent accept raises `InvalidReference("invitation is accepted")` and writes no membership/binding. The true concurrency test mirrors the grants race test (winner holds the row lock; the API call blocks, then fails after the winner commits).
+- Ownership destination validation (I11): `transfer_resource` and `move_team` resolve non-None destination org/team ids through `_validate_scope` before mutating (missing → `InvalidReference`; foreign → `CrossTenantReferenceError`; soft-deleted → `InvalidReference("<scope> scope is deleted: ...")`); missing/foreign/deleted destination tests for both operations.
+- Minor inclusions: soft-deleted scope rows now raise `InvalidReference` with a deleted-specific message instead of a misleading `CrossTenantReferenceError` when the tenant matches (foreign tenant stays `CrossTenantReferenceError`); `_catalog_codes` is computed on demand (no construction snapshot); `move_team` dedupes cascade models by table (one data-modifying CTE per table, regression test captures the emitted SQL); cascaded grant deletions in `transfer_resource`/`move_team` emit one `grant.revoked` audit per grant and re-invite replacement emits `invitation.revoked`.
+- Corrected the Task 5 filename reference: `docs/superpowers/plans/2026-09-21-jdlib-access-control-phase-4c.md` (the plan previously named a nonexistent `...-authorization-phase-4c.md`).
+- Counts: full suite `367 passed`; `ruff` and strict `mypy` clean.
+
 ---
 
 ### Task 5: Role × action matrix and phase exit
@@ -1435,7 +1445,7 @@ git commit -m "feat: invitations with hashed single-use tokens"
 **Files:**
 - Create: `tests/integration/test_role_action_matrix.py`
 - Modify: `docs/jdlib/07-implementation-design.md` (file map: `authz/access.py`; note the shared `AuthzCache` instance requirement)
-- Modify: `docs/superpowers/plans/2026-09-21-jdlib-authorization-phase-4c.md` (back-ports)
+- Modify: `docs/superpowers/plans/2026-09-21-jdlib-access-control-phase-4c.md` (back-ports)
 
 **Interfaces:** none new.
 
