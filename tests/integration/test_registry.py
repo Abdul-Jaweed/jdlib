@@ -717,7 +717,7 @@ async def test_deprovision_child_race_fails_closed(control_session_factory, monk
         lock_calls += 1
         if lock_calls == 2:
             child = await registry.create(
-                slug="late-child",
+                slug=f"late-child-{uuid.uuid4().hex[:8]}",
                 name="Late Child",
                 strategy=PlacementStrategy.SHARED,
                 target_handle="default",
