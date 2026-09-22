@@ -448,6 +448,12 @@ git commit -m "feat: access control roles with anti-escalation"
 - Modify: `src/jdlib/authz/access.py` (append `bind_role`, `unbind_role`)
 - Create: `tests/integration/test_access_bindings.py`
 
+> Authoritative implementation note: the shipped code and tests in commits
+> `0bace18` and `b15ab8e` supersede the Step 1 snippet below wherever they
+> differ (`AccessControl` gains `scope_lookup` and `_catalog_codes`; the team
+> scope test seeds a real team; the file contains 14 tests). Regenerate from
+> git, not from the stale snippet.
+
 **Interfaces:**
 - Produces: `bind_role(tenant_id, role_id, *, principal_type, principal_id, scope_type, scope_id, actor_id, actor_principal) -> RoleBinding`; `unbind_role(tenant_id, binding_id, *, actor_id, actor_principal) -> None`; optional `AccessControl(scope_lookup=ScopeLookup)` for org/team scope validation (I11/L14).
 
