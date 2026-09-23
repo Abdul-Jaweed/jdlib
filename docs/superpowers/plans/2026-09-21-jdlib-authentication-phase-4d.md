@@ -1068,6 +1068,11 @@ git add src/jdlib/authn/apikey.py tests/unit/test_apikey_parser.py tests/integra
 git commit -m "feat: api key authentication with tenant pinning"
 ```
 
+**Review fixes applied (follow-up commit from the Task 4 implementation):**
+
+- `tests/integration/test_apikey_auth.py` now asserts the exact audit count, action (`authn.failed`), reason values (`InvalidToken` for a malformed token; `invalid_api_key` for unknown prefix, wrong secret, revoked, expired, and suspended-SA denials), and null tenant/actor for every denial path, plus that no token, secret, prefix, or stored Argon2 hash material appears in any entry (the seed helper returns the hash).
+- Missing/malformed `Authorization` headers (absent, empty, non-Bearer scheme, `Bearer` with no value) deny with `None` and record nothing.
+
 ---
 
 ### Task 5: Context wiring and end-to-end middleware authentication
@@ -1319,6 +1324,8 @@ Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -
 git add src/jdlib/control/registry.py src/jdlib/authn/wiring.py tests/integration/test_auth_wiring.py docs
 git commit -m "feat: context factory port adapters and end-to-end auth wiring"
 ```
+
+**Final state (shipped):** `TenantRegistry.find` builds the `TenantRecord` inline from the tenant row plus its placement and returns `None` for an empty ref, an unknown id/slug, or a missing placement. `src/jdlib/authn/wiring.py` ships the three adapters exactly as sketched (with `can_act`'s `tenant_id` typed `uuid.UUID`). Test corrections over the sketch: `ContextFactory(operators=...)` receives a two-line inline `OperatorAuthorizer` stub (`ControlAccessReader` is not one); the middleware chain is `[HeaderResolver, ApiKeyResolver]` so the API-key's pinned tenant resolves when no header is present; and `principal_provider=authenticator.authenticate` because the `PrincipalProvider` port is callable while `Authenticator` exposes `authenticate`. The test also covers `PrincipalDirectoryAdapter.is_active` denial and `EntitlementAdapter.can_act` for an active non-member, and drops the unused `async_engine` fixture argument. `build_authenticator` from the Interfaces line was not implemented: no step, signature, or test required it, and authenticator assembly belongs with the FastAPI/CLI integrations (Plan 6).
 
 ---
 

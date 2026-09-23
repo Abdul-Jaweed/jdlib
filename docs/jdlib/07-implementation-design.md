@@ -82,7 +82,9 @@ src/jdlib/
 │   ├── oidc.py                 # OidcAuthenticator, JwksCache, TokenVerifier,
 │   │                           #   ClaimMapper, UserLinker
 │   ├── apikey.py               # ApiKeyAuthenticator, KeyParser
-│   └── composite.py            # CompositeAuthenticator
+│   ├── composite.py            # CompositeAuthenticator
+│   └── wiring.py               # ContextFactory port adapters over
+│                               #   TenantRegistry/ControlAccessReader
 ├── authz/
 │   ├── permissions.py          # Permission, PermissionCatalog, builtin catalog
 │   ├── resource_types.py       # ResourceTypeDefinition, ResourceTypeRegistry
@@ -557,6 +559,15 @@ class ApiKeyAuthenticator(Authenticator):
 class CompositeAuthenticator(Authenticator):
     # first authenticator that returns a Principal wins; all failures audited
 ```
+
+`authn/wiring.py` adapts the shipped services to the `ContextFactory` ports
+with translation only, no policy: `PrincipalDirectoryAdapter` and
+`EntitlementAdapter` over `ControlAccessReader` (`can_act` short-circuits on an
+inactive principal before checking membership), and `TenantDirectoryAdapter`
+over `TenantRegistry.find`, which returns the tenant row plus its placement as a
+`TenantRecord` or `None` when either is missing. The middleware's
+`PrincipalProvider` port is callable, so callers pass a bound
+`authenticator.authenticate` (or an equivalent adapter).
 
 `RequestInfo` is defined in `jdlib.tenancy.resolution` and imported by `authn/base.py`.
 

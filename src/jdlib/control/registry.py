@@ -8,7 +8,7 @@ from typing import Any, Protocol
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jdlib.context import TenantRecord
+from jdlib.context import TenantRecord, TenantRef
 from jdlib.control.audit import PlatformAudit
 from jdlib.control.enums import MigrationStatus, PlacementStrategy, RelocationPhase, TenantStatus
 from jdlib.control.models import (
@@ -521,6 +521,28 @@ class TenantRegistry:
                 .where(Membership.user_id == user_id, Membership.status == "active")
             )
             return list((await session.execute(statement)).scalars().all())
+
+    async def find(self, ref: TenantRef) -> TenantRecord | None:
+        async with await self._control() as session:
+            statement = sa.select(Tenant)
+            if ref.id is not None:
+                statement = statement.where(Tenant.id == ref.id)
+            elif ref.slug is not None:
+                statement = statement.where(Tenant.slug == ref.slug)
+            else:
+                return None
+            tenant = (await session.execute(statement)).scalar_one_or_none()
+            if tenant is None:
+                return None
+            placement: TenantPlacement | None = await session.get(TenantPlacement, tenant.id)
+            if placement is None:
+                return None
+            return TenantRecord(
+                id=tenant.id,
+                slug=tenant.slug,
+                status=TenantStatus(tenant.status),
+                strategy=PlacementStrategy(placement.strategy),
+            )
 
 
 def _record(tenant: Tenant, placement: TenantPlacement) -> TenantRecord:
