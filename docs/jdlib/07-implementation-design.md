@@ -770,10 +770,19 @@ async def get_uow(request: Request) -> AsyncIterator[UnitOfWork]: ...  # one UoW
 def require(permission: str, target_factory: Callable[..., Target] | None = None) -> ...: ...
 ```
 
+`require` authorizes in its own unit of work: the guard opens
+`container.uow_factory()` (so `RegistryWriteFence` applies to guarded reads,
+which fail with 423 `TenantNotWritable` during relocation quiesce) and passes
+that session to `Enforcer.require`. The handler's `get_uow` session is a
+different one unless the caller shares it, so a permission revoked between the
+guard and the handler is re-checked only when both use the same session.
+
 CLI (`integrations/cli.py`, typer): `tenant create|provision|list`,
 `db upgrade-control|upgrade-tenants`, `rls install|verify`, `schema lint`.
 Every command accepts `--database-url` (default `JDLIB_CONTROL_DSN`) and
-`--json`.
+`--json`; provisioning a `database` placement needs the database strategy (and
+a `SecretProvider`) registered programmatically, since the CLI registers only
+`shared` and `schema`.
 
 ## 15. Testing design
 

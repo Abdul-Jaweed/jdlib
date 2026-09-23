@@ -1,3 +1,13 @@
+"""FastAPI adapters for the jdlib request pipeline.
+
+``require`` authorizes in its own unit of work: the guard opens
+``container.uow_factory()``, so the ``RegistryWriteFence`` applies to guarded
+reads too, and a guarded read during a relocation quiesce fails with 423
+(``TenantNotWritable``). The handler's ``get_uow`` session is a different one
+unless the caller shares it, so a permission revoked between the guard and the
+handler is re-checked only when both use the same session.
+"""
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable

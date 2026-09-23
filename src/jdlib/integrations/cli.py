@@ -15,11 +15,11 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from jdlib.control.audit import DatabaseAuditSink
 from jdlib.control.base import ControlBase
 from jdlib.control.enums import PlacementStrategy
 from jdlib.control.models import Tenant, TenantPlacement
 from jdlib.control.registry import TenantRegistry
-from jdlib.control.session import ControlPlaneSession
 from jdlib.errors import JdlibError
 from jdlib.lint import lint_metadata
 from jdlib.migrations.runner import MigrationRunner
@@ -45,19 +45,6 @@ SharedSchema = Annotated[str, typer.Option("--shared-schema")]
 JsonOutput = Annotated[bool, typer.Option("--json")]
 
 _ASYNC_DRIVERS = {"postgresql", "postgresql+psycopg", "postgresql+psycopg2"}
-
-
-class _NoopAudit:
-    async def record(
-        self,
-        *,
-        action: str,
-        tenant_id: uuid.UUID | None,
-        actor_id: uuid.UUID | None,
-        metadata: Mapping[str, object] | None = None,
-        session: ControlPlaneSession | None = None,
-    ) -> None:
-        return None
 
 
 def _require_url(database_url: str | None) -> str:
@@ -96,14 +83,15 @@ def _import_framework_models() -> None:
 
 def _registry(engine: AsyncEngine, database_url: str, shared_schema: str) -> TenantRegistry:
     runner = MigrationRunner(database_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
     return TenantRegistry(
-        session_factory=async_sessionmaker(engine, expire_on_commit=False),
+        session_factory=session_factory,
         strategies={
             PlacementStrategy.SHARED: SharedSchemaStrategy(engine, shared_schema),
             PlacementStrategy.SCHEMA: SchemaPerTenantStrategy(engine, runner),
         },
         runner=runner,
-        audit=_NoopAudit(),
+        audit=DatabaseAuditSink(session_factory),
     )
 
 
@@ -264,7 +252,12 @@ def tenant_provision(
     shared_schema: SharedSchema = "public",
     json_output: JsonOutput = False,
 ) -> None:
-    """Provision a tenant's plane and run its migrations."""
+    """Provision a tenant's plane and run its migrations.
+
+    Shared and schema placements are registered by the CLI; a database
+    placement needs the database strategy (with a SecretProvider) registered
+    programmatically.
+    """
     url = _require_url(database_url)
     _run(_provision_tenant(url, tenant_id, shared_schema), json_output)
 

@@ -373,10 +373,31 @@ autoloaded.
 
 ---
 
+## Scope deviations (accepted)
+
+The frozen `07-implementation-design.md` section 14 listed a wider CLI:
+`tenant create|provision|suspend|resume|archive|deprovision|migrate|relocate`,
+`db upgrade-control|upgrade-tenants`, `lint schema`, `operator grant`. Phase 6
+ships the reduced surface `tenant create|provision|list`,
+`db upgrade-control|upgrade-tenants`, `rls install|verify`, `schema lint`:
+
+- `tenant suspend|resume|archive|deprovision|migrate|relocate` and
+  `operator grant` are deferred. The registry and `AccessControl` operations
+  exist, are audited, and are covered programmatically, but the operator CLI
+  for them needs the system/operator context and `relocation.manage`
+  capability workflow that is out of scope for this thin bootstrap CLI.
+- `tenant list` and `rls install|verify` are additions: `list` discovers the
+  tenant ids that `provision` needs, and `rls install|verify` is the operator
+  path for the opt-in RLS feature.
+
+This deviation is accepted; section 14 of `07` is updated to the shipped
+surface.
+
 ## Phase 6 Exit Criteria
 
-- [ ] Platform audit is written in the caller's transaction when a session is provided; tenant audit rows are written in tenant transactions; no secrets in metadata.
-- [ ] `jdlib.testing` kit and pytest plugin ship and are tested.
-- [ ] FastAPI integration: middleware + handlers + dependencies proven with a TestClient end-to-end auth flow; CLI groups and lint command proven.
-- [ ] Public API is exactly the documented re-exports; README complete.
-- [ ] Full suite, ruff, strict mypy green; no TODOs/placeholders; repository pushed.
+- [x] Platform audit is written in the caller's transaction when a session is provided; tenant audit rows are written in tenant transactions; no secrets in metadata.
+- [x] `jdlib.testing` kit and pytest plugin ship and are tested.
+- [x] FastAPI integration: middleware + handlers + dependencies proven with a TestClient end-to-end auth flow; CLI groups and lint command proven.
+- [x] Public API is exactly the documented re-exports; README complete.
+- [x] Full suite, ruff, strict mypy green; no TODOs/placeholders; branch committed.
+- [ ] Push step (final): `git push -u origin phase-6-integrations` — the branch is committed and ready, not yet pushed.

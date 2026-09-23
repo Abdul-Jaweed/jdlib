@@ -108,7 +108,7 @@ from jdlib.authz.permissions import PermissionCatalog
 from jdlib.authz.reader import ControlAccessReader
 from jdlib.authz.resource_types import ResourceTypeRegistry
 from jdlib.authz.scopes import ScopeResolver
-from jdlib.control.audit import DatabaseAuditSink
+from jdlib.control.audit import DatabaseAuditSink, PrivilegeAuditAdapter
 from jdlib.control.enums import PlacementStrategy
 from jdlib.control.registry import RegistryWriteFence, TenantRegistry
 from jdlib.integrations.fastapi import (
@@ -129,6 +129,7 @@ control_sessions = async_sessionmaker(engine, expire_on_commit=False)
 tenant_sessions = async_sessionmaker(engine, expire_on_commit=False)
 
 audit = DatabaseAuditSink(control_sessions)
+privilege_audit = PrivilegeAuditAdapter(audit)
 reader = ControlAccessReader(control_sessions)
 runner = MigrationRunner(config.control_dsn.get_secret_value())
 strategies = {
@@ -171,7 +172,7 @@ install(
         servability=registry,
         entitlements=EntitlementAdapter(reader),
         operators=OperatorAuthorizer(),
-        audit=audit,
+        audit=privilege_audit,
     ),
     chain=ResolverChain([HeaderResolver(name="X-Tenant-Slug"), ApiKeyResolver()]),
     principal_provider=build_authenticator(config, control_sessions, audit).authenticate,
@@ -200,6 +201,16 @@ async def list_invoices(
 (401/403/404/409/423/500 mapped from the error class), and stores the container
 on `app.state`. The example uses one shared tenant engine; hybrid deployments
 route inside `uow_factory` by `context.strategy` (see `SessionRouter`).
+
+`require` authorizes in its own unit of work: it opens `uow_factory()`, so the
+`RegistryWriteFence` applies to guarded reads too (a guarded read during a
+relocation quiesce fails with 423 `TenantNotWritable`). Because the guard and
+the handler use different sessions by default, a permission revoked between the
+guard and the handler is re-checked only when both share one session.
+
+`ContextFactory` takes a `PrivilegeAudit` (operator/system/test context
+issuance), not the `PlatformAudit` sink itself; `PrivilegeAuditAdapter` bridges
+the two and stamps `actor_type` from the acting principal's kind.
 
 ## Tenant-scoped data access
 
@@ -276,7 +287,7 @@ export JDLIB_RLS__ENABLED=true
 export JDLIB_RLS__APP_ROLE=jdlib_app
 jdlib rls install --schema public --app-role jdlib_app --database-url "$JDLIB_CONTROL_DSN"
 jdlib rls verify  --schema public --app-role jdlib_app --database-url "$JDLIB_CONTROL_DSN"
-jdlib schema lint --rls   # fails if any tenant-routed table lacks a policy
+jdlib schema lint --rls   # fails when a tenant-plane table is not RLS-eligible (L13)
 ```
 
 Pass `rls=config.rls` to `SharedSchemaStrategy` so sessions bind the tenant
@@ -326,6 +337,11 @@ routable from the host. To reuse an existing database instead, set
 | `rls` | `install`, `verify` |
 | `schema` | `lint` |
 
+The CLI registers the `shared` and `schema` strategies. Provisioning a
+`database`-placement tenant needs the database strategy (with a
+`SecretProvider`) registered programmatically, since the CLI has no secret
+provider to resolve target DSNs.
+
 ## Extension points
 
 - **Models**: subclass `jdlib.models.base.TenantBase`; mix in `TenantOwned`,
@@ -343,7 +359,8 @@ routable from the host. To reuse an existing database instead, set
 - **Lifecycle**: implement `SeedHook` for per-tenant seed data and
   `SecretProvider` for database-per-tenant DSNs.
 - **Audit**: implement the `PlatformAudit` protocol, or fan out with
-  `CompositeAuditSink`; tenant-scoped events go through `TenantAuditRecorder`.
+  `CompositeAuditSink`; tenant-scoped events go through `TenantAuditRecorder`,
+  and `PrivilegeAuditAdapter` adapts a platform sink to `ContextFactory`.
 - **Access control collaborators**: `ScopeLookup` / `ResourceLookup` plug your
   org/team/resource ownership into `AccessControl` validation; `Enforcer` takes
   any `PolicyDecisionPoint`.

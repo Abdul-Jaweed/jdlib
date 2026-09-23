@@ -7,7 +7,12 @@ from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from jdlib.context import Principal, PrivilegeKind
 from jdlib.control.session import ControlPlaneSession
+
+
+def _resolve_actor_type(actor_id: uuid.UUID | None, actor_type: str | None) -> str:
+    return actor_type or ("system" if actor_id is None else "user")
 
 
 class PlatformAudit(Protocol):
@@ -19,6 +24,7 @@ class PlatformAudit(Protocol):
         actor_id: uuid.UUID | None,
         metadata: Mapping[str, object] | None = None,
         session: ControlPlaneSession | None = None,
+        actor_type: str | None = None,
     ) -> None: ...
 
 
@@ -31,6 +37,7 @@ class NullPlatformAudit:
         actor_id: uuid.UUID | None,
         metadata: Mapping[str, object] | None = None,
         session: ControlPlaneSession | None = None,
+        actor_type: str | None = None,
     ) -> None:
         raise RuntimeError("no platform audit sink is configured")
 
@@ -47,6 +54,7 @@ class RecordingPlatformAudit:
         actor_id: uuid.UUID | None,
         metadata: Mapping[str, object] | None = None,
         session: ControlPlaneSession | None = None,
+        actor_type: str | None = None,
     ) -> None:
         self.entries.append(
             {
@@ -54,6 +62,7 @@ class RecordingPlatformAudit:
                 "tenant_id": tenant_id,
                 "actor_id": actor_id,
                 "metadata": dict(metadata or {}),
+                "actor_type": actor_type,
             }
         )
 
@@ -70,6 +79,7 @@ class DatabaseAuditSink:
         actor_id: uuid.UUID | None,
         metadata: Mapping[str, object] | None = None,
         session: ControlPlaneSession | None = None,
+        actor_type: str | None = None,
     ) -> None:
         from jdlib.control.models import PlatformAuditEvent
 
@@ -81,7 +91,7 @@ class DatabaseAuditSink:
                     action=action,
                     tenant_id=tenant_id,
                     actor_id=actor_id,
-                    actor_type="system" if actor_id is None else "user",
+                    actor_type=_resolve_actor_type(actor_id, actor_type),
                     metadata_json=dict(metadata or {}),
                 )
             )
@@ -105,12 +115,45 @@ class CompositeAuditSink:
         actor_id: uuid.UUID | None,
         metadata: Mapping[str, object] | None = None,
         session: ControlPlaneSession | None = None,
+        actor_type: str | None = None,
     ) -> None:
         for sink in self._sinks:
-            await sink.record(
-                action=action,
-                tenant_id=tenant_id,
-                actor_id=actor_id,
-                metadata=metadata,
-                session=session,
-            )
+            if actor_type is None:
+                await sink.record(
+                    action=action,
+                    tenant_id=tenant_id,
+                    actor_id=actor_id,
+                    metadata=metadata,
+                    session=session,
+                )
+            else:
+                await sink.record(
+                    action=action,
+                    tenant_id=tenant_id,
+                    actor_id=actor_id,
+                    metadata=metadata,
+                    session=session,
+                    actor_type=actor_type,
+                )
+
+
+class PrivilegeAuditAdapter:
+    def __init__(self, sink: PlatformAudit) -> None:
+        self._sink = sink
+
+    async def record_privilege(
+        self,
+        *,
+        kind: PrivilegeKind,
+        capability: str | None,
+        justification: str | None,
+        actor: Principal,
+        tenant_id: uuid.UUID,
+    ) -> None:
+        await self._sink.record(
+            action=f"privilege.{kind.value}",
+            tenant_id=tenant_id,
+            actor_id=actor.id,
+            metadata={"capability": capability, "justification": justification},
+            actor_type=actor.kind.value,
+        )

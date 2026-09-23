@@ -3,10 +3,13 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
+from jdlib.context import Principal, PrincipalKind, TenantContext, context_scope
 from jdlib.control.audit import CompositeAuditSink, DatabaseAuditSink
 from jdlib.control.enums import PlacementStrategy
 from jdlib.control.models import PlatformAuditEvent
 from jdlib.control.registry import TenantRegistry
+from jdlib.models.audit import AuditEvent
+from jdlib.models.audit_recorder import TenantAuditRecorder
 
 
 class _CapturingSink:
@@ -137,3 +140,49 @@ async def test_registry_records_audit_through_its_control_session(control_sessio
             )
         ).scalar_one()
     assert event.metadata_json == {"slug": slug}
+
+
+async def test_tenant_audit_recorder_commits_and_rolls_back(session_factory):
+    tenant_id = uuid.uuid4()
+    context = TenantContext(
+        tenant_id=tenant_id,
+        tenant_slug="audit",
+        strategy=PlacementStrategy.SHARED,
+        principal=Principal(kind=PrincipalKind.USER, id=uuid.uuid4()),
+        request_id="req",
+        correlation_id="corr",
+    )
+    committed_action = f"invoice.updated.{uuid.uuid4().hex[:8]}"
+    rolled_back_action = f"invoice.deleted.{uuid.uuid4().hex[:8]}"
+
+    async with session_factory() as session:
+        await session.execute(sa.text('SET search_path TO "jt_test"'))
+        with context_scope(context):
+            TenantAuditRecorder(session).record(
+                action=committed_action, metadata={"status": "paid"}
+            )
+        await session.commit()
+
+    async with session_factory() as session:
+        await session.execute(sa.text('SET search_path TO "jt_test"'))
+        row = (
+            await session.execute(
+                sa.select(AuditEvent).where(AuditEvent.action == committed_action)
+            )
+        ).scalar_one()
+        assert row.tenant_id == tenant_id
+        assert row.metadata_json == {"status": "paid"}
+        with context_scope(context):
+            TenantAuditRecorder(session).record(action=rolled_back_action)
+        await session.rollback()
+
+    async with session_factory() as session:
+        await session.execute(sa.text('SET search_path TO "jt_test"'))
+        count = (
+            await session.execute(
+                sa.select(sa.func.count())
+                .select_from(AuditEvent)
+                .where(AuditEvent.action == rolled_back_action)
+            )
+        ).scalar_one()
+    assert count == 0

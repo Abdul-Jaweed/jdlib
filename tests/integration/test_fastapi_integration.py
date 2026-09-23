@@ -187,6 +187,11 @@ class _FakeEnforcer:
         self.calls.append((permission, session))
 
 
+class _DenyingEnforcer:
+    async def require(self, permission: str, target: object, *, session: object) -> None:
+        raise PermissionDenied(f"{permission}: denied by policy")
+
+
 class _FakeUow:
     async def __aenter__(self) -> str:
         return "tenant-session"
@@ -221,3 +226,25 @@ async def test_container_dependencies_enforce_and_yield_uow(control_session_fact
     assert guarded_response.json() == {"guarded": "yes"}
     assert enforcer.calls == [("invoice.read", "tenant-session")]
     assert uow_response.json() == {"session": "tenant-session"}
+
+
+async def test_denied_require_returns_403_json(control_session_factory):
+    container = JdlibContainer(
+        session_factory=control_session_factory,
+        uow_factory=_FakeUow,
+        enforcer=_DenyingEnforcer(),  # type: ignore[arg-type]
+    )
+    app, _, _, token = await _build_app(control_session_factory, container=container)
+
+    @app.get("/guarded-denied", dependencies=[fastapi.Depends(require("invoice.read"))])
+    async def guarded_denied() -> dict[str, str]:
+        return {"guarded": "no"}
+
+    async with _client(app) as client:
+        response = await client.get("/guarded-denied", headers={"Authorization": token})
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "error": "PermissionDenied",
+        "detail": "invoice.read: denied by policy",
+    }
