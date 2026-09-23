@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -24,6 +25,18 @@ JwksFetcher = Callable[[str], Awaitable[Mapping[str, object]]]
 
 
 class JwksCache:
+    """Caches JWKS signing keys with hardened refresh behaviour (spec #9).
+
+    * a single in-flight refresh is shared by concurrent lookups
+      (thundering-herd protection),
+    * refresh failures and refresh timeouts never discard usable key material:
+      a known ``kid`` keeps validating from cache (stale-if-available),
+    * failed refreshes are rate-limited by ``min_refresh_interval`` so an
+      identity-provider outage cannot turn into a request storm,
+    * key material never appears in logs or ``repr``,
+    * every fetch is bounded by ``timeout`` (spec #78).
+    """
+
     def __init__(
         self,
         *,
@@ -32,19 +45,39 @@ class JwksCache:
         fetcher: JwksFetcher,
         clock: Clock | None = None,
         min_refresh_interval: timedelta = timedelta(seconds=1),
+        timeout: timedelta = timedelta(seconds=5),
     ) -> None:
         self._url = url
         self._ttl = ttl
         self._fetcher = fetcher
         self._clock = clock or SystemClock()
         self._min_refresh_interval = min_refresh_interval
+        self._timeout = timeout
         self._fetched_at: datetime | None = None
         self._last_refresh_attempt: datetime | None = None
         self._keys: dict[str, object] = {}
+        self._refresh_lock = asyncio.Lock()
+        self._last_failure: str | None = None
+        self._last_error: BaseException | None = None
+
+    def __repr__(self) -> str:
+        return (
+            f"JwksCache(url={self._url!r}, keys={len(self._keys)}, "
+            f"stale={self._stale()}, last_failure={self._last_failure!r})"
+        )
+
+    async def _fetch(self) -> Mapping[str, object]:
+        fetch = self._fetcher(self._url)
+        return await asyncio.wait_for(fetch, timeout=self._timeout.total_seconds())
 
     async def _refresh(self) -> None:
         self._last_refresh_attempt = self._clock.now()
-        document = await self._fetcher(self._url)
+        try:
+            document = await self._fetch()
+        except Exception as exc:  # noqa: BLE001 - any fetch failure degrades to cache
+            self._last_failure = type(exc).__name__
+            self._last_error = exc
+            return
         raw_keys = document.get("keys")
         keys: dict[str, object] = {}
         if isinstance(raw_keys, list):
@@ -56,6 +89,8 @@ class JwksCache:
                     keys[str(kid)] = jwk
         self._keys = keys
         self._fetched_at = self._clock.now()
+        self._last_failure = None
+        self._last_error = None
 
     def _stale(self) -> bool:
         if self._fetched_at is None:
@@ -67,16 +102,39 @@ class JwksCache:
             return True
         return self._clock.now() - self._last_refresh_attempt >= self._min_refresh_interval
 
+    def _needs_refresh(self, kid: str) -> bool:
+        return self._stale() or kid not in self._keys
+
     async def signing_key(self, kid: str) -> object | None:
-        if (self._stale() or kid not in self._keys) and self._can_refresh():
-            await self._refresh()
+        if self._needs_refresh(kid) and self._can_refresh():
+            async with self._refresh_lock:
+                # Re-check under the lock: a concurrent lookup may have refreshed.
+                if self._needs_refresh(kid) and self._can_refresh():
+                    await self._refresh()
         jwk = self._keys.get(kid)
-        if not isinstance(jwk, Mapping):
-            return None
-        try:
-            return cast(object, pyjwt.PyJWK.from_dict(dict(jwk)).key)
-        except pyjwt.PyJWTError:
-            return None
+        key: object | None = None
+        if isinstance(jwk, Mapping):
+            try:
+                key = cast(object, pyjwt.PyJWK.from_dict(dict(jwk)).key)
+            except pyjwt.PyJWTError:
+                key = None
+        if key is not None:
+            return key
+        if self._last_error is not None:
+            # No usable key material and the last refresh failed: surface the
+            # real cause (identity-provider outage vs. unknown key) so callers
+            # can audit and alert on it. Callers still fail closed.
+            raise self._last_error
+        return None
+
+    async def ready(self) -> bool:
+        """Report whether key material is loaded (spec #51 security readiness)."""
+        return bool(self._keys)
+
+    @property
+    def stale(self) -> bool:
+        """Operational signal: cached keys are older than the configured TTL."""
+        return self._stale()
 
 
 class TokenVerifier:
