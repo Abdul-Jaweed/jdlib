@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Schema names come only from the registry-validated `target_handle`; quoting is driver-level; `search_path` is set by the framework on every checkout and reset on checkin; application code never sets it.
+- Schema names come only from the registry-validated `target_handle`; quoting is driver-level; `search_path` is set by the framework on every transaction begin (`after_begin`, so it survives rollbacks) and reset on checkin; application code never sets it.
 - Database handles are opaque; credentials resolve through `SecretProvider`; pool cache never evicts a pool with checked-out connections; cap exhaustion raises `PoolCapacityError`.
 - RLS: `FORCE ROW LEVEL SECURITY` on every `TenantRouted` table; runtime role `NOBYPASSRLS`; unset `app.tenant_id` yields zero rows and zero writes; startup self-check fails closed.
 - Shared `purge`/`destroy` deletes tenant-plane rows through a privileged context with per-model counts audited; `archive` deletes nothing.
@@ -289,6 +289,13 @@ Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -
 git add src/jdlib/context.py src/jdlib/control/registry.py src/jdlib/persistence/strategies/schema.py tests/unit/test_schema_strategy.py tests/integration/test_schema_strategy_db.py
 git commit -m "feat: schema-per-tenant strategy with search_path isolation"
 ```
+
+**Review fixes applied (follow-up commit `fix: re-assert search_path per transaction; prove schema isolation`):** authoritative snippets live in `src/jdlib/persistence/strategies/schema.py` and `tests/integration/test_schema_strategy_db.py`; the notes below are the frozen contract deltas.
+
+- **Rollback-proof `search_path`:** `session()` no longer issues a one-shot `SET`; it registers an `after_begin` listener on the new session's `sync_session` that executes `SET search_path TO <quoted>` on every transaction begin. A non-`LOCAL` `SET` is undone by `ROLLBACK`, so the first statement after a rollback previously saw the connection default (`current_schema() == 'public'`); the per-begin re-assert repairs it. Listener-setup failure closes the session before propagating. The pool `reset` listener (reset-on-checkin) is unchanged and still required.
+- **`fullmatch`:** `validate_schema_name` uses `re.fullmatch`, rejecting `"t_acme\n"`, which `match` accepted via the `$` anchor.
+- **Isolation proof hardened:** tenant records use distinct `slug` vs `target_handle` values; each raw session asserts `SELECT current_schema()` equals its handle; the other schema is proven empty via direct `SELECT count(*) FROM <schema>.invoices` on the async engine. New `test_search_path_survives_rollback` (rollback → `current_schema()` → committed write; other schema stays empty), double `provision()` / double `deprovision(PURGE)` idempotency coverage, and the checkin-reset test now executes a statement before commit so the pool actually carries a set `search_path`. Test DSN conversion normalizes `postgresql://` and `postgresql+asyncpg://` inputs before swapping in `+psycopg`.
+- **Counts:** `tests/unit/test_schema_strategy.py` 8 passed; `tests/integration/test_schema_strategy_db.py` 4 passed; full suite 438 passed; `ruff` and strict `mypy` clean.
 
 ---
 
@@ -964,7 +971,7 @@ git commit -m "test: strategy matrix; docs sync"
 ## Phase 5 Exit Criteria
 
 - [ ] Full suite green on real PostgreSQL 16.
-- [ ] Schema strategy: validated handles, checkout-set `search_path`, per-schema DDL/migration, cross-schema isolation proven.
+- [ ] Schema strategy: validated handles, per-begin `search_path` (rollback-proof, reset on checkin), per-schema DDL/migration, cross-schema isolation proven.
 - [ ] Database strategy: opaque handles, secret resolution, capped pool cache with no live eviction, real second-database provision/migrate/deprovision.
 - [ ] RLS: policies on every tenant-routed table, fail-closed unset setting, scoped reads/writes as the `NOBYPASSRLS` role, startup self-check.
 - [ ] Shared `purge`/`destroy` deletes tenant-plane rows with audited counts; `archive` untouched.

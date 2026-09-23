@@ -17,7 +17,7 @@ _SCHEMA_RE = re.compile(r"^t_[a-z0-9][a-z0-9_]{0,50}$")
 
 
 def validate_schema_name(value: str) -> str:
-    if not _SCHEMA_RE.match(value):
+    if not _SCHEMA_RE.fullmatch(value):
         raise StrategyCapabilityError(f"invalid tenant schema name: {value!r}")
     return value
 
@@ -68,9 +68,19 @@ class SchemaPerTenantStrategy:
         schema = _handle(tenant)
         if self._engine is None:
             raise StrategyCapabilityError("schema strategy has no engine configured")
-        session = AsyncSession(self._engine, expire_on_commit=False)
         quoted = self._engine.dialect.identifier_preparer.quote(schema)
-        await session.execute(sa.text(f"SET search_path TO {quoted}"))
+        session = AsyncSession(self._engine, expire_on_commit=False)
+
+        def _set_search_path(
+            sync_session: sa.orm.Session, transaction: Any, connection: sa.Connection
+        ) -> None:
+            connection.exec_driver_sql(f"SET search_path TO {quoted}")
+
+        try:
+            sa.event.listen(session.sync_session, "after_begin", _set_search_path)
+        except Exception:
+            await session.close()
+            raise
         return session
 
     async def provision(self, tenant: TenantRecord) -> None:

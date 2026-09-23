@@ -29,7 +29,7 @@ def _record(handle: str | None = "t_acme") -> TenantRecord:
 
 def test_schema_name_validation():
     assert validate_schema_name("t_acme_1") == "t_acme_1"
-    for bad in ("public", "t_", "t_BAD", 't_x"; DROP TABLE x', ""):
+    for bad in ("public", "t_", "t_BAD", 't_x"; DROP TABLE x', "", "t_acme\n"):
         with pytest.raises(StrategyCapabilityError):
             validate_schema_name(bad)
 
