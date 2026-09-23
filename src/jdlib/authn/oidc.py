@@ -6,10 +6,17 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 
 import jwt as pyjwt
+import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from jdlib.authn.base import bearer_token
 from jdlib.config import OidcConfig
-from jdlib.context import Clock, SystemClock
-from jdlib.errors import ExpiredToken, InvalidToken
+from jdlib.context import Clock, Principal, PrincipalKind, SystemClock
+from jdlib.control.audit import PlatformAudit
+from jdlib.control.models import IdentityLink, User
+from jdlib.control.session import ControlPlaneSession
+from jdlib.errors import AuthenticationError, ExpiredToken, InvalidToken
+from jdlib.tenancy.resolution import RequestInfo
 
 JwksFetcher = Callable[[str], Awaitable[Mapping[str, object]]]
 
@@ -22,15 +29,19 @@ class JwksCache:
         ttl: timedelta,
         fetcher: JwksFetcher,
         clock: Clock | None = None,
+        min_refresh_interval: timedelta = timedelta(seconds=1),
     ) -> None:
         self._url = url
         self._ttl = ttl
         self._fetcher = fetcher
         self._clock = clock or SystemClock()
+        self._min_refresh_interval = min_refresh_interval
         self._fetched_at: datetime | None = None
+        self._last_refresh_attempt: datetime | None = None
         self._keys: dict[str, object] = {}
 
     async def _refresh(self) -> None:
+        self._last_refresh_attempt = self._clock.now()
         document = await self._fetcher(self._url)
         raw_keys = document.get("keys")
         keys: dict[str, object] = {}
@@ -49,15 +60,20 @@ class JwksCache:
             return True
         return self._clock.now() - self._fetched_at > self._ttl
 
+    def _can_refresh(self) -> bool:
+        if self._last_refresh_attempt is None:
+            return True
+        return self._clock.now() - self._last_refresh_attempt >= self._min_refresh_interval
+
     async def signing_key(self, kid: str) -> object | None:
-        if self._stale() or kid not in self._keys:
+        if (self._stale() or kid not in self._keys) and self._can_refresh():
             await self._refresh()
         jwk = self._keys.get(kid)
         if not isinstance(jwk, Mapping):
             return None
         try:
             return cast(object, pyjwt.PyJWK.from_dict(dict(jwk)).key)
-        except (pyjwt.PyJWKError, ValueError, KeyError):
+        except pyjwt.PyJWTError:
             return None
 
 
@@ -121,9 +137,112 @@ class ClaimMapper:
     def map(self, claims: Mapping[str, object]) -> IdentityClaims:
         email = claims.get("email")
         verified = claims.get("email_verified")
+        subject = claims.get("sub")
+        if subject is None:
+            raise InvalidToken("missing subject")
         return IdentityClaims(
             issuer=str(claims.get("iss", self._config.issuer)),
-            subject=str(claims["sub"]),
+            subject=str(subject),
             email=str(email) if isinstance(email, str) else None,
             email_verified=bool(verified) if isinstance(verified, bool) else False,
         )
+
+
+class UserLinker:
+    def __init__(
+        self, session_factory: Callable[[], AsyncSession], config: OidcConfig
+    ) -> None:
+        self._session_factory = session_factory
+        self._config = config
+
+    async def link(self, claims: IdentityClaims) -> User | None:
+        async with ControlPlaneSession(self._session_factory()) as session:
+            link: IdentityLink | None = (
+                await session.execute(
+                    sa.select(IdentityLink).where(
+                        IdentityLink.issuer == claims.issuer,
+                        IdentityLink.subject == claims.subject,
+                    )
+                )
+            ).scalar_one_or_none()
+            if link is not None:
+                user: User | None = await session.get(User, link.user_id)
+                if user is None or user.status != "active":
+                    return None
+                return user
+            if not self._config.email_trusted or not claims.email_verified or not claims.email:
+                return None
+            found: User | None = (
+                await session.execute(
+                    sa.select(User).where(
+                        sa.func.lower(User.email) == claims.email.lower(),
+                        User.status == "active",
+                    )
+                )
+            ).scalar_one_or_none()
+            if found is None:
+                return None
+            session.add(
+                IdentityLink(user_id=found.id, issuer=claims.issuer, subject=claims.subject)
+            )
+            await session.commit()
+            return found
+
+
+def _kid(token: str) -> str:
+    try:
+        header = pyjwt.get_unverified_header(token)
+    except pyjwt.PyJWTError as exc:
+        raise InvalidToken("malformed token header") from exc
+    kid = header.get("kid")
+    if not isinstance(kid, str):
+        raise InvalidToken("token has no kid")
+    return kid
+
+
+class OidcAuthenticator:
+    def __init__(
+        self,
+        *,
+        config: OidcConfig,
+        cache: JwksCache,
+        verifier: TokenVerifier,
+        mapper: ClaimMapper,
+        linker: UserLinker,
+        audit: PlatformAudit,
+    ) -> None:
+        self._config = config
+        self._cache = cache
+        self._verifier = verifier
+        self._mapper = mapper
+        self._linker = linker
+        self._audit = audit
+
+    async def authenticate(self, request: RequestInfo) -> Principal | None:
+        token = bearer_token(request)
+        if token is None:
+            return None
+        try:
+            key = await self._cache.signing_key(_kid(token))
+            if key is None:
+                raise InvalidToken("unknown signing key")
+            claims = self._verifier.verify(token, key)
+            identity = self._mapper.map(claims)
+        except AuthenticationError as exc:
+            await self._audit.record(
+                action="authn.failed",
+                tenant_id=None,
+                actor_id=None,
+                metadata={"reason": type(exc).__name__},
+            )
+            return None
+        user = await self._linker.link(identity)
+        if user is None:
+            await self._audit.record(
+                action="authn.failed",
+                tenant_id=None,
+                actor_id=None,
+                metadata={"reason": "unlinked_identity"},
+            )
+            return None
+        return Principal(kind=PrincipalKind.USER, id=user.id, user_id=user.id)
