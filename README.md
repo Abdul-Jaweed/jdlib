@@ -103,11 +103,11 @@ from jdlib.authn.wiring import (
     build_authenticator,
 )
 from jdlib.authz.guards import Enforcer
-from jdlib.authz.pdp import DefaultPDP
+from jdlib.authz.pdp import Decision, DefaultPDP
 from jdlib.authz.permissions import PermissionCatalog
 from jdlib.authz.reader import ControlAccessReader
 from jdlib.authz.resource_types import ResourceTypeRegistry
-from jdlib.authz.scopes import ScopeResolver
+from jdlib.authz.scopes import ScopeResolver, Target
 from jdlib.control.audit import DatabaseAuditSink, PrivilegeAuditAdapter
 from jdlib.control.enums import PlacementStrategy
 from jdlib.control.registry import RegistryWriteFence, TenantRegistry
@@ -142,11 +142,20 @@ registry = TenantRegistry(
     runner=runner,
     audit=audit,
 )
-pdp = DefaultPDP(
-    catalog=PermissionCatalog.with_builtins(),
-    reader=reader,
-    scopes=ScopeResolver(ResourceTypeRegistry()),
-)
+catalog = PermissionCatalog.with_builtins()
+resource_types = ResourceTypeRegistry()
+
+
+def make_pdp() -> DefaultPDP:
+    """Build a fresh PDP: its ``AuthzCache`` is request-scoped only."""
+    return DefaultPDP(catalog=catalog, reader=reader, scopes=ScopeResolver(resource_types))
+
+
+class RequestScopedEnforcer(Enforcer):
+    """Builds a fresh PDP (and ``AuthzCache``) for every guard evaluation."""
+
+    async def require(self, permission: str, target: Target, *, session: object) -> Decision:
+        return await Enforcer(make_pdp()).require(permission, target, session=session)
 
 
 class OperatorAuthorizer:
@@ -179,7 +188,7 @@ install(
     container=JdlibContainer(
         session_factory=control_sessions,
         uow_factory=uow_factory,
-        enforcer=Enforcer(pdp),
+        enforcer=RequestScopedEnforcer(),
     ),
 )
 
@@ -197,16 +206,26 @@ async def list_invoices(
         return [row.number for row in await TenantRepository(session, Invoice).list()]
 ```
 
+(`Invoice` stands for your application's `TenantOwned` model, imported from your
+own package.)
+
 `install` adds the ASGI middleware, the `JdlibError` -> JSON exception handler
 (401/403/404/409/423/500 mapped from the error class), and stores the container
 on `app.state`. The example uses one shared tenant engine; hybrid deployments
 route inside `uow_factory` by `context.strategy` (see `SessionRouter`).
 
+`DefaultPDP` memoizes through a request-scoped `AuthzCache`: never build one
+PDP/cache at import time and share it across requests; the snippet builds a
+fresh PDP for each guard evaluation instead.
+
 `require` authorizes in its own unit of work: it opens `uow_factory()`, so the
 `RegistryWriteFence` applies to guarded reads too (a guarded read during a
-relocation quiesce fails with 423 `TenantNotWritable`). Because the guard and
-the handler use different sessions by default, a permission revoked between the
-guard and the handler is re-checked only when both share one session.
+relocation quiesce fails with 423 `TenantNotWritable`). The guard authorizes
+once, in that transaction; `get_uow` opens a separate session for the handler
+(each `UnitOfWork` gets a new one), so the guard's decision is not re-validated
+there: a permission revoked after the check is observed only by a fresh
+evaluation in the handler's own session, not by re-checking the guard's
+decision (a TOCTOU window between the guard and the handler).
 
 `ContextFactory` takes a `PrivilegeAudit` (operator/system/test context
 issuance), not the `PlatformAudit` sink itself; `PrivilegeAuditAdapter` bridges

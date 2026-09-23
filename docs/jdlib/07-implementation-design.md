@@ -773,9 +773,12 @@ def require(permission: str, target_factory: Callable[..., Target] | None = None
 `require` authorizes in its own unit of work: the guard opens
 `container.uow_factory()` (so `RegistryWriteFence` applies to guarded reads,
 which fail with 423 `TenantNotWritable` during relocation quiesce) and passes
-that session to `Enforcer.require`. The handler's `get_uow` session is a
-different one unless the caller shares it, so a permission revoked between the
-guard and the handler is re-checked only when both use the same session.
+that session to `Enforcer.require`. The guard authorizes once, in that
+transaction; the handler's `get_uow` opens a separate session (each
+`UnitOfWork` gets a new one), so the guard's decision is not re-validated
+against the handler's work: a permission revoked after the check is observed
+only by a fresh evaluation in the handler's own session, not by re-checking
+the guard's decision (a TOCTOU window between the guard and the handler).
 
 CLI (`integrations/cli.py`, typer): `tenant create|provision|list`,
 `db upgrade-control|upgrade-tenants`, `rls install|verify`, `schema lint`.

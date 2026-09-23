@@ -35,7 +35,7 @@ from jdlib.errors import UnknownPrincipal
 from jdlib.tenancy.jobs import ContextPropagator
 from jdlib.tenancy.middleware import TenantMiddleware
 from jdlib.tenancy.resolution import ApiKeyResolver, HeaderResolver, ResolverChain
-from tests.support.context_fakes import FrozenClock
+from tests.support.context_fakes import FrozenClock, RecordingPrivilegeAudit
 
 
 class _Runner:
@@ -168,7 +168,7 @@ async def test_api_key_principal_through_middleware(control_session_factory):
         servability=registry,
         entitlements=EntitlementAdapter(reader),
         operators=_OperatorStub(),
-        audit=RecordingPlatformAudit(),
+        audit=RecordingPrivilegeAudit(),
         clock=FrozenClock(),
     )
     authenticator = ApiKeyAuthenticator(
@@ -265,7 +265,7 @@ async def test_api_key_pinned_to_tenant_a_presenting_tenant_b_gets_404(
         servability=registry,
         entitlements=EntitlementAdapter(reader),
         operators=_OperatorStub(),
-        audit=RecordingPlatformAudit(),
+        audit=RecordingPrivilegeAudit(),
         clock=FrozenClock(),
     )
     authenticator = ApiKeyAuthenticator(

@@ -35,7 +35,7 @@ from jdlib.integrations.fastapi import (  # noqa: E402
     require,
 )
 from jdlib.tenancy.resolution import ApiKeyResolver, HeaderResolver, ResolverChain  # noqa: E402
-from tests.support.context_fakes import FrozenClock  # noqa: E402
+from tests.support.context_fakes import FrozenClock, RecordingPrivilegeAudit  # noqa: E402
 
 
 class _Runner:
@@ -104,7 +104,7 @@ async def _build_app(control_session_factory, container: JdlibContainer | None =
         servability=registry,
         entitlements=EntitlementAdapter(reader),
         operators=_OperatorStub(),
-        audit=RecordingPlatformAudit(),
+        audit=RecordingPrivilegeAudit(),
         clock=FrozenClock(),
     )
     authenticator = ApiKeyAuthenticator(

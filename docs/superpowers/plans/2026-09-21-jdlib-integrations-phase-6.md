@@ -314,6 +314,14 @@ git add src/jdlib/integrations tests/integration/test_fastapi_integration.py tes
 git commit -m "feat: fastapi and cli integrations"
 ```
 
+**Shipped note — `require` semantics:** the guard authorizes once in its own
+unit of work (`container.uow_factory()`), so the `RegistryWriteFence` applies
+to guarded reads. The handler's `get_uow` opens a separate session (each
+`UnitOfWork` gets a new one), so the guard's decision is not re-validated
+there: a permission revoked after the check is observed only by a fresh
+evaluation in the handler's own session, not by re-checking the guard's
+decision (a TOCTOU window between the guard and the handler).
+
 ---
 
 ### Task 4: Public API, README, final validation
@@ -375,11 +383,13 @@ autoloaded.
 
 ## Scope deviations (accepted)
 
-The frozen `07-implementation-design.md` section 14 listed a wider CLI:
-`tenant create|provision|suspend|resume|archive|deprovision|migrate|relocate`,
+The pre-Phase-6 revisions of `07-implementation-design.md` section 14 listed a
+wider CLI: `tenant create|provision|suspend|resume|archive|deprovision|migrate|relocate`,
 `db upgrade-control|upgrade-tenants`, `lint schema`, `operator grant`. Phase 6
 ships the reduced surface `tenant create|provision|list`,
-`db upgrade-control|upgrade-tenants`, `rls install|verify`, `schema lint`:
+`db upgrade-control|upgrade-tenants`, `rls install|verify`, `schema lint`; the
+base revision already showed this reduced list because Task 4 synced section 14
+of `07` to the shipped surface:
 
 - `tenant suspend|resume|archive|deprovision|migrate|relocate` and
   `operator grant` are deferred. The registry and `AccessControl` operations
@@ -390,8 +400,8 @@ ships the reduced surface `tenant create|provision|list`,
   tenant ids that `provision` needs, and `rls install|verify` is the operator
   path for the opt-in RLS feature.
 
-This deviation is accepted; section 14 of `07` is updated to the shipped
-surface.
+This deviation is accepted; section 14 of `07` already shows the shipped
+surface (Task 4 synced it).
 
 ## Phase 6 Exit Criteria
 

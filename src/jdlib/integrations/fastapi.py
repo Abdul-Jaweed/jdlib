@@ -3,9 +3,12 @@
 ``require`` authorizes in its own unit of work: the guard opens
 ``container.uow_factory()``, so the ``RegistryWriteFence`` applies to guarded
 reads too, and a guarded read during a relocation quiesce fails with 423
-(``TenantNotWritable``). The handler's ``get_uow`` session is a different one
-unless the caller shares it, so a permission revoked between the guard and the
-handler is re-checked only when both use the same session.
+(``TenantNotWritable``). The guard authorizes once, in that transaction;
+``get_uow`` opens a separate session for the handler (each ``UnitOfWork`` gets
+a new one), so the guard's decision is not re-validated there: a permission
+revoked after the check is observed only by a fresh evaluation in the
+handler's own session, not by re-checking the guard's decision (a TOCTOU
+window between the guard and the handler).
 """
 
 from __future__ import annotations
