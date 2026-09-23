@@ -110,6 +110,11 @@ class JwtTokenValidator:
         """The key source backing this validator (diagnostics, health wiring)."""
         return self._keys
 
+    @property
+    def mapping(self) -> JwtClaimMapping:
+        """The claim mapping in force (issuer, audience, algorithm allowlist)."""
+        return self._mapping
+
     async def validate(self, token: str) -> ValidatedToken:
         """Validate ``token``, raising a typed authentication error on failure."""
         kid = self._kid(token)

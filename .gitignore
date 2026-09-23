@@ -10,3 +10,6 @@ build/
 .env
 .worktrees/
 .superpowers/
+
+# local infra artefacts
+tests/infra/out/
