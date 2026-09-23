@@ -548,6 +548,7 @@ class TenantRegistry:
                 slug=tenant.slug,
                 status=TenantStatus(tenant.status),
                 strategy=PlacementStrategy(placement.strategy),
+                target_handle=placement.target_handle,
             )
 
 
@@ -557,6 +558,7 @@ def _record(tenant: Tenant, placement: TenantPlacement) -> TenantRecord:
         slug=tenant.slug,
         status=TenantStatus(tenant.status),
         strategy=PlacementStrategy(placement.strategy),
+        target_handle=placement.target_handle,
     )
 
 

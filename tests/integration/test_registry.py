@@ -495,6 +495,7 @@ async def test_find_returns_record_for_id_and_slug(control_session_factory):
         slug=tenant.slug,
         status=TenantStatus.ACTIVE,
         strategy=PlacementStrategy.SHARED,
+        target_handle="default",
     )
 
 
@@ -524,6 +525,7 @@ async def test_assert_servable_returns_active_tenant(control_session_factory):
         slug=tenant.slug,
         status=TenantStatus.ACTIVE,
         strategy=PlacementStrategy.SHARED,
+        target_handle="default",
     )
 
 

@@ -84,6 +84,7 @@ class TenantRecord:
     slug: str
     status: TenantStatus
     strategy: PlacementStrategy
+    target_handle: str | None = None
 
 
 class Clock(Protocol):

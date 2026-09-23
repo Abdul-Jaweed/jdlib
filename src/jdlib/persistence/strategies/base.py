@@ -17,6 +17,12 @@ class StrategyCapabilities:
 
 
 class IsolationStrategy(Protocol):
+    """Isolation adapter bound to one ``PlacementStrategy``.
+
+    ``TenantRecord.target_handle`` carries the registry-validated placement
+    handle (for example a schema name) for strategies that route by handle.
+    """
+
     name: str
     capabilities: StrategyCapabilities
 
