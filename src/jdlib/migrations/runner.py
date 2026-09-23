@@ -14,17 +14,30 @@ _TENANT_SCHEMA_RE = re.compile(r"t_[a-z0-9][a-z0-9_]{0,50}")
 DEPLOYMENT_SCHEMA_RE = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 
+def _sync_url(database_url: str) -> str:
+    url = sa.engine.make_url(database_url)
+    if url.drivername == "postgresql+asyncpg":
+        url = url.set(drivername="postgresql+psycopg")
+    return url.render_as_string(hide_password=False)
+
+
 class MigrationRunner:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
 
-    def _config(self, plane: str, *, tenant_schema: str | None = None) -> Config:
+    def _config(
+        self,
+        plane: str,
+        *,
+        tenant_schema: str | None = None,
+        database_url: str | None = None,
+    ) -> Config:
         config = Config()
         config.set_main_option(
             "script_location",
             str(Path(__file__).parent / plane),
         )
-        config.set_main_option("sqlalchemy.url", self._database_url)
+        config.set_main_option("sqlalchemy.url", _sync_url(database_url or self._database_url))
         config.attributes["tenant_schema"] = tenant_schema
         return config
 
@@ -50,6 +63,13 @@ class MigrationRunner:
         config = self._config("tenant", tenant_schema=schema)
         command.upgrade(config, revision)
 
+    def upgrade_tenant_url(
+        self, database_url: str, schema: str, revision: str = "head"
+    ) -> None:
+        self._validate_deployment_schema(schema)
+        config = self._config("tenant", tenant_schema=schema, database_url=database_url)
+        command.upgrade(config, revision)
+
     def provision_tenant_schema(self, schema: str, revision: str = "head") -> None:
         self._validate_tenant_schema(schema)
         engine = sa.create_engine(self._database_url, future=True)
@@ -60,18 +80,30 @@ class MigrationRunner:
 
     def tenant_version(self, schema: str) -> str | None:
         self._validate_deployment_schema(schema)
-        engine = sa.create_engine(self._database_url, future=True)
+        engine = sa.create_engine(_sync_url(self._database_url), future=True)
         try:
-            with engine.begin() as connection:
-                present = connection.execute(
-                    sa.text("SELECT to_regclass(:quoted)").bindparams(
-                        quoted=f"{schema}.alembic_version"
-                    )
-                ).scalar_one_or_none()
-                if present is None:
-                    return None
-                return connection.execute(
-                    sa.text(f'SELECT version_num FROM "{schema}".alembic_version LIMIT 1')
-                ).scalar_one_or_none()
+            return self._read_version(engine, schema)
         finally:
             engine.dispose()
+
+    def tenant_version_url(self, database_url: str, schema: str) -> str | None:
+        self._validate_deployment_schema(schema)
+        engine = sa.create_engine(_sync_url(database_url), future=True)
+        try:
+            return self._read_version(engine, schema)
+        finally:
+            engine.dispose()
+
+    @staticmethod
+    def _read_version(engine: sa.Engine, schema: str) -> str | None:
+        with engine.begin() as connection:
+            present = connection.execute(
+                sa.text("SELECT to_regclass(:quoted)").bindparams(
+                    quoted=f"{schema}.alembic_version"
+                )
+            ).scalar_one_or_none()
+            if present is None:
+                return None
+            return connection.execute(
+                sa.text(f'SELECT version_num FROM "{schema}".alembic_version LIMIT 1')
+            ).scalar_one_or_none()
