@@ -31,6 +31,7 @@ class PrincipalKind(StrEnum):
     USER = "user"
     SERVICE_ACCOUNT = "service_account"
     PLATFORM_OPERATOR = "platform_operator"
+    ANONYMOUS = "anonymous"
 
 
 class PrivilegeKind(StrEnum):
