@@ -202,7 +202,10 @@ class TenantRegistry:
         parent_tenant_id: uuid.UUID | None = None,
         actor_id: uuid.UUID | None = None,
     ) -> Tenant:
-        strategy = PlacementStrategy(strategy)
+        try:
+            strategy = PlacementStrategy(strategy)
+        except ValueError as exc:
+            raise ProvisioningError(f"unknown placement strategy: {strategy!r}") from exc
         _validate_target_handle(strategy, target_handle)
         async with await self._control() as session:
             await self._slug_lock(session, slug)
