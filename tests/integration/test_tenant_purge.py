@@ -5,7 +5,13 @@ from collections.abc import Callable
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.engine import URL
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from jdlib.authn.wiring import (
     EntitlementAdapter,
@@ -13,7 +19,7 @@ from jdlib.authn.wiring import (
     TenantDirectoryAdapter,
 )
 from jdlib.authz.reader import ControlAccessReader
-from jdlib.config import ContextConfig
+from jdlib.config import ContextConfig, RlsConfig
 from jdlib.context import ContextFactory, Principal, PrincipalKind, TenantContext, TenantRecord
 from jdlib.control.audit import RecordingPlatformAudit
 from jdlib.control.enums import PlacementStrategy, TenantStatus
@@ -21,15 +27,20 @@ from jdlib.control.models import Tenant
 from jdlib.control.purge import TenantPlanePurger
 from jdlib.control.registry import TenantRegistry
 from jdlib.errors import ProvisioningError
+from jdlib.models.base import TenantBase
+from jdlib.models.org import Organization, Team
 from jdlib.models.settings import TenantSetting
 from jdlib.persistence.session import TenantSession
 from jdlib.persistence.strategies.deprovision import DeprovisionMode
+from jdlib.persistence.strategies.rls import emit_rls_policies
 from jdlib.persistence.strategies.shared import SharedSchemaStrategy
 from tests.support.context_fakes import FrozenClock, RecordingPrivilegeAudit
-from tests.support.invoice import Invoice
+from tests.support.invoice import Invoice, LineItem
 
 TENANT_SCHEMA = "jt_test"
 DESIRED_VERSION = "0001_tenant_baseline"
+APP_ROLE = "jdlib_rls_app"
+APP_PASSWORD = "rls-test"
 
 
 class _Runner:
@@ -97,10 +108,53 @@ async def _tenant_session(session_factory, tenant_id: uuid.UUID) -> TenantSessio
     return TenantSession(raw, _tenant_context(tenant_id))
 
 
-async def _invoice_count(session_factory, tenant_id: uuid.UUID) -> int:
+async def _row_count(session_factory, tenant_id: uuid.UUID, model: type) -> int:
     async with await _tenant_session(session_factory, tenant_id) as session:
-        result = await session.execute(sa.select(sa.func.count()).select_from(Invoice))
+        result = await session.execute(sa.select(sa.func.count()).select_from(model))
         return int(result.scalar_one())
+
+
+async def _invoice_count(session_factory, tenant_id: uuid.UUID) -> int:
+    return await _row_count(session_factory, tenant_id, Invoice)
+
+
+def _app_url(postgres_url: str) -> URL:
+    return sa.engine.make_url(postgres_url).set(
+        drivername="postgresql+asyncpg", username=APP_ROLE, password=APP_PASSWORD
+    )
+
+
+@pytest.fixture()
+async def rls_app_engine(async_engine: AsyncEngine, postgres_url: str):
+    async with async_engine.begin() as connection:
+        await connection.execute(sa.text(f'SET search_path TO "{TENANT_SCHEMA}"'))
+        await connection.execute(
+            sa.text(
+                f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{APP_ROLE}') "
+                f"THEN CREATE ROLE {APP_ROLE} LOGIN PASSWORD '{APP_PASSWORD}' NOBYPASSRLS; "
+                "END IF; END $$;"
+            )
+        )
+        await connection.execute(
+            sa.text(f'GRANT USAGE ON SCHEMA "{TENANT_SCHEMA}" TO {APP_ROLE}')
+        )
+        await connection.execute(
+            sa.text(
+                f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "
+                f'"{TENANT_SCHEMA}" TO {APP_ROLE}'
+            )
+        )
+        await connection.execute(
+            sa.text(
+                f'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA "{TENANT_SCHEMA}" TO {APP_ROLE}'
+            )
+        )
+        await connection.run_sync(
+            lambda sync: emit_rls_policies(sync, metadata=TenantBase.metadata, app_role=APP_ROLE)
+        )
+    engine = create_async_engine(_app_url(postgres_url))
+    yield engine
+    await engine.dispose()
 
 
 def _registry(control_session_factory, *, strategies=None, purger=None):
@@ -135,6 +189,30 @@ async def _archived_tenant(registry: TenantRegistry) -> Tenant:
 async def _seed_invoice(session_factory, tenant_id: uuid.UUID, number: str) -> None:
     async with await _tenant_session(session_factory, tenant_id) as session:
         await session.add(Invoice(number=number))
+        await session.commit()
+
+
+async def _seed_org_tree(session_factory, tenant_id: uuid.UUID, prefix: str) -> None:
+    org = Organization(id=uuid.uuid4(), name=f"{prefix} Org", slug=f"{prefix.lower()}-org")
+    team = Team(
+        id=uuid.uuid4(),
+        organization_id=org.id,
+        name=f"{prefix} Team",
+        slug=f"{prefix.lower()}-team",
+    )
+    invoice = Invoice(
+        id=uuid.uuid4(),
+        number=f"INV-{prefix}",
+        status="draft",
+        organization_id=org.id,
+        team_id=team.id,
+    )
+    line_item = LineItem(invoice_id=invoice.id, amount_cents=500)
+    async with await _tenant_session(session_factory, tenant_id) as session:
+        await session.add(org)
+        await session.add(team)
+        await session.add(invoice)
+        await session.add(line_item)
         await session.commit()
 
 
@@ -189,6 +267,52 @@ async def test_purge_only_deletes_the_target_tenant_rows(
     assert await _invoice_count(session_factory, other_id) == 1
 
 
+async def test_purge_deletes_children_before_parents(control_session_factory, session_factory):
+    registry, _ = _registry(control_session_factory, strategies={})
+    purger = TenantPlanePurger(
+        _schema_factory(session_factory),
+        factory=_context_factory(control_session_factory, registry),
+    )
+    target_id, other_id = uuid.uuid4(), uuid.uuid4()
+    await _seed_org_tree(session_factory, target_id, "TARGET")
+    await _seed_org_tree(session_factory, other_id, "OTHER")
+    counts = await purger.purge(_record(target_id))
+    assert counts["organizations"] == 1
+    assert counts["teams"] == 1
+    assert counts["invoices"] == 1
+    assert counts["line_items"] == 1
+    for model in (Organization, Team, Invoice, LineItem):
+        assert await _row_count(session_factory, target_id, model) == 0
+        assert await _row_count(session_factory, other_id, model) == 1
+
+
+async def test_purge_with_rls_binds_tenant_setting(
+    control_session_factory, session_factory, rls_app_engine
+):
+    probe, _ = _registry(control_session_factory, strategies={})
+    purger = TenantPlanePurger(
+        _schema_factory(async_sessionmaker(rls_app_engine, expire_on_commit=False)),
+        factory=_context_factory(control_session_factory, probe),
+        rls=RlsConfig(enabled=True, app_role=APP_ROLE),
+    )
+    registry, audit = _registry(control_session_factory, purger=purger)
+    tenant = await _archived_tenant(registry)
+    await _seed_invoice(session_factory, tenant.id, "INV-RLS")
+    async with rls_app_engine.connect() as connection:
+        await connection.execute(sa.text(f'SET search_path TO "{TENANT_SCHEMA}"'))
+        hidden = (
+            await connection.execute(sa.text("SELECT count(*) FROM invoices"))
+        ).scalar_one()
+        await connection.rollback()
+    assert hidden == 0
+    purged = await registry.deprovision(tenant.id, mode=DeprovisionMode.PURGE)
+    assert purged.status == TenantStatus.DELETED
+    assert await _invoice_count(session_factory, tenant.id) == 0
+    entry = audit.entries[-1]
+    assert entry["action"] == "tenant.deprovisioned"
+    assert entry["metadata"]["tenant_counts"]["invoices"] == 1
+
+
 @pytest.mark.parametrize("mode", [DeprovisionMode.PURGE, DeprovisionMode.DESTROY])
 async def test_shared_deprovision_purges_and_audits_counts(
     control_session_factory, session_factory, mode
@@ -206,7 +330,8 @@ async def test_shared_deprovision_purges_and_audits_counts(
     entry = audit.entries[-1]
     assert entry["action"] == "tenant.deprovisioned"
     assert entry["metadata"]["mode"] == mode.value
-    assert entry["metadata"]["counts"]["invoices"] == 1
+    assert entry["metadata"]["tenant_counts"]["invoices"] == 1
+    assert "invoices" not in entry["metadata"]["counts"]
 
 
 async def test_shared_deprovision_without_purger_fails_closed(

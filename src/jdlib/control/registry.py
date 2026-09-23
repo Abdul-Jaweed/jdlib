@@ -477,10 +477,10 @@ class TenantRegistry:
                 metadata["detached_children"] = [str(child) for child in children]
             counts = await self._delete_access_rows(session, tenant_id)
             await strategy.deprovision(record, mode)
-            if purger is not None:
-                counts.update(await purger.purge(record))
-            tenant.status = TenantStatus.DELETED.value
             metadata["counts"] = counts
+            if purger is not None:
+                metadata["tenant_counts"] = await purger.purge(record)
+            tenant.status = TenantStatus.DELETED.value
             await self._audit.record(
                 action="tenant.deprovisioned",
                 tenant_id=tenant_id,

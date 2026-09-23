@@ -800,7 +800,7 @@ git commit -m "feat: postgres RLS emission and fail-closed tenant binding"
 - Create: `tests/integration/test_tenant_purge.py`
 
 **Interfaces:**
-- Produces: `TenantPlanePurger(session_factory, *, issuer)` with `async purge(tenant: TenantRecord) -> dict[str, int]`; `TenantRegistry(..., purger: TenantPlanePurger | None = None)`.
+- Produces: `TenantPlanePurger(session_factory, *, factory, rls: RlsConfig | None = None)` with `async purge(tenant: TenantRecord) -> dict[str, int]`; `TenantRegistry(..., purger: TenantPlanePurger | None = None)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -926,7 +926,7 @@ class TenantPlanePurger:
         return counts
 ```
 
-Notes for the implementer: `for_system` is async — await it. `delete_where` on `SoftDelete` models requires a privileged context (system context qualifies). `tenant_table_map()` returns every `TenantRouted` model, including application resources registered at import time; the integration test must import `tests.support.invoice` first. Registry wiring: after `strategy.deprovision`, if `placement.strategy == "shared"` and `mode is not ARCHIVE`, call the purger and include `counts` in the `tenant.deprovisioned` audit metadata. The purger needs a `ContextFactory`; construct one in `TenantRegistry.__init__` from injected ports (add optional `purger` argument and call it when present, raising `ProvisioningError` when purge is requested without one).
+Notes for the implementer: `for_system` is async — await it. `delete_where` on `SoftDelete` models requires a privileged context (system context qualifies). `tenant_table_map()` returns every `TenantRouted` model, including application resources registered at import time; the integration test must import `tests.support.invoice` first, and application models must be imported before any purge runs (see review fixes below). Registry wiring: after `strategy.deprovision`, if `placement.strategy == "shared"` and `mode is not ARCHIVE`, call the purger and include the tenant-plane counts under `tenant_counts` in the `tenant.deprovisioned` audit metadata (access-row counts stay under `counts`). The purger needs a `ContextFactory`; construct one in `TenantRegistry.__init__` from injected ports (add optional `purger` argument and call it when present, raising `ProvisioningError` when purge is requested without one).
 
 - [ ] **Step 3: Full suite, lint, type check, commit**
 
@@ -936,6 +936,15 @@ Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -
 git add src/jdlib/control/purge.py src/jdlib/control/registry.py tests/integration/test_tenant_purge.py
 git commit -m "feat: privileged tenant-plane purge for shared deprovisioning"
 ```
+
+**Review fixes applied (follow-up commit `fix: child-first purge order and RLS-bound tenant purge`):** authoritative snippets live in `src/jdlib/control/purge.py`, `src/jdlib/control/registry.py` and `tests/integration/test_tenant_purge.py`; the notes below are the frozen contract deltas.
+
+- **Child-first delete order (Critical).** The shipped purger did not delete in the import-order of `tenant_table_map()`, which violated `teams.organization_id → organizations` (`ON DELETE RESTRICT`) and under-counted CASCADE children (`line_items → invoices`). `_delete_order()` now iterates `reversed(TenantBase.metadata.sorted_tables)` (SQLAlchemy parents-first topological sort → reversed children-first), keeps only table names present in `tenant_table_map()`, and appends any remaining map entries sorted by name as a deterministic fallback. `test_purge_deletes_children_before_parents` seeds `Organization`+`Team`+org/team-owned `Invoice`+`LineItem`, asserts exact per-table counts (`line_items == 1`, no CASCADE undercount) and that a second tenant's identical tree survives untouched.
+- **RLS-bound tenant-plane purge (Important).** `TenantPlanePurger` accepts `rls: RlsConfig | None = None`; when `rls.enabled`, the purge session executes `SELECT set_config('app.tenant_id', :tenant_id, true)` on the raw `AsyncSession` before the scoped deletes (mirroring `SharedSchemaStrategy.session`; `TenantSession.execute` rejects raw `TextClause`, so the binding happens before wrapping, transaction-local and cleared by the purge commit). Binding failure closes the session before propagating. `test_purge_with_rls_binds_tenant_setting` installs the `NOBYPASSRLS` role + policies on `jt_test`, proves the setting is genuinely required (unset app role sees 0 rows), then runs the registry purge against an app-role session and asserts `tenant_counts["invoices"] == 1` and `status == DELETED`.
+- **Counts key split (minor).** Tenant-plane per-table counts are audited under `metadata["tenant_counts"]`; access-row counts remain under `metadata["counts"]`, so the two stores cannot collide as tenant models are added.
+- **Cross-store commit note (minor).** `TenantPlanePurger.purge` commits its own tenant-plane session before `TenantRegistry.deprovision` commits the control-plane transaction. A control-plane failure after the purge (e.g. audit sink unavailable) therefore leaves tenant rows already deleted while the tenant stays `DEPROVISIONING`; retry is idempotent (counts become 0) but the audit entry for the successful delete is lost. Accepted: the alternative of an XA/2PC across control and tenant stores is out of scope for this phase.
+- **App-model import contract (minor).** `tenant_table_map()` only imports the built-in model modules (`jdlib.models.org/settings/audit`); application `TenantRouted` models participate in purge only if the host application has imported them before the purger runs, otherwise their tables are absent from the map (silently skipped). Documented; the integration tests import `tests.support.invoice` for this reason.
+- **Counts:** `tests/integration/test_tenant_purge.py` 8 passed (was 6; +FK-order, +RLS-bound tests, +`tenant_counts` assertions); `tests/integration/test_rls_db.py` 4 passed; full suite 476 passed (was 474); `ruff` and strict `mypy` clean.
 
 ---
 
