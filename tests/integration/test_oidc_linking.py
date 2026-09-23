@@ -11,6 +11,25 @@ def _config(*, trusted: bool) -> OidcConfig:
     return OidcConfig(issuer="https://idp", audience="a", email_trusted=trusted)
 
 
+def _racing_factory(factory, race):
+    def make():
+        session = factory()
+        original = session.commit
+        fired = False
+
+        async def commit():
+            nonlocal fired
+            if not fired:
+                fired = True
+                await race()
+            await original()
+
+        session.commit = commit
+        return session
+
+    return make
+
+
 async def test_link_by_identity_link(control_session_factory):
     user_id = uuid.uuid4()
     async with control_session_factory() as session:
@@ -81,6 +100,130 @@ async def test_no_silent_provisioning(control_session_factory):
         issuer="https://idp",
         subject="sub-5",
         email="nobody@example.com",
+        email_verified=True,
+    )
+    assert await linker.link(claims) is None
+
+
+async def test_link_race_returns_winning_user(control_session_factory):
+    email_user_id = uuid.uuid4()
+    winner_id = uuid.uuid4()
+    async with control_session_factory() as session:
+        session.add(User(id=email_user_id, email="race@example.com", status="active"))
+        session.add(User(id=winner_id, email="winner@example.com", status="active"))
+        await session.commit()
+
+    async def race() -> None:
+        async with control_session_factory() as other:
+            other.add(
+                IdentityLink(
+                    id=uuid.uuid4(), user_id=winner_id, issuer="https://idp", subject="sub-race"
+                )
+            )
+            await other.commit()
+
+    linker = UserLinker(_racing_factory(control_session_factory, race), _config(trusted=True))
+    user = await linker.link(
+        IdentityClaims(
+            issuer="https://idp",
+            subject="sub-race",
+            email="race@example.com",
+            email_verified=True,
+        )
+    )
+    assert user is not None and user.id == winner_id
+    async with control_session_factory() as session:
+        links = (
+            (
+                await session.execute(
+                    sa.select(IdentityLink).where(IdentityLink.subject == "sub-race")
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(links) == 1
+    assert links[0].user_id == winner_id
+
+
+async def test_link_race_user_deleted_returns_none(control_session_factory):
+    user_id = uuid.uuid4()
+    async with control_session_factory() as session:
+        session.add(User(id=user_id, email="gone@example.com", status="active"))
+        await session.commit()
+
+    async def race() -> None:
+        async with control_session_factory() as other:
+            await other.execute(sa.delete(User).where(User.id == user_id))
+            await other.commit()
+
+    linker = UserLinker(_racing_factory(control_session_factory, race), _config(trusted=True))
+    user = await linker.link(
+        IdentityClaims(
+            issuer="https://idp",
+            subject="sub-gone",
+            email="gone@example.com",
+            email_verified=True,
+        )
+    )
+    assert user is None
+
+
+async def test_identity_link_wins_over_trusted_email_match(control_session_factory):
+    linked_id = uuid.uuid4()
+    email_id = uuid.uuid4()
+    async with control_session_factory() as session:
+        session.add(User(id=linked_id, email="linked@example.com", status="active"))
+        session.add(User(id=email_id, email="shared@example.com", status="active"))
+        await session.flush()
+        session.add(
+            IdentityLink(
+                id=uuid.uuid4(), user_id=linked_id, issuer="https://idp", subject="sub-precedence"
+            )
+        )
+        await session.commit()
+
+    linker = UserLinker(control_session_factory, _config(trusted=True))
+    user = await linker.link(
+        IdentityClaims(
+            issuer="https://idp",
+            subject="sub-precedence",
+            email="shared@example.com",
+            email_verified=True,
+        )
+    )
+    assert user is not None and user.id == linked_id
+    async with control_session_factory() as session:
+        links = (
+            (
+                await session.execute(
+                    sa.select(IdentityLink).where(IdentityLink.subject == "sub-precedence")
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(links) == 1
+    assert links[0].user_id == linked_id
+
+
+async def test_linked_inactive_user_denied(control_session_factory):
+    user_id = uuid.uuid4()
+    async with control_session_factory() as session:
+        session.add(User(id=user_id, email="suspended@example.com", status="suspended"))
+        await session.flush()
+        session.add(
+            IdentityLink(
+                id=uuid.uuid4(), user_id=user_id, issuer="https://idp", subject="sub-inactive"
+            )
+        )
+        await session.commit()
+
+    linker = UserLinker(control_session_factory, _config(trusted=True))
+    claims = IdentityClaims(
+        issuer="https://idp",
+        subject="sub-inactive",
+        email="suspended@example.com",
         email_verified=True,
     )
     assert await linker.link(claims) is None

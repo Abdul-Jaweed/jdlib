@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import jwt as pyjwt
 import sqlalchemy as sa
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jdlib.authn.base import bearer_token
@@ -157,19 +158,9 @@ class UserLinker:
 
     async def link(self, claims: IdentityClaims) -> User | None:
         async with ControlPlaneSession(self._session_factory()) as session:
-            link: IdentityLink | None = (
-                await session.execute(
-                    sa.select(IdentityLink).where(
-                        IdentityLink.issuer == claims.issuer,
-                        IdentityLink.subject == claims.subject,
-                    )
-                )
-            ).scalar_one_or_none()
-            if link is not None:
-                user: User | None = await session.get(User, link.user_id)
-                if user is None or user.status != "active":
-                    return None
-                return user
+            linked = await self._linked_user(session, claims)
+            if linked is not None:
+                return linked
             if not self._config.email_trusted or not claims.email_verified or not claims.email:
                 return None
             found: User | None = (
@@ -185,8 +176,30 @@ class UserLinker:
             session.add(
                 IdentityLink(user_id=found.id, issuer=claims.issuer, subject=claims.subject)
             )
-            await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                return await self._linked_user(session, claims)
             return found
+
+    async def _linked_user(
+        self, session: ControlPlaneSession, claims: IdentityClaims
+    ) -> User | None:
+        link: IdentityLink | None = (
+            await session.execute(
+                sa.select(IdentityLink).where(
+                    IdentityLink.issuer == claims.issuer,
+                    IdentityLink.subject == claims.subject,
+                )
+            )
+        ).scalar_one_or_none()
+        if link is None:
+            return None
+        user: User | None = await session.get(User, link.user_id)
+        if user is None or user.status != "active":
+            return None
+        return user
 
 
 def _kid(token: str) -> str:

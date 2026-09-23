@@ -18,6 +18,22 @@ async def _jwks(document):
     return document
 
 
+def _keypair():
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = pyjwt.algorithms.RSAAlgorithm.to_jwk(private.public_key(), as_dict=True)
+    jwk.update({"kid": "k", "alg": "RS256", "use": "sig"})
+    return private, {"keys": [jwk]}
+
+
+def _token(private, *, clock) -> str:
+    return pyjwt.encode(
+        {"iss": ISSUER, "aud": "a", "sub": "s", "exp": clock.now() + timedelta(minutes=5)},
+        private,
+        algorithm="RS256",
+        headers={"kid": "k"},
+    )
+
+
 class _User:
     id = uuid.uuid4()
     email = "u@example.com"
@@ -39,21 +55,13 @@ def _request(token: str | None) -> RequestInfo:
 
 async def test_authenticator_returns_user_principal():
     clock = FrozenClock()
-    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    jwk = pyjwt.algorithms.RSAAlgorithm.to_jwk(private.public_key(), as_dict=True)
-    jwk.update({"kid": "k", "alg": "RS256", "use": "sig"})
+    private, jwks = _keypair()
     config = OidcConfig(issuer=ISSUER, audience="a")
     cache = JwksCache(
         url="u",
         ttl=timedelta(hours=1),
-        fetcher=lambda url: _jwks({"keys": [jwk]}),
+        fetcher=lambda url: _jwks(jwks),
         clock=clock,
-    )
-    token = pyjwt.encode(
-        {"iss": ISSUER, "aud": "a", "sub": "s", "exp": clock.now() + timedelta(minutes=5)},
-        private,
-        algorithm="RS256",
-        headers={"kid": "k"},
     )
     audit = RecordingPlatformAudit()
     authenticator = OidcAuthenticator(
@@ -64,7 +72,7 @@ async def test_authenticator_returns_user_principal():
         linker=_Linker(_User()),
         audit=audit,
     )
-    principal = await authenticator.authenticate(_request(token))
+    principal = await authenticator.authenticate(_request(_token(private, clock=clock)))
     assert principal is not None
     assert principal.kind is PrincipalKind.USER
     assert principal.id == _User.id
@@ -74,8 +82,14 @@ async def test_authenticator_returns_user_principal():
 
 async def test_authenticator_denies_and_audits_failures():
     clock = FrozenClock()
+    private, jwks = _keypair()
     config = OidcConfig(issuer=ISSUER, audience="a")
-    cache = JwksCache(url="u", ttl=timedelta(hours=1), fetcher=_jwks, clock=clock)
+    cache = JwksCache(
+        url="u",
+        ttl=timedelta(hours=1),
+        fetcher=lambda url: _jwks(jwks),
+        clock=clock,
+    )
     audit = RecordingPlatformAudit()
     authenticator = OidcAuthenticator(
         config=config,
@@ -87,8 +101,12 @@ async def test_authenticator_denies_and_audits_failures():
     )
     assert await authenticator.authenticate(_request(None)) is None
     assert await authenticator.authenticate(_request("not-a-token")) is None
-    assert {entry["action"] for entry in audit.entries} == {"authn.failed"}
-    assert all(
-        "token" not in str(entry).lower() or entry["action"] == "authn.failed"
-        for entry in audit.entries
-    )
+    assert await authenticator.authenticate(_request(_token(private, clock=clock))) is None
+    assert len(audit.entries) == 2
+    for entry in audit.entries:
+        assert "not-a-token" not in str(entry)
+        assert set(entry["metadata"]) == {"reason"}
+    assert [entry["metadata"]["reason"] for entry in audit.entries] == [
+        "InvalidToken",
+        "unlinked_identity",
+    ]
