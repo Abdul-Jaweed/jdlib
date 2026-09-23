@@ -5,7 +5,6 @@ import os
 from collections.abc import AsyncIterator
 
 import pytest
-import pytest_asyncio
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -15,6 +14,11 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from jdlib.models.base import TenantBase
+
+try:
+    import pytest_asyncio
+except ImportError:
+    pytest_asyncio = None  # type: ignore[assignment]
 
 
 def jdlib_test_models() -> tuple[str, ...]:
@@ -46,22 +50,34 @@ def jdlib_models() -> tuple[str, ...]:
     return jdlib_test_models()
 
 
-@pytest_asyncio.fixture()
-async def jdlib_engine(
-    jdlib_database_url: str, jdlib_schema: str, jdlib_models: tuple[str, ...]
-) -> AsyncIterator[AsyncEngine]:
-    """Yield an async engine with the tenant schema and ``TenantBase`` tables created."""
-    for module_name in jdlib_models:
-        importlib.import_module(module_name)
-    engine = create_async_engine(
-        _async_dsn(jdlib_database_url),
-        connect_args={"server_settings": {"search_path": f"{jdlib_schema}, public"}},
-    )
-    async with engine.begin() as connection:
-        await connection.execute(sa.text(f'CREATE SCHEMA IF NOT EXISTS "{jdlib_schema}"'))
-        await connection.run_sync(TenantBase.metadata.create_all)
-    yield engine
-    await engine.dispose()
+if pytest_asyncio is None:
+
+    @pytest.fixture()
+    def jdlib_engine() -> None:
+        """Skip async database fixtures when ``pytest-asyncio`` is not installed."""
+        pytest.skip("install pytest-asyncio to use jdlib fixtures")
+
+else:
+
+    @pytest_asyncio.fixture()
+    async def jdlib_engine(
+        jdlib_database_url: str, jdlib_schema: str, jdlib_models: tuple[str, ...]
+    ) -> AsyncIterator[AsyncEngine]:
+        """Yield an async engine with the tenant schema and ``TenantBase`` tables created."""
+        for module_name in jdlib_models:
+            importlib.import_module(module_name)
+        engine = create_async_engine(
+            _async_dsn(jdlib_database_url),
+            connect_args={"server_settings": {"search_path": f"{jdlib_schema}, public"}},
+        )
+        try:
+            async with engine.begin() as connection:
+                quoted = connection.dialect.identifier_preparer.quote(jdlib_schema)
+                await connection.execute(sa.text(f"CREATE SCHEMA IF NOT EXISTS {quoted}"))
+                await connection.run_sync(TenantBase.metadata.create_all)
+            yield engine
+        finally:
+            await engine.dispose()
 
 
 @pytest.fixture()

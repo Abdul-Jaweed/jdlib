@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import importlib.metadata
+import importlib.util
+import sys
 import uuid
 from collections.abc import Callable
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from jdlib.context import Principal, PrincipalKind, TenantContext
@@ -17,6 +20,7 @@ from jdlib.testing import (
     assert_scoped_count,
     assert_tenant_isolated,
     assertions,
+    pytest_plugin,
 )
 
 
@@ -214,8 +218,6 @@ async def test_cross_tenant_write_rejected_fails_when_flush_succeeds(monkeypatch
 
 
 def test_plugin_exposes_kit_fixtures():
-    from jdlib.testing import pytest_plugin
-
     for name in (
         "jdlib_database_url",
         "jdlib_engine",
@@ -237,3 +239,79 @@ def test_plugin_registered_as_pytest11_entry_point():
         entry_point.name == "jdlib" and entry_point.value == "jdlib.testing.pytest_plugin"
         for entry_point in entry_points
     )
+
+
+def test_plugin_imports_without_pytest_asyncio(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pytest_asyncio", None)
+    spec = importlib.util.spec_from_file_location("jdlib_plugin_probe", pytest_plugin.__file__)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert callable(module.jdlib_engine)
+    with pytest.raises(pytest.skip.Exception, match="pytest-asyncio"):
+        module.jdlib_engine.__wrapped__()
+
+
+class _FakeConnection:
+    def __init__(self, statements: list[str]) -> None:
+        self.statements = statements
+        self.dialect = postgresql.dialect()
+
+    async def execute(self, statement: object) -> None:
+        self.statements.append(str(statement))
+
+    async def run_sync(self, fn: object) -> None:
+        return None
+
+
+class _FakeBegin:
+    def __init__(self, connection: _FakeConnection) -> None:
+        self._connection = connection
+
+    async def __aenter__(self) -> _FakeConnection:
+        return self._connection
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+
+class _FakeEngine:
+    def __init__(self, *, fail_begin: bool = False) -> None:
+        self.statements: list[str] = []
+        self.disposed = False
+        self._fail_begin = fail_begin
+
+    def begin(self) -> _FakeBegin:
+        if self._fail_begin:
+            raise RuntimeError("connect failed")
+        return _FakeBegin(_FakeConnection(self.statements))
+
+    async def dispose(self) -> None:
+        self.disposed = True
+
+
+async def test_engine_fixture_disposes_when_setup_fails(monkeypatch):
+    engine = _FakeEngine(fail_begin=True)
+    monkeypatch.setattr(pytest_plugin, "create_async_engine", lambda *args, **kwargs: engine)
+    iterator = pytest_plugin.jdlib_engine.__wrapped__(
+        jdlib_database_url="postgresql://example/db",
+        jdlib_schema="jdlib_test",
+        jdlib_models=(),
+    )
+    with pytest.raises(RuntimeError, match="connect failed"):
+        await anext(iterator)
+    assert engine.disposed
+
+
+async def test_engine_fixture_quotes_schema_with_dialect_preparer(monkeypatch):
+    engine = _FakeEngine()
+    monkeypatch.setattr(pytest_plugin, "create_async_engine", lambda *args, **kwargs: engine)
+    iterator = pytest_plugin.jdlib_engine.__wrapped__(
+        jdlib_database_url="postgresql://example/db",
+        jdlib_schema='odd"name',
+        jdlib_models=(),
+    )
+    await anext(iterator)
+    assert engine.statements == ['CREATE SCHEMA IF NOT EXISTS "odd""name"']
+    await anext(iterator, None)
+    assert engine.disposed
