@@ -1,0 +1,24 @@
+# Cerbos PDP configuration for the local infrastructure stack.
+# Policies live in ./policies and are populated by the authorisation phase.
+server:
+  httpListenAddr: "0.0.0.0:3592"
+  grpcListenAddr: "0.0.0.0:3593"
+
+storage:
+  driver: disk
+  disk:
+    directory: /policies
+    watchForChanges: false
+
+engine:
+  defaultPolicyVersion: "default"
+
+audit:
+  enabled: true
+  backend: local
+  local:
+    storagePath: /tmp/cerbos/audit
+    retentionPeriod: 24h
+
+schema:
+  enforcement: none
