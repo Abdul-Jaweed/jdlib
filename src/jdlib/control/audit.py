@@ -7,12 +7,21 @@ from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jdlib.context import Principal, PrivilegeKind
+from jdlib.context import Principal, PrivilegeKind, current_tenant
 from jdlib.control.session import ControlPlaneSession
+from jdlib.errors import MissingTenantContext
 
 
 def _resolve_actor_type(actor_id: uuid.UUID | None, actor_type: str | None) -> str:
     return actor_type or ("system" if actor_id is None else "user")
+
+
+def _trace_ids() -> tuple[str | None, str | None, str | None]:
+    try:
+        context = current_tenant()
+    except MissingTenantContext:
+        return None, None, None
+    return context.request_id, context.correlation_id, context.trace_id
 
 
 class PlatformAudit(Protocol):
@@ -85,6 +94,7 @@ class DatabaseAuditSink:
 
         owns_session = session is None
         control = session or ControlPlaneSession(self._session_factory())
+        request_id, correlation_id, trace_id = _trace_ids()
         try:
             control.add(
                 PlatformAuditEvent(
@@ -93,6 +103,9 @@ class DatabaseAuditSink:
                     actor_id=actor_id,
                     actor_type=_resolve_actor_type(actor_id, actor_type),
                     metadata_json=dict(metadata or {}),
+                    request_id=request_id,
+                    correlation_id=correlation_id,
+                    trace_id=trace_id,
                 )
             )
             await control.flush()

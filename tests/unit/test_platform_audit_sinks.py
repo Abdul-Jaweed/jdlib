@@ -2,12 +2,25 @@ from __future__ import annotations
 
 import uuid
 
-from jdlib.context import Principal, PrincipalKind, PrivilegeKind
+from jdlib.context import Principal, PrincipalKind, PrivilegeKind, TenantContext, context_scope
 from jdlib.control.audit import (
     DatabaseAuditSink,
     PrivilegeAuditAdapter,
     RecordingPlatformAudit,
 )
+from jdlib.control.enums import PlacementStrategy
+
+
+def _context() -> TenantContext:
+    return TenantContext(
+        tenant_id=uuid.UUID(int=1),
+        tenant_slug="acme",
+        strategy=PlacementStrategy.SHARED,
+        principal=Principal(kind=PrincipalKind.USER, id=uuid.UUID(int=2)),
+        request_id="req-1",
+        correlation_id="corr-1",
+        trace_id="trace-1",
+    )
 
 
 class _FakeSession:
@@ -46,6 +59,27 @@ async def test_database_sink_honors_explicit_actor_type():
         actor_type="platform_operator",
     )
     assert session.added[0].actor_type == "platform_operator"  # type: ignore[attr-defined]
+
+
+async def test_database_sink_populates_trace_ids_from_active_context():
+    session = _FakeSession()
+    sink = DatabaseAuditSink(lambda: session)  # type: ignore[arg-type,return-value]
+    with context_scope(_context()):
+        await sink.record(action="tenant.created", tenant_id=uuid.UUID(int=1), actor_id=None)
+    event = session.added[0]
+    assert event.request_id == "req-1"  # type: ignore[attr-defined]
+    assert event.correlation_id == "corr-1"  # type: ignore[attr-defined]
+    assert event.trace_id == "trace-1"  # type: ignore[attr-defined]
+
+
+async def test_database_sink_leaves_trace_ids_null_without_context():
+    session = _FakeSession()
+    sink = DatabaseAuditSink(lambda: session)  # type: ignore[arg-type,return-value]
+    await sink.record(action="tenant.created", tenant_id=None, actor_id=None)
+    event = session.added[0]
+    assert event.request_id is None  # type: ignore[attr-defined]
+    assert event.correlation_id is None  # type: ignore[attr-defined]
+    assert event.trace_id is None  # type: ignore[attr-defined]
 
 
 async def test_privilege_audit_adapter_delegates_to_platform_sink():

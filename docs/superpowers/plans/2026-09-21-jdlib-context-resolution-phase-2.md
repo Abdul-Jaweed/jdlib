@@ -1,6 +1,8 @@
 # jdlib Context & Resolution (Phase 2) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status: complete — all steps executed, reviewed, merged to main.**
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the tenancy context layer: configuration, `Principal`/`TenantContext`/`PrivilegeContext`, the fail-closed `ContextFactory` with port-based verification, signed async envelopes, the tenant resolver chain, the job propagator/decorator, and pure-ASGI middleware.
 
@@ -35,7 +37,7 @@
 - Consumes: nothing.
 - Produces: `TenancyConfig`, `ContextConfig`, `ResolverConfig`, `ResolverName` (StrEnum: `jwt_claim`, `subdomain`, `path`, `header`, `api_key`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_config.py`:
 
@@ -93,12 +95,12 @@ def test_secret_is_not_leaked_in_repr():
     assert isinstance(config.context.signing_key, SecretStr)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_config.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.config'`
 
-- [ ] **Step 3: Implement `src/jdlib/config.py`**
+- [x] **Step 3: Implement `src/jdlib/config.py`**
 
 ```python
 from __future__ import annotations
@@ -154,12 +156,12 @@ class TenancyConfig(BaseSettings):
     resolvers: ResolverConfig = ResolverConfig()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_config.py -v`
 Expected: PASS (5 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -180,7 +182,7 @@ git commit -m "feat: tenancy configuration (context, resolvers)"
 - Consumes: `jdlib.errors.MissingTenantContext`; `PlacementStrategy`, `TenantStatus`, `OperatorLevel` from `jdlib.control.enums`.
 - Produces: `PrincipalKind` (`user`, `service_account`, `platform_operator` — distinct from `control.enums.PrincipalType`, which is the binding-only pair `user`/`service_account`), `Principal`, `PrivilegeContext`, `PrivilegeKind`, `TenantContext`, `TenantRef`, `TenantRecord`, `Clock`, `SystemClock`, `current_tenant()`, `current_principal()`, `current_privilege()`, `context_scope()`, `scoped_key()`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_context_values.py`:
 
@@ -265,12 +267,12 @@ def test_tenant_ref_and_record_shapes():
     assert record.status is TenantStatus.ACTIVE
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_context_values.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.context'`
 
-- [ ] **Step 3: Implement `src/jdlib/context.py` (value objects and accessors only)**
+- [x] **Step 3: Implement `src/jdlib/context.py` (value objects and accessors only)**
 
 ```python
 from __future__ import annotations
@@ -393,12 +395,12 @@ def scoped_key(namespace: str, *parts: object) -> str:
     return f"jdlib:v1:{context.tenant_id}:{encoded_namespace}{suffix}"
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_context_values.py -v`
 Expected: PASS (5 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -420,7 +422,7 @@ git commit -m "feat: tenant context value objects, fail-closed accessors, scoped
 - Consumes: Task 2 types; `jdlib.errors` (`UnknownPrincipal`, `TenantNotFound`, `TenantAccessDenied`, `AuthorizationError`, `TenantSuspended`).
 - Produces: `PrincipalDirectory`, `TenantDirectory`, `ServabilityChecker`, `EntitlementChecker`, `OperatorAuthorizer`, `PrivilegeAudit` protocols; `_PrivilegeIssuer`; `PRIVILEGE_ISSUER`; `ContextFactory` with `for_principal`, `for_operator`, `for_system`, `for_test`.
 
-- [ ] **Step 1: Write the shared fakes**
+- [x] **Step 1: Write the shared fakes**
 
 `tests/support/context_fakes.py`:
 
@@ -524,7 +526,7 @@ class RecordingPrivilegeAudit:
         )
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `tests/unit/test_context_factory.py`:
 
@@ -785,12 +787,12 @@ async def test_for_test_rejects_non_issuer():
         )
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_context_factory.py -v`
 Expected: FAIL with `ImportError: cannot import name 'ContextFactory'`
 
-- [ ] **Step 4: Append ports and factory to `src/jdlib/context.py`**
+- [x] **Step 4: Append ports and factory to `src/jdlib/context.py`**
 
 Add imports: `from datetime import timedelta`; `from jdlib.config import ContextConfig`; `from jdlib.errors import AuthorizationError, TenantAccessDenied, TenantNotFound, UnknownPrincipal`.
 
@@ -1033,12 +1035,12 @@ class ContextFactory:
 Note: the system context's actor uses `PrincipalKind.PLATFORM_OPERATOR` with
 `operator_level=None`; `PrivilegeKind.SYSTEM` is what distinguishes it.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_context_factory.py -v`
 Expected: PASS (14 passed)
 
-- [ ] **Step 6: Lint, type check, commit**
+- [x] **Step 6: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -1059,7 +1061,7 @@ git commit -m "feat: context factory with ports and privileged issuance"
 - Consumes: Task 2 types, `jdlib.config.ContextConfig`.
 - Produces: `TenantContextEnvelope`, `EnvelopeCodec` with `encode(context) -> str` and `decode(token) -> TenantContextEnvelope`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_envelope.py`:
 
@@ -1174,12 +1176,12 @@ def test_junk_payload_segment_rejected():
         codec.decode(f"!!!.{signature}")
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_envelope.py -v`
 Expected: FAIL with `ImportError: cannot import name 'EnvelopeCodec'`
 
-- [ ] **Step 3: Append the envelope codec to `src/jdlib/context.py`**
+- [x] **Step 3: Append the envelope codec to `src/jdlib/context.py`**
 
 Add imports: `import base64`, `import hashlib`, `import hmac`, `import json`.
 
@@ -1259,12 +1261,12 @@ def _unb64(value: str) -> bytes:
     return base64.b64decode(padded, altchars=b"-_", validate=True)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_envelope.py -v`
 Expected: PASS (9 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -1287,7 +1289,7 @@ git commit -m "feat: signed tenant context envelope"
 - Consumes: `Principal`, `TenantRef`; `ResolverConfig`, `ResolverName`.
 - Produces: `RequestInfo(headers, query, path, host, claims)`; `TenantResolver` protocol; `JwtClaimResolver`, `SubdomainResolver`, `PathResolver`, `HeaderResolver`, `ApiKeyResolver`, `ResolverChain`, `build_chain(config)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_resolution.py`:
 
@@ -1389,12 +1391,12 @@ def test_build_chain_maps_config_and_skips_subdomain_without_base_domain():
     assert len(build_chain(config).resolvers) == 2
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_resolution.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.tenancy'`
 
-- [ ] **Step 3: Implement `src/jdlib/tenancy/__init__.py` (empty) and `src/jdlib/tenancy/resolution.py`**
+- [x] **Step 3: Implement `src/jdlib/tenancy/__init__.py` (empty) and `src/jdlib/tenancy/resolution.py`**
 
 ```python
 from __future__ import annotations
@@ -1526,12 +1528,12 @@ def build_chain(config: ResolverConfig) -> ResolverChain:
     return ResolverChain(resolvers)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_resolution.py -v`
 Expected: PASS (7 passed)
 
-- [ ] **Step 5: Update the 07 file map**
+- [x] **Step 5: Update the 07 file map**
 
 In `docs/jdlib/07-implementation-design.md`, change the `tenancy/` line to:
 
@@ -1541,7 +1543,7 @@ In `docs/jdlib/07-implementation-design.md`, change the `tenancy/` line to:
 
 and in §9 Authentication, note that `RequestInfo` is defined in `jdlib.tenancy.resolution` and imported by `authn/base.py`.
 
-- [ ] **Step 6: Lint, type check, commit**
+- [x] **Step 6: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -1562,7 +1564,7 @@ git commit -m "feat: tenant resolver chain"
 - Consumes: `EnvelopeCodec`, `ContextFactory` ports (`PrincipalDirectory`, `TenantDirectory`, `ServabilityChecker`, `EntitlementChecker`), `Principal`, `TenantRef`, `context_scope`.
 - Produces: `ContextPropagator.reconstruct(token) -> TenantContext`; `tenant_job(propagator)` decorator that wraps `async def fn(envelope: str, ...)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_jobs.py`:
 
@@ -1700,12 +1702,12 @@ async def test_tenant_job_rejects_bad_envelope():
         await handler("garbage")
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_jobs.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.tenancy.jobs'`
 
-- [ ] **Step 3: Implement `src/jdlib/tenancy/jobs.py`**
+- [x] **Step 3: Implement `src/jdlib/tenancy/jobs.py`**
 
 ```python
 from __future__ import annotations
@@ -1782,12 +1784,12 @@ def tenant_job(propagator: ContextPropagator) -> Callable[[F], F]:
     return decorate
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_jobs.py -v`
 Expected: PASS (7 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -1808,7 +1810,7 @@ git commit -m "feat: context propagator and tenant job decorator"
 - Consumes: `ContextFactory`, `ResolverChain`, `RequestInfo`, `context_scope`, `jdlib.errors`.
 - Produces: `PrincipalProvider` protocol; `TenantMiddleware(app, *, factory, chain, principal_provider)`; `http_status_for(exc) -> int`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_middleware.py`:
 
@@ -2029,12 +2031,12 @@ async def test_non_http_scope_passes_through():
     assert calls == ["lifespan"]
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_middleware.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.tenancy.middleware'`
 
-- [ ] **Step 3: Implement `src/jdlib/tenancy/middleware.py`**
+- [x] **Step 3: Implement `src/jdlib/tenancy/middleware.py`**
 
 ```python
 from __future__ import annotations
@@ -2171,17 +2173,17 @@ class TenantMiddleware:
             await self.app(scope, receive, send)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_middleware.py -v`
 Expected: PASS (9 passed)
 
-- [ ] **Step 5: Full suite, lint, type check**
+- [x] **Step 5: Full suite, lint, type check**
 
 Run: `.venv/Scripts/python -m pytest -q && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 Expected: all green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/jdlib/tenancy/middleware.py tests/unit/test_middleware.py
@@ -2192,13 +2194,13 @@ git commit -m "feat: ASGI tenant middleware and frozen HTTP error mapping"
 
 ## Phase 2 Exit Criteria
 
-- [ ] `.venv/Scripts/python -m pytest -q` green (Phase 1 suite still passes; ~49 new unit tests).
-- [ ] `ruff` and `mypy` strict clean.
-- [ ] No context access without an active context (I1); context install/clear verified in middleware and jobs (I5, I7).
-- [ ] Envelopes are signed, TTL-bounded, permission-free; reconstruct re-verifies principal, tenant, servability, entitlement (I7).
-- [ ] Privileged contexts require the internal issuer, a capability, a justification (operator), and an audit record.
-- [ ] `scoped_key` is versioned and collision-safe (I8).
-- [ ] HTTP error mapping matches the frozen table.
+- [x] `.venv/Scripts/python -m pytest -q` green (Phase 1 suite still passes; ~49 new unit tests).
+- [x] `ruff` and `mypy` strict clean.
+- [x] No context access without an active context (I1); context install/clear verified in middleware and jobs (I5, I7).
+- [x] Envelopes are signed, TTL-bounded, permission-free; reconstruct re-verifies principal, tenant, servability, entitlement (I7).
+- [x] Privileged contexts require the internal issuer, a capability, a justification (operator), and an audit record.
+- [x] `scoped_key` is versioned and collision-safe (I8).
+- [x] HTTP error mapping matches the frozen table.
 
 ## Plan Series (remaining)
 

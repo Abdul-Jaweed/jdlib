@@ -1,6 +1,8 @@
 # jdlib Authorization Evaluation (Phase 4b) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status: complete — all steps executed, reviewed, merged to main.**
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the authorization evaluation core: the code-owned permission catalog, `ResourceTypeRegistry`, tenant-plane scope resolution (org ancestry + team + resource ownership), the request-scoped `AuthzCache`, the `DefaultPDP` implementing the frozen precedence chain and effective-permission algorithm, and the `Enforcer`/`requires`/`authorize` enforcement points.
 
@@ -33,7 +35,7 @@
 - Consumes: `jdlib.control.enums.ScopeType`; `jdlib.errors.UnknownPermission`.
 - Produces: `Permission(code, namespace, allowed_scopes, description)`; `PermissionCatalog` with `register`, `validate`, `all`, `with_builtins()`; `BUILTIN_PERMISSIONS`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_permissions.py`:
 
@@ -104,12 +106,12 @@ def test_custom_registration_and_namespace():
     assert "invoice:approve" in {permission.code for permission in catalog.all()}
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_permissions.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.authz'`
 
-- [ ] **Step 3: Implement `src/jdlib/authz/__init__.py` (empty) and `src/jdlib/authz/permissions.py`**
+- [x] **Step 3: Implement `src/jdlib/authz/__init__.py` (empty) and `src/jdlib/authz/permissions.py`**
 
 ```python
 from __future__ import annotations
@@ -180,12 +182,12 @@ class PermissionCatalog:
         return tuple(self._by_code.values())
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_permissions.py -v -W error`
 Expected: PASS (5 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -206,7 +208,7 @@ git commit -m "feat: permission catalog with frozen builtin matrix"
 - Consumes: `PermissionCatalog`, `Permission`; `jdlib.models.base.TenantRouted`; errors `UnknownResourceType`, `InvalidResourcePermission`.
 - Produces: `ResourceTypeDefinition(resource_type, model, tenant_owned, tenant_routed, permission_namespace)` with validation (routed ⇒ owned; a routed model must expose `organization_id` and `team_id`); `ResourceTypeRegistry` with `register`, `get`, `all`, `validate_permission(resource_type, permission_code, catalog)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_resource_types.py`:
 
@@ -278,12 +280,12 @@ def test_permission_namespace_must_match():
         registry.validate_permission("invoice", "resource:read", catalog)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_resource_types.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.authz.resource_types'`
 
-- [ ] **Step 3: Implement `src/jdlib/authz/resource_types.py`**
+- [x] **Step 3: Implement `src/jdlib/authz/resource_types.py`**
 
 ```python
 from __future__ import annotations
@@ -346,12 +348,12 @@ class ResourceTypeRegistry:
 
 Note for the implementer: `tests/support/invoice.py` already defines `Invoice` on `TenantBase`; the registry does not require the model to be `TenantRouted` for the unit test, but the definition contract does (`tenant_routed=True` here). A `tenant_routed=True` definition additionally requires the model to expose `organization_id` and `team_id` because `ScopeResolver` reads those attributes when resolving resource ownership; `TenantSetting` (tenant-routed but not ownable) is the rejection counterexample. If importing `Invoice` into a unit test drags in SQLAlchemy metadata construction, that is acceptable (Phase 1 tests do the same). Remove the unused `Any` import if ruff flags it.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_resource_types.py -v -W error`
 Expected: PASS (4 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -372,7 +374,7 @@ git commit -m "feat: resource type registry with namespace validation"
 - Consumes: `ScopeType`; `TenantSession`; `ResourceTypeRegistry`; `ScopeRef`, `ResourceRef` dataclasses (new, defined here).
 - Produces: `ScopeRef(type: ScopeType, id: uuid.UUID | None)`; `ResourceRef(resource_type: str, resource_id: uuid.UUID)`; `Target = ScopeRef | ResourceRef`; `ScopeResolver(registry)` with `async chain(session, target) -> tuple[ScopeRef, ...]`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/integration/test_scopes.py`:
 
@@ -474,12 +476,12 @@ async def test_resource_chain_uses_ownership(session_factory):
         )
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_scopes.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.authz.scopes'`
 
-- [ ] **Step 3: Implement `src/jdlib/authz/scopes.py`**
+- [x] **Step 3: Implement `src/jdlib/authz/scopes.py`**
 
 ```python
 from __future__ import annotations
@@ -569,12 +571,12 @@ class ScopeResolver:
 
 Note for the implementer: the recursive CTE originally sketched here was replaced by tenant-scoped ORM traversal because tenant sessions reject raw text/table statements: `TenantSession.execute` raises on `sa.TextClause` and `raw_sql` refuses CTEs in tenant-bound mode. `_org_chain` therefore walks nearest→root with `session.get(Organization, current)` following `parent_organization_id`, guarded by a `seen` set against parent cycles; the team lookup uses `session.get(Team, ...)`; resource ownership reads `organization_id`/`team_id` off the registry model. Tenant scoping is enforced by the composite PKs rather than by `search_path`. Drop unused imports per ruff.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_scopes.py -v -W error`
 Expected: PASS (4 passed)
 
-- [ ] **Step 5: Full suite, lint, type check, commit**
+- [x] **Step 5: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -598,7 +600,7 @@ git commit -m "feat: tenant-plane scope resolution with org ancestry and resourc
 - Consumes: catalog, registry, scopes, `ControlPlaneSession`, `TenantSession`, `Principal`, `TenantContext`, `ScopeType`.
 - Produces: `AuthzCache` (`invalidate`, memo accessors); `AccessReader` protocol (`bindings_for`, `permissions_by_role`, `grants_for`, status gates); `ControlAccessReader(session_factory)`; `MatchedRule`, `Decision`, `PolicyDecisionPoint`, `DefaultPDP(catalog, reader, scopes, cache=None)` with `async evaluate(principal, permission, target, context, *, session)` memoizing per-request resolution through the injected cache (status gates, scope chain, bindings, per-role permissions, grants).
 
-- [ ] **Step 1: Write the unit tests**
+- [x] **Step 1: Write the unit tests**
 
 `tests/unit/test_pdp.py`:
 
@@ -974,12 +976,12 @@ async def test_cache_invalidate_forces_refetch():
     assert reader.calls["principal_active"] == 2
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_pdp.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.authz.cache'`
 
-- [ ] **Step 3: Implement `src/jdlib/authz/cache.py` and `src/jdlib/authz/reader.py`**
+- [x] **Step 3: Implement `src/jdlib/authz/cache.py` and `src/jdlib/authz/reader.py`**
 
 `cache.py`:
 
@@ -1177,7 +1179,7 @@ class ControlAccessReader:
 
 Note for the implementer: resolve the user id explicitly everywhere (`user_id = principal.user_id if principal.user_id is not None else principal.id`) and compare `principal.kind` against `PrincipalKind` from `jdlib.context` (`PrincipalType` is only the DB check-constraint enum; `is` across the two StrEnums is always false). `permissions_by_role` returns the permission set per role so the PDP can attribute `matched` rules per binding; the union-based `permissions_for_roles` is not kept. `ControlAccessReader` denies `PrincipalKind.PLATFORM_OPERATOR` explicitly in `principal_active`/`membership_active` (operators are never tenant-PDP principals, docs/jdlib/04 section 6) and looks up service accounts by the composite `(tenant_id, id)` when `principal.tenant_id` is set. `bindings_for` filters in Python against the chain; keep it (bindings per principal are few).
 
-- [ ] **Step 4: Implement `src/jdlib/authz/pdp.py`**
+- [x] **Step 4: Implement `src/jdlib/authz/pdp.py`**
 
 ```python
 from __future__ import annotations
@@ -1332,12 +1334,12 @@ class DefaultPDP:
         return Decision(False, "no_allow", tuple(matched))
 ```
 
-- [ ] **Step 5: Run unit tests to verify they pass**
+- [x] **Step 5: Run unit tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_pdp.py -v -W error`
 Expected: PASS (15 passed)
 
-- [ ] **Step 6: Integration test for `ControlAccessReader`**
+- [x] **Step 6: Integration test for `ControlAccessReader`**
 
 `tests/integration/test_pdp_control_reader.py`:
 
@@ -1469,7 +1471,7 @@ Note: the `control_session_factory` fixture creates the control tables; use a un
 
 Review-fix round (shipped as `fix: pdp precedence, matched provenance, cache memoization`): the Task 4 blocks above already include the fixes. (1) Precedence follows docs/jdlib/04 section 2 exactly — principal active → tenant active → membership active → binding validity → permission — proven by a unit test where principal-inactive wins over tenant-suspended. (2) `matched` is built per binding from `permissions_by_role`; the detail is `role <id> at <scope_type>:<scope_id>`, and a multi-binding test asserts one matched rule when only one role grants the permission. (3) `DefaultPDP` memoizes status gates, scope chains, bindings, per-role permissions, and grants through the injected request-scoped `AuthzCache`; `invalidate()` clears the memo and, fail-safe, it does not re-enable within the request. A counting reader proves repeated `evaluate` calls issue no extra reads and refetch after `invalidate()`. Counts: 15 unit tests (was 9), 3 integration tests (was 2).
 
-- [ ] **Step 7: Full suite, lint, type check, commit**
+- [x] **Step 7: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -1490,7 +1492,7 @@ git commit -m "feat: authz cache, control-plane access reader, and default PDP"
 - Consumes: `DefaultPDP`, `Decision`, `ScopeRef`, `Target`, `TenantContext`, `current_tenant`, errors.
 - Produces: `Enforcer(pdp)` with `async require(permission, target, *, session) -> Decision` (raises `PermissionDenied`); `requires(permission, *, target_factory=None)` decorator for async callables taking a `target` keyword or positional; `tenant_target()` helper.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_guards.py`:
 
@@ -1571,12 +1573,12 @@ async def test_target_factory_receives_kwargs():
 
 Note: `Enforcer.require` reads the ambient tenant context via `current_tenant()`, so `tests/unit/test_guards.py` installs one with an autouse `context_scope` fixture (a local `_context()` plus the fixture; the five assertions are exactly as shown).
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_guards.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.authz.guards'`
 
-- [ ] **Step 3: Implement `src/jdlib/authz/guards.py`**
+- [x] **Step 3: Implement `src/jdlib/authz/guards.py`**
 
 ```python
 from __future__ import annotations
@@ -1639,12 +1641,12 @@ async def authorize(
     return await enforcer.require(permission, target, session=session)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_guards.py -v -W error`
 Expected: PASS (5 passed)
 
-- [ ] **Step 5: Full suite, lint, type check, commit**
+- [x] **Step 5: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -1657,12 +1659,12 @@ git commit -m "feat: authorization enforcer and guard decorator"
 
 ## Phase 4b Exit Criteria
 
-- [ ] Full suite green on real PostgreSQL 16.
-- [ ] Catalog and resource registry enforce unknown/duplicate/namespace rules.
-- [ ] Scope chains: tenant; org ancestors via tenant-scoped ORM traversal (nearest→root, cycle-guarded); team → org → ancestors; resource → ownership chain.
-- [ ] PDP precedence chain and effective-permission algorithm (bindings ∪ grants, ∩ key scopes) proven by tests, including the API-key narrowing case.
-- [ ] `Enforcer`/`requires` raise `PermissionDenied` and never call the guarded function on denial.
-- [ ] `ruff` and strict `mypy` clean.
+- [x] Full suite green on real PostgreSQL 16.
+- [x] Catalog and resource registry enforce unknown/duplicate/namespace rules.
+- [x] Scope chains: tenant; org ancestors via tenant-scoped ORM traversal (nearest→root, cycle-guarded); team → org → ancestors; resource → ownership chain.
+- [x] PDP precedence chain and effective-permission algorithm (bindings ∪ grants, ∩ key scopes) proven by tests, including the API-key narrowing case.
+- [x] `Enforcer`/`requires` raise `PermissionDenied` and never call the guarded function on denial.
+- [x] `ruff` and strict `mypy` clean.
 
 ## Plan Series (remaining)
 

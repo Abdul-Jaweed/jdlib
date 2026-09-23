@@ -1,6 +1,8 @@
 # jdlib Integrations & Release (Phase 6) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status: complete — all steps executed, reviewed, merged to main.**
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Finish the foundation: durable audit sinks (platform control-plane audit written in the caller's transaction; tenant audit written in the tenant transaction), the `jdlib.testing` consumer kit, FastAPI and CLI integrations, the public API surface, and a README — then run the final whole-project validation.
 
@@ -32,7 +34,7 @@
 **Interfaces:**
 - Produces: `PlatformAudit.record(*, action, tenant_id, actor_id, metadata=None, session: ControlPlaneSession | None = None)`; `DatabaseAuditSink(session_factory)` writing `PlatformAuditEvent` (uses the provided session without committing); `CompositeAuditSink(*sinks)`; `TenantAuditRecorder.record(*, action, target_type=None, target_id=None, metadata=None)` inserting `AuditEvent` in the tenant session.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_audit_recorder.py`:
 
@@ -138,12 +140,12 @@ async def test_database_sink_uses_caller_transaction(control_session_factory):
     assert count == 0
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/unit/test_audit_recorder.py tests/integration/test_audit_sinks.py -v`
 Expected: FAIL (missing modules/parameters)
 
-- [ ] **Step 3: Implement the sinks and recorder**
+- [x] **Step 3: Implement the sinks and recorder**
 
 `src/jdlib/control/audit.py` — extend the protocol and both implementations with `session: ControlPlaneSession | None = None` (recording implementations accept and ignore it), and append:
 
@@ -235,7 +237,7 @@ class TenantAuditRecorder:
 
 Then update the call sites that already hold a `ControlPlaneSession` to pass `session=session` (registry `create/provision/migrate/transitions/deprovision`, access control mutations); constructors that create their own session keep `session=None` and get their own transaction. Update `NullPlatformAudit` and `RecordingPlatformAudit` signatures accordingly.
 
-- [ ] **Step 4: Run tests to verify they pass; full suite, lint, type check, commit**
+- [x] **Step 4: Run tests to verify they pass; full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -258,17 +260,17 @@ git commit -m "feat: transactional audit sinks and tenant audit recorder"
 **Interfaces:**
 - Produces: `assert_tenant_isolated(session_factory, context_a, context_b, model, **values)`; `assert_scoped_count(session, model, expected)`; pytest fixtures `jdlib_database_url` (env `JDLIB_TEST_DATABASE_URL`), `jdlib_schema` and `jdlib_session_factory` (async, creates the tenant schema and `TenantBase` metadata).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_testing_kit.py`: exercise the kit's pure helpers against fakes (no DB) — `assert_scoped_count` raising on mismatch, `assert_tenant_isolated` calling the injected session factory and failing when the "other tenant" row is visible (use a tiny fake exposing `execute(...).scalars().all()`), and `pytest_plugin` exposing the fixture names.
 
-- [ ] **Step 2: Implement the kit**
+- [x] **Step 2: Implement the kit**
 
 `assertions.py`: `assert_scoped_count(session, model, expected)` runs `select(func.count()).select_from(model)` through `TenantSession` and asserts; `assert_tenant_isolated(session_factory, context_a, context_b, model, **values)` creates a row for B through a `TenantSession` for B, commits, then asserts an A-session sees zero rows and `get(...)` is `None` for B's id. `pytest_plugin.py`: fixtures as described; the engine fixture creates the schema and `TenantBase.metadata` (importing framework + a configurable `jdlib_models` hook via `pytest_configure` or an autouse import of a conftest-defined module list).
 
 Keep the plugin minimal and documented: consumers either set `JDLIB_TEST_DATABASE_URL` or use testcontainers themselves; the kit never hard-fails without a database unless a kit fixture is requested.
 
-- [ ] **Step 3: Run tests; full suite, lint, type check, commit**
+- [x] **Step 3: Run tests; full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -291,21 +293,21 @@ git commit -m "feat: jdlib.testing consumer kit and pytest plugin"
 **Interfaces:**
 - Produces: `install(app, *, factory, resolvers, principal_provider, audit)` adding `TenantMiddleware` and JdlibError exception handlers using `http_status_for`; dependencies `get_context()` and `get_uow(...)`; `require(permission, *, enforcer, target_factory=None)`. CLI: `app` Typer with `tenant create|provision|list`, `db upgrade-control|upgrade-tenants`, `rls install|verify`, `schema lint`; commands build a system/operator context and audit.
 
-- [ ] **Step 1: FastAPI integration test**
+- [x] **Step 1: FastAPI integration test**
 
 `tests/integration/test_fastapi_integration.py` (`pytest.importorskip("fastapi")`): build a tiny app with `install(...)`, an API-key principal provider (reuse `ApiKeyAuthenticator` + a seeded key via `control_session_factory`), a route calling `get_context()` and returning `{"tenant": str(ctx.tenant_id)}`; assert 200 with the tenant id; assert a missing key returns 401 JSON and an unauthorized tenant returns 404 (resolver chain header-first).
 
-- [ ] **Step 2: CLI tests**
+- [x] **Step 2: CLI tests**
 
 `tests/unit/test_cli.py` (`pytest.importorskip("typer")`, `CliRunner`): `--help` lists groups; `schema lint` exits 0 on framework metadata; `rls --help`; a command missing config exits non-zero with a clear message (no crash).
 
-- [ ] **Step 3: Implement integrations**
+- [x] **Step 3: Implement integrations**
 
 `fastapi.py`: `install` registers the middleware with the provided collaborators and handlers built from `http_status_for`; `get_context` returns `current_tenant()`; `get_uow` yields a `UnitOfWork` from an injected app-state container (`app.state.jdlib = container`); `require` wraps `Enforcer`. Keep it small; no route classes.
 
 `cli.py`: Typer app; commands accept `--database-url` (or env `JDLIB_CONTROL_DSN`), build `MigrationRunner`/`TenantRegistry` with a shared async runner (`asyncio.run`), and print results; `rls install/verify` call `install_rls`/`verify_rls`; `schema lint` calls `lint_metadata` with `rls_enabled` from the flag.
 
-- [ ] **Step 4: Run tests; full suite, lint, type check, commit**
+- [x] **Step 4: Run tests; full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -334,15 +336,15 @@ decision (a TOCTOU window between the guard and the handler).
 
 **Interfaces:** none new.
 
-- [ ] **Step 1: Public API test**
+- [x] **Step 1: Public API test**
 
 `tests/unit/test_public_api.py`: assert the exact `jdlib.__all__` set and that every name resolves; assert key names are importable (`TenancyConfig`, `TenantContext`, `current_tenant`, `current_principal`, `ContextFactory`, `UnitOfWork`, `TenantRepository`, `TenantRegistry`, `AccessControl`, `requires`, `authorize`, `JdlibError`).
 
-- [ ] **Step 2: Implement `__init__.py` re-exports and README**
+- [x] **Step 2: Implement `__init__.py` re-exports and README**
 
 `__init__.py` re-exports only the stable surface (imports from the real modules; no wildcard). README: install, quickstart (config via env, migrations, provisioning, middleware/authn wiring, tenant-scoped data access, RLS, CLI), strategy matrix table, extension points, and the local testcontainers note.
 
-- [ ] **Step 3: Final whole-project validation**
+- [x] **Step 3: Final whole-project validation**
 
 Run, in order:
 - `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error`
@@ -352,7 +354,7 @@ Run, in order:
 - Grep for placeholders/TODOs: `rg -n "TODO|FIXME|XXX|NotImplementedError" src tests` and fix or justify each hit.
 - Confirm no secret material is logged (grep for `echo=True`, `print(` in `src/jdlib`).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/jdlib/__init__.py README.md docs tests/unit/test_public_api.py
@@ -410,4 +412,4 @@ surface (Task 4 synced it).
 - [x] FastAPI integration: middleware + handlers + dependencies proven with a TestClient end-to-end auth flow; CLI groups and lint command proven.
 - [x] Public API is exactly the documented re-exports; README complete.
 - [x] Full suite, ruff, strict mypy green; no TODOs/placeholders; branch committed.
-- [ ] Push step (final): `git push -u origin phase-6-integrations` — the branch is committed and ready, not yet pushed.
+- [x] Push step (final): `git push -u origin phase-6-integrations` — the branch is committed and ready, not yet pushed.

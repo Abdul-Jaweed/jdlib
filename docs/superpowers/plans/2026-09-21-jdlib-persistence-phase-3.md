@@ -1,6 +1,8 @@
 # jdlib Persistence Core (Phase 3) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status: complete — all steps executed, reviewed, merged to main.**
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the tenant-aware persistence layer: `TenantSession` with automatic scoping/stamping/validation, the fail-closed raw-SQL validator, `UnitOfWork`, `TenantRepository`, the `IsolationStrategy` protocol with the shared-schema adapter, and `SessionRouter` — proven by the isolation test suite on real PostgreSQL.
 
@@ -34,7 +36,7 @@
 - Consumes: `TenantBase`, `TenantRouted` from `jdlib.models.base`; `TenantContext`, `PrivilegeKind` from `jdlib.context`; `TenantNotWritable` from `jdlib.errors`.
 - Produces: `tenant_table_map() -> dict[str, type]` (table name → model, for every `TenantRouted` model mapped on `TenantBase`); `WriteFence` protocol (`async def assert_writable(tenant_id: uuid.UUID) -> None`); `NullWriteFence`; `privileged_bypass(context) -> bool`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_persistence_models.py`:
 
@@ -129,12 +131,12 @@ async def test_fence_raises_for_non_privileged_context():
         await _FencedFence().assert_writable(TENANT_ID)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_persistence_models.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.persistence'`
 
-- [ ] **Step 3: Implement `src/jdlib/persistence/__init__.py` (empty) and `src/jdlib/persistence/models.py`**
+- [x] **Step 3: Implement `src/jdlib/persistence/__init__.py` (empty) and `src/jdlib/persistence/models.py`**
 
 ```python
 from __future__ import annotations
@@ -183,12 +185,12 @@ Note: `privileged_bypass` is the relocation-control fence exemption only (03 §3
 operator contexts (including `platform.tenant.access.write`) and test contexts never skip the write
 fence; only a system context whose capability is `relocation.manage` does.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_persistence_models.py -v`
 Expected: PASS (5 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -209,7 +211,7 @@ git commit -m "feat: tenant table discovery and write fence port"
 - Consumes: `jdlib.persistence.models.tenant_table_map`; `jdlib.errors.UnscopedRawSql`.
 - Produces: `RawSqlMode` (`tenant_bound`, `privileged`); `CompiledRawSql(sql, binds)`; `RawSqlValidator(tenant_tables=None)` with `compile(statement, dialect) -> CompiledRawSql`, `validate_tenant_bound(compiled, tenant_id) -> None`, `validate_privileged(compiled) -> None`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_rawsql.py`:
 
@@ -530,12 +532,12 @@ def test_missing_bind_parameter_raises_unscoped():
         _compiled("SELECT * FROM invoices WHERE tenant_id = :tenant_id")
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_rawsql.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.persistence.rawsql'`
 
-- [ ] **Step 3: Implement `src/jdlib/persistence/rawsql.py`**
+- [x] **Step 3: Implement `src/jdlib/persistence/rawsql.py`**
 
 ```python
 from __future__ import annotations
@@ -815,12 +817,12 @@ Notes for the implementer (updated after review fixes, pglast v8.4 verified):
   (`ON CONFLICT ... DO UPDATE SET`) is refused: shared-schema relocation of a row is a control-plane
   operation, never a tenant-bound statement.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_rawsql.py -v`
 Expected: PASS (23 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -844,7 +846,7 @@ git commit -m "feat: structural raw SQL validator"
 - Produces: `TenantSession` with `context`, `raw_sql(statement, params, *, mode)`, `execute(statement)`, `get(model, id)`, `add(obj)`, `flush()`, `update_where(model, values, *criteria)`, `delete_where(model, *criteria)`; `RawSqlAuditor` protocol.
 - Invariants (fail closed): `delete_where` refuses `SoftDelete` models without a privileged context; `update_where` refuses `tenant_id` changes without a privileged context; `execute` refuses `TextClause`; unscoped Core INSERT/UPDATE/DELETE on tenant tables is refused unless `jdlib_scoped`/`jdlib_raw_sql` is set, including DML wrapped in `select(...).from_statement(...)` (table resolved from the statement's `element`); SELECTs walk the whole statement tree and refuse any `sa.TextClause` and any literal `sa.ColumnClause` (`is_literal`; the anonymous `func.count()` `*` is carved out) before mapper/trust logic, then scope with `with_loader_criteria` for every trusted `TenantRouted` mapper; an entity mapper is trusted only when its `local_table` is object-identical to a direct final FROM after unwrapping `AnnotatedTable`/`Alias`/`TableClause`, so `sa.table(...)` and its aliases are never admitted by name, while `aliased(Invoice)` and entity selects whose table backs the columns clause normalize to the same object; mapper discovery for entity-bearing statements considers only entity-derived FROM occurrences — `AnnotatedTable`/`AnnotatedAlias` elements produced by `select(Entity)`/`aliased(Entity)` in the columns clause, `select_from(...)`, or join targets — so `select(Invoice).join(LineItem, ...)` is accepted and both entities are scoped, while bare `sa.Table`/`TableClause` occurrences of a tenant model (`select(Invoice, LineItem.__table__)`, `select(Invoice).join(LineItem.__table__, ...)`, `select(Invoice).select_from(LineItem.__table__)`) are never trusted, stay in the collected tenant-table set, and raise `UnscopedRawSql`; unannotated aliases of tenant tables are collected by the same sweep (unwrapped via `_underlying_table` to prove tenant-table residence) and always refused as `UnscopedRawSql`, while entity-derived `AnnotatedAlias` from `aliased(Entity)` is accepted and scoped, and an implicit-FROM join with an unselected tenant entity (`select(LineItem).where(LineItem.invoice_id == Invoice.id)`) is refused; entity-less statements accept only a trusted `bind_mapper`, so `select(count()).select_from(Invoice)` stays scoped while `select_from(Invoice, LineItem)` and raw `__table__` selects stay refused; `FromStatement` is rejected by contract — `select(Model).from_statement(...)` raises `UnscopedRawSql` before any mapper/trust logic, whatever its inner statement (ORM select, table select, or `sa.text(...)`) — so only scoped ORM selects and `raw_sql` are supported; subqueries/CTEs containing tenant tables without a trusted mapper and unmodeled tenant joins are refused as `UnscopedRawSql`; `raw_sql(PRIVILEGED)` reads `self.context.privilege` (not the ambient contextvar), and `tenant.raw_sql` is still tenant-bound-validated while `platform.raw_sql` gets structural-only validation.
 
-- [ ] **Step 1: Add async fixtures to `tests/integration/conftest.py`**
+- [x] **Step 1: Add async fixtures to `tests/integration/conftest.py`**
 
 Append:
 
@@ -879,7 +881,7 @@ async def session_factory(async_engine):
     return async_sessionmaker(async_engine, expire_on_commit=False)
 ```
 
-- [ ] **Step 2: Write the failing isolation tests**
+- [x] **Step 2: Write the failing isolation tests**
 
 `tests/integration/test_session_isolation.py`:
 
@@ -1438,12 +1440,12 @@ async def test_platform_raw_sql_accepts_unscoped_statement() -> None:
     ]
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_session_isolation.py tests/unit/test_session.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.persistence.session'`
 
-- [ ] **Step 4: Implement `src/jdlib/persistence/session.py`**
+- [x] **Step 4: Implement `src/jdlib/persistence/session.py`**
 
 ```python
 from __future__ import annotations
@@ -1877,12 +1879,12 @@ structural-only validation (`validate_privileged`). Deferral: mandatory durable 
 an explicit Phase 3 deferral, so `raw_sql` calls are structurally checked but not durably recorded
 until then.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_session_isolation.py tests/unit/test_session.py -v`
 Expected: PASS (43 passed: 38 integration + 5 unit)
 
-- [ ] **Step 6: Full suite, lint, type check, commit**
+- [x] **Step 6: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -1908,7 +1910,7 @@ git commit -m "feat: tenant session with scoping, stamping, and bulk guards"
 - Consumes: `TenantSession`, `WriteFence`, `privileged_bypass`, `TenantContext`.
 - Produces: `UnitOfWork(session_factory, context, *, fence, auditor=None)` async context manager yielding a `TenantSession`; commits on clean exit, rolls back on exception; checks the fence unless `privileged_bypass(context)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_uow.py`:
 
@@ -2049,12 +2051,12 @@ async def test_operator_context_does_not_bypass_fence(monkeypatch):
     assert factory.sessions == []
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_uow.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.persistence.uow'`
 
-- [ ] **Step 3: Implement `src/jdlib/persistence/uow.py`**
+- [x] **Step 3: Implement `src/jdlib/persistence/uow.py`**
 
 ```python
 from __future__ import annotations
@@ -2100,12 +2102,12 @@ class UnitOfWork:
             await self._session.close()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_uow.py -v`
 Expected: PASS (4 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -2126,7 +2128,7 @@ git commit -m "feat: unit of work with write fence admission"
 - Consumes: `TenantSession`, `SoftDelete`, `Timestamped`.
 - Produces: `TenantRepository[ModelT]` with `get`, `list`, `add`, `update`, `soft_delete`, `count`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/integration/test_repository.py`:
 
@@ -2185,12 +2187,12 @@ async def test_repository_crud_is_tenant_scoped(session_factory):
         assert await repository.count() == baseline - 1
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_repository.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.persistence.repository'`
 
-- [ ] **Step 3: Implement `src/jdlib/persistence/repository.py`**
+- [x] **Step 3: Implement `src/jdlib/persistence/repository.py`**
 
 ```python
 from __future__ import annotations
@@ -2272,12 +2274,12 @@ class TenantRepository[ModelT]:
         return int(result.scalar_one())
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_repository.py -v`
 Expected: PASS (1 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -2304,7 +2306,7 @@ git commit -m "feat: tenant repository with soft-delete-aware queries"
   signature to accept the full `TenantContext` so strategy selection/session construction can honor
   the caller's principal and privilege.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_router.py`:
 
@@ -2352,12 +2354,12 @@ async def test_router_routes_shared_tenant():
     await session.close()
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_router.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.persistence.strategies'`
 
-- [ ] **Step 3: Implement the strategy package and router**
+- [x] **Step 3: Implement the strategy package and router**
 
 `src/jdlib/persistence/strategies/base.py`:
 
@@ -2437,12 +2439,12 @@ class SessionRouter:
         return await strategy.session(tenant)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_router.py -v`
 Expected: PASS (3 passed)
 
-- [ ] **Step 5: Full suite, lint, type check, commit**
+- [x] **Step 5: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -2455,12 +2457,12 @@ git commit -m "feat: isolation strategy protocol and session router"
 
 ## Phase 3 Exit Criteria
 
-- [ ] Full suite green: Phase 1–2 tests plus the new isolation suite on real PostgreSQL 16.
-- [ ] I1/I2/I3/I4/I9 behaviors proven: fail-closed sessions, scoped reads, stamped writes, immutable `tenant_id`, rejected cross-tenant references, rejected unscoped bulk DML.
-- [ ] Raw SQL: SELECT/UPDATE/DELETE require proven tenant predicates; INSERT requires a bound tenant value; CTE/subquery/schema-escape/multi-statement rejected; privileged mode capability-gated and audited.
-- [ ] `UnitOfWork` commits clean and rolls back dirty; write fence blocks admission unless the context is privileged.
-- [ ] `SessionRouter` routes by placement and fails closed on unregistered strategies.
-- [ ] `ruff` and strict `mypy` clean.
+- [x] Full suite green: Phase 1–2 tests plus the new isolation suite on real PostgreSQL 16.
+- [x] I1/I2/I3/I4/I9 behaviors proven: fail-closed sessions, scoped reads, stamped writes, immutable `tenant_id`, rejected cross-tenant references, rejected unscoped bulk DML.
+- [x] Raw SQL: SELECT/UPDATE/DELETE require proven tenant predicates; INSERT requires a bound tenant value; CTE/subquery/schema-escape/multi-statement rejected; privileged mode capability-gated and audited.
+- [x] `UnitOfWork` commits clean and rolls back dirty; write fence blocks admission unless the context is privileged.
+- [x] `SessionRouter` routes by placement and fails closed on unregistered strategies.
+- [x] `ruff` and strict `mypy` clean.
 
 ## Plan Series (remaining)
 

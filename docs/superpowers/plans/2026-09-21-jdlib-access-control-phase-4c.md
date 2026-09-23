@@ -1,6 +1,8 @@
 # jdlib Access Control Management (Phase 4c) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status: complete — all steps executed, reviewed, merged to main.**
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build `AccessControl`: role management, role bindings with scope compatibility, resource grants with namespace validation, invitations with hashed single-use tokens, ownership transfer, anti-escalation enforcement, mandatory audit, and conservative `AuthzCache` invalidation — plus the frozen role × action matrix test.
 
@@ -28,7 +30,7 @@
 - Consumes: `ControlPlaneSession`, `PermissionCatalog`, `AccessReader`, `AuthzCache`, `PlatformAudit`, `Role`, `RolePermission`, `RoleBinding`, `Invitation`.
 - Produces: `AccessControl(session_factory, *, catalog, reader, cache, audit)`; `async create_role(tenant_id, name, permissions, *, actor_id, actor_principal, is_system=False) -> Role`; `async update_role(tenant_id, role_id, permissions, *, actor_id, actor_principal) -> Role`; `async delete_role(tenant_id, role_id, *, actor_id, actor_principal) -> None`; `async actor_permissions(tenant_id, principal) -> frozenset[str]`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/integration/test_access_roles.py`:
 
@@ -209,12 +211,12 @@ async def test_system_roles_are_immutable(control_session_factory):
         await control.delete_role(tenant_id, role.id, actor_id=actor.user_id, actor_principal=actor)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_access_roles.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.authz.access'`
 
-- [ ] **Step 3: Implement `src/jdlib/authz/access.py` (roles portion)**
+- [x] **Step 3: Implement `src/jdlib/authz/access.py` (roles portion)**
 
 ```python
 from __future__ import annotations
@@ -416,12 +418,12 @@ class AccessControl:
 
 Note for the implementer: `session.get(Role, {"tenant_id": ..., "id": ...})` is valid SQLAlchemy 2.0 composite-PK lookup; keep it. `bind_role` is referenced by the tests but implemented in Task 2 — add the full Task 2 method in this file in the same commit? No: implement `bind_role` in Task 2; for Task 1 tests, the delete test calls `bind_role`, so implement a minimal working `bind_role` in Task 1 (the Task 2 code) or move that test to Task 2. Simplest: include the Task 2 `bind_role` implementation in Task 1 as well (same file, same commit), and Task 2 focuses on scope compatibility and principal validation tests. Coordinate accordingly.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_access_roles.py -v -W error`
 Expected: PASS (5 passed)
 
-- [ ] **Step 5: Full suite, lint, type check, commit**
+- [x] **Step 5: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -463,7 +465,7 @@ git commit -m "feat: access control roles with anti-escalation"
 - Task 1 review minors to close here: positive `delete_role` path test (no bindings/invitations; assert `role.deleted` audit); tighten the update-escalation test to `RoleEscalationBlocked`; qualify `07`'s envelope claim (USER `id != user_id` resolves via `id` today; envelope `user_id` is a future addition) or track it.
 - Sync the Task 1 plan body with the shipped code (remove the stale `AuthorizationError("missing permissions…")` snippet and the `status == "pending"` filter) so regenerators get the fixed behavior.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/integration/test_access_bindings.py`:
 
@@ -623,12 +625,12 @@ async def test_binding_requires_holding_the_role_permissions(control_session_fac
 
 Add `import sqlalchemy as sa` at the top of the test file.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_access_bindings.py -v`
 Expected: FAIL (missing methods)
 
-- [ ] **Step 3: Implement `bind_role`/`unbind_role` in `src/jdlib/authz/access.py`**
+- [x] **Step 3: Implement `bind_role`/`unbind_role` in `src/jdlib/authz/access.py`**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -818,12 +820,12 @@ class ScopeLookup(Protocol):
 
 Note for the implementer: `ScopeType` is imported at module top; scope shape validation is hoisted. `bind_role` opens two sessions (validation then write) — accepted TOCTOU debt, see the review-fix block below. `scope_lookup` is an optional constructor collaborator: absent, org/team scopes fail closed. Add `sa` to test imports.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_access_bindings.py -v -W error`
 Expected: PASS (14 passed)
 
-- [ ] **Step 5: Full suite, lint, type check, commit**
+- [x] **Step 5: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -851,7 +853,7 @@ git commit -m "feat: role bindings with scope compatibility and principal valida
 **Interfaces:**
 - Produces: `grant_resource(...)`, `revoke_grant(...)`, `transfer_resource(...)`, `move_team(...)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/integration/test_access_grants.py`:
 
@@ -1002,12 +1004,12 @@ async def test_transfer_resource_updates_ownership_and_audits(control_session_fa
 
 Note for the implementer: simplify the odd `__import__` calls in `_access` by importing `Permission` and `ScopeType` normally at the top.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_access_grants.py -v`
 Expected: FAIL
 
-- [ ] **Step 3: Implement grants and transfer in `src/jdlib/authz/access.py`**
+- [x] **Step 3: Implement grants and transfer in `src/jdlib/authz/access.py`**
 
 ```python
     async def grant_resource(
@@ -1147,12 +1149,12 @@ Expected: FAIL
 
 Note: `move_team` follows the same shape for `Team.organization_id` with audit `team.moved`; add it and a test in this task. `AccessControl` already accepts the optional `registry` (Task 1); the Task 3 test helper passes a populated registry.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_access_grants.py -v -W error`
 Expected: PASS (15 passed)
 
-- [ ] **Step 5: Full suite, lint, type check, commit**
+- [x] **Step 5: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -1181,7 +1183,7 @@ git commit -m "feat: resource grants and ownership transfer"
 **Interfaces:**
 - Produces: `invite(tenant_id, *, email, role_id, scope_type, scope_id, invited_by, actor_principal, ttl=timedelta(days=7)) -> tuple[Invitation, str]` (returns raw token once; `member:invite` gate); `accept_invitation(token, *, user_id) -> Membership` (self-service, no gate).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_invitation_tokens.py`:
 
@@ -1269,12 +1271,12 @@ async def test_invite_and_accept_creates_membership_and_binding(control_session_
         await control.accept_invitation(token, user_id=invitee_user)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/unit/test_invitation_tokens.py tests/integration/test_access_invitations.py -v`
 Expected: FAIL
 
-- [ ] **Step 3: Implement invitation helpers and methods**
+- [x] **Step 3: Implement invitation helpers and methods**
 
 Module-level helpers in `access.py`:
 
@@ -1398,12 +1400,12 @@ Methods:
             return membership
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/unit/test_invitation_tokens.py tests/integration/test_access_invitations.py -v -W error`
 Expected: PASS (2 passed)
 
-- [ ] **Step 5: Full suite, lint, type check, commit**
+- [x] **Step 5: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -1449,21 +1451,21 @@ git commit -m "feat: invitations with hashed single-use tokens"
 
 **Interfaces:** none new.
 
-- [ ] **Step 1: Write the matrix test**
+- [x] **Step 1: Write the matrix test**
 
 Seed one tenant with the four built-in templates (owner = all catalog codes; admin = all except `tenant:manage`; member = read/create/update at team scope; viewer = read at org scope), a resource with team ownership, a service account with no binding, and assert via `DefaultPDP` for a representative action set: `resource:read`, `resource:update`, `resource:delete`, `member:invite`, `role:manage`, `tenant:manage`, `resource:share`. Use the real `ControlAccessReader` + `ScopeResolver` + `DefaultPDP` and a real `TenantSession`. Cases: owner allowed all; admin allowed all but `tenant:manage`; member allowed read/update at its team, denied delete/tenant:manage; viewer allowed read, denied update; service account denied everything without bindings; platform operator denied by the tenant PDP (operator path is capability-based, not PDP).
 
-- [ ] **Step 2: Run the test, fix any wiring gaps it reveals**
+- [x] **Step 2: Run the test, fix any wiring gaps it reveals**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_role_action_matrix.py -v -W error`
 
-- [ ] **Step 3: Doc updates**
+- [x] **Step 3: Doc updates**
 
 - `07` file map: add `authz/access.py`; note "one `AuthzCache` instance must be shared between the PDP and `AccessControl` per request".
 - Back-port all Task 1–4 code deviations and the matrix test reference into this plan.
 - Update the plan series note: Plan 4d next.
 
-- [ ] **Step 4: Full suite, lint, type check, commit**
+- [x] **Step 4: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -1478,13 +1480,13 @@ git commit -m "test: role action matrix; docs sync"
 
 ## Phase 4c Exit Criteria
 
-- [ ] Full suite green on real PostgreSQL 16.
-- [ ] Roles: subset anti-escalation, catalog validation, system immutability, binding-blocked deletion, audit, cache invalidation.
-- [ ] Bindings: scope compatibility (`RoleScopeMismatch`), principal membership/tenant validation (`CrossTenantReferenceError`), subset rule, unbind.
-- [ ] Grants: namespace validation, permission + `resource:share` requirement, idempotent creation, revocation, transfer/move with audit.
-- [ ] Invitations: hashed single-use tokens, expiry/status checks, atomic membership + binding, audit.
-- [ ] `04` §8 role × action matrix passes end-to-end through `DefaultPDP`.
-- [ ] `ruff` and strict `mypy` clean.
+- [x] Full suite green on real PostgreSQL 16.
+- [x] Roles: subset anti-escalation, catalog validation, system immutability, binding-blocked deletion, audit, cache invalidation.
+- [x] Bindings: scope compatibility (`RoleScopeMismatch`), principal membership/tenant validation (`CrossTenantReferenceError`), subset rule, unbind.
+- [x] Grants: namespace validation, permission + `resource:share` requirement, idempotent creation, revocation, transfer/move with audit.
+- [x] Invitations: hashed single-use tokens, expiry/status checks, atomic membership + binding, audit.
+- [x] `04` §8 role × action matrix passes end-to-end through `DefaultPDP`.
+- [x] `ruff` and strict `mypy` clean.
 
 ## Plan Series (remaining)
 

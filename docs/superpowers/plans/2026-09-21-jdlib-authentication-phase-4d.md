@@ -1,6 +1,8 @@
 # jdlib Authentication (Phase 4d) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status: complete — all steps executed, reviewed, merged to main.**
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build authentication adapters — OIDC/JWT verification with JWKS caching and the frozen user-linking algorithm, API keys with Argon2 verification and tenant pinning, the composite authenticator — and wire the `ContextFactory` ports (`PrincipalDirectory`, `TenantDirectory`, `EntitlementChecker`) to the shipped registry/reader so the ASGI middleware runs end-to-end with real authentication.
 
@@ -35,7 +37,7 @@
 - Consumes: `RequestInfo` (from `jdlib.tenancy.resolution`), `Principal`, `PlatformAudit`.
 - Produces: `OidcConfig(issuer, audience, algorithms, jwks_url, jwks_ttl, leeway, email_trusted)`; `ApiKeyConfig(prefix)`; `TenancyConfig.oidc`, `TenancyConfig.api_keys`; `Authenticator` protocol (`async authenticate(request) -> Principal | None`); `bearer_token(request) -> str | None`; `CompositeAuthenticator(authenticators)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_authn_base.py`:
 
@@ -116,12 +118,12 @@ def test_authenticator_protocol_shape():
     assert hasattr(Authenticator, "authenticate")
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_authn_base.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.authn'`
 
-- [ ] **Step 3: Implement config, base, composite**
+- [x] **Step 3: Implement config, base, composite**
 
 Append to `src/jdlib/config.py`:
 
@@ -203,12 +205,12 @@ class CompositeAuthenticator:
         return None
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_authn_base.py -v -W error`
 Expected: PASS (8 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -229,7 +231,7 @@ git commit -m "feat: auth config, authenticator protocol, composite authenticato
 - Consumes: `OidcConfig`, `Clock`, errors (`InvalidToken`, `ExpiredToken`, `AuthenticationError`).
 - Produces: `JwksCache(url, ttl, fetcher, clock)` with `async signing_key(kid) -> object`; `TokenVerifier(config, clock)` with `verify(token, key) -> Mapping[str, object]`; `IdentityClaims(issuer, subject, email, email_verified)`; `ClaimMapper(config)` with `map(claims) -> IdentityClaims`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_oidc_verification.py`:
 
@@ -343,12 +345,12 @@ async def test_verifier_rejects_wrong_audience_and_issuer():
         verifier.verify(_token(private, clock=clock), key)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_oidc_verification.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.authn.oidc'`
 
-- [ ] **Step 3: Implement `src/jdlib/authn/oidc.py` (verification portion)**
+- [x] **Step 3: Implement `src/jdlib/authn/oidc.py` (verification portion)**
 
 ```python
 from __future__ import annotations
@@ -453,12 +455,12 @@ class ClaimMapper:
         )
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_oidc_verification.py -v -W error`
 Expected: PASS (4 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -479,7 +481,7 @@ git commit -m "feat: oidc jwks cache, token verifier, claim mapper"
 **Interfaces:**
 - Produces: `UserLinker(session_factory, config)` with `async link(claims) -> User | None`; `OidcAuthenticator(config, cache, verifier, mapper, linker, audit)` with `async authenticate(request) -> Principal | None`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/integration/test_oidc_linking.py`:
 
@@ -670,12 +672,12 @@ async def test_authenticator_denies_and_audits_failures():
 
 Note for the implementer: `_User` must be a real control `User` ORM instance in the integration path; the unit test's duck-typed stand-in is fine there. Fix the awkward `__import__("uuid")` usage with a normal import; make `_jwks` an async function.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/unit/test_oidc_authenticator.py tests/integration/test_oidc_linking.py -v`
 Expected: FAIL (missing `UserLinker`/`OidcAuthenticator`)
 
-- [ ] **Step 3: Implement linking and the authenticator**
+- [x] **Step 3: Implement linking and the authenticator**
 
 Append to `src/jdlib/authn/oidc.py`:
 
@@ -819,12 +821,12 @@ def _kid(token: str) -> str:
 
 and import `AuthenticationError` from `jdlib.errors`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/unit/test_oidc_authenticator.py tests/integration/test_oidc_linking.py -v -W error`
 Expected: PASS (14 passed)
 
-- [ ] **Step 5: Full suite, lint, type check, commit**
+- [x] **Step 5: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -853,7 +855,7 @@ git commit -m "feat: oidc user linking and authenticator"
 **Interfaces:**
 - Produces: `parse_api_key(token) -> ParsedApiKey(key_prefix, secret)`; `hash_api_key_secret(secret) -> str`; `ApiKeyAuthenticator(session_factory, audit, config: ApiKeyConfig | None = None)` with `async authenticate(request) -> Principal | None`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_apikey_parser.py`:
 
@@ -967,12 +969,12 @@ async def test_wrong_secret_revoked_expired_and_suspended_denied(control_session
 
 Note for the implementer: the integration test above has redundant seeds sharing the same `key_prefix`, which collides on the unique constraint — restructure `_seed_key` to take a unique `key_prefix` (e.g. derived from a uuid) and pass it to the requests. Keep the same assertions.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/unit/test_apikey_parser.py tests/integration/test_apikey_auth.py -v`
 Expected: FAIL (missing module)
 
-- [ ] **Step 3: Implement `src/jdlib/authn/apikey.py`**
+- [x] **Step 3: Implement `src/jdlib/authn/apikey.py`**
 
 ```python
 from __future__ import annotations
@@ -1081,12 +1083,12 @@ class ApiKeyAuthenticator:
             return principal
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/unit/test_apikey_parser.py tests/integration/test_apikey_auth.py -v -W error`
 Expected: PASS (9 passed)
 
-- [ ] **Step 5: Full suite, lint, type check, commit**
+- [x] **Step 5: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -1120,7 +1122,7 @@ git commit -m "feat: api key authentication with tenant pinning"
 **Interfaces:**
 - Produces: `TenantRegistry.find(ref) -> TenantRecord | None`; `PrincipalDirectoryAdapter(reader)`; `TenantDirectoryAdapter(registry)`; `EntitlementAdapter(reader)`; `build_authenticator(...)` helper assembling OIDC + API-key + composite; end-to-end test: API-key principal through `TenantMiddleware` → `TenantContext` → guarded handler.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/integration/test_auth_wiring.py`:
 
@@ -1269,12 +1271,12 @@ async def test_api_key_principal_through_middleware(control_session_factory, asy
 
 Note: `operators=reader` works only if the reader satisfies `OperatorAuthorizer` — it does not. Pass a small inline stub class with `async authorize(...) -> False` instead; keep the test focused on principal/tenant/entitlement wiring.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_auth_wiring.py -v`
 Expected: FAIL (missing `jdlib.authn.wiring`)
 
-- [ ] **Step 3: Implement `find` and the adapters**
+- [x] **Step 3: Implement `find` and the adapters**
 
 Append to `TenantRegistry`:
 
@@ -1342,12 +1344,12 @@ class EntitlementAdapter:
 
 Note: type `tenant_id` as `uuid.UUID`; add the import.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_auth_wiring.py -v -W error`
 Expected: PASS (3 passed)
 
-- [ ] **Step 5: Docs, full suite, lint, type check, commit**
+- [x] **Step 5: Docs, full suite, lint, type check, commit**
 
 Update `07` file map (`authn/wiring.py`, note adapters) and back-port this plan.
 
@@ -1372,12 +1374,12 @@ git commit -m "feat: context factory port adapters and end-to-end auth wiring"
 
 ## Phase 4d Exit Criteria
 
-- [ ] Full suite green on real PostgreSQL 16.
-- [ ] OIDC: JWKS caching/rotation, verification (issuer/audience/algorithms/leeway), claim mapping, linking algorithm (IdentityLink → trusted verified email → create user, unverified email never stored), failures audited without token material.
-- [ ] API keys: shape parsing, Argon2id verification, status/expiry checks, tenant pinning, scopes, `last_used_at`, failures audited only for tokens with the configured prefix.
-- [ ] Composite authenticator first-wins; each authenticator audits only its own scheme; unexpected failures are audited fail-closed; no authentication bypass.
-- [ ] `ContextFactory` ports wired to registry/reader; API-key principal flows through `TenantMiddleware` to a tenant context end-to-end; a service-account pin mismatch or missing pin is denied with 404, and `ContextPropagator.reconstruct` denies a service account that is absent from the envelope's tenant.
-- [ ] `ruff` and strict `mypy` clean.
+- [x] Full suite green on real PostgreSQL 16.
+- [x] OIDC: JWKS caching/rotation, verification (issuer/audience/algorithms/leeway), claim mapping, linking algorithm (IdentityLink → trusted verified email → create user, unverified email never stored), failures audited without token material.
+- [x] API keys: shape parsing, Argon2id verification, status/expiry checks, tenant pinning, scopes, `last_used_at`, failures audited only for tokens with the configured prefix.
+- [x] Composite authenticator first-wins; each authenticator audits only its own scheme; unexpected failures are audited fail-closed; no authentication bypass.
+- [x] `ContextFactory` ports wired to registry/reader; API-key principal flows through `TenantMiddleware` to a tenant context end-to-end; a service-account pin mismatch or missing pin is denied with 404, and `ContextPropagator.reconstruct` denies a service account that is absent from the envelope's tenant.
+- [x] `ruff` and strict `mypy` clean.
 
 ## Plan Series (remaining)
 

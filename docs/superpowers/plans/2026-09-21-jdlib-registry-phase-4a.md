@@ -1,6 +1,8 @@
 # jdlib Tenant Lifecycle & Registry (Phase 4a) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status: complete — all steps executed, reviewed, merged to main.**
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the platform control-plane services: `ControlPlaneSession`, `TenantRegistry` (create/provision/suspend/resume/archive/deprovision/migrate/assert_servable/list_for_user), the `RegistryWriteFence` implementation, provisioning pipeline with per-step idempotency and lifecycle locking, and the seed port — delivering the first end-to-end shared-schema deployment.
 
@@ -34,7 +36,7 @@
 - Consumes: `AsyncSession`.
 - Produces: `ControlPlaneSession` (wrapping `AsyncSession`, with `execute/get/add/flush/commit/rollback/close`); `PlatformAudit` protocol (`async record(*, action: str, tenant_id: uuid.UUID | None, actor_id: uuid.UUID | None, metadata: Mapping[str, object] | None = None) -> None`); `RecordingPlatformAudit` for tests; `NullPlatformAudit` (raises on use).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_control_session.py`:
 
@@ -81,12 +83,12 @@ def test_protocol_shape():
     assert hasattr(PlatformAudit, "record")
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_control_session.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.control.audit'`
 
-- [ ] **Step 3: Implement `src/jdlib/control/audit.py`**
+- [x] **Step 3: Implement `src/jdlib/control/audit.py`**
 
 ```python
 from __future__ import annotations
@@ -142,7 +144,7 @@ class RecordingPlatformAudit:
         )
 ```
 
-- [ ] **Step 4: Implement `src/jdlib/control/session.py`**
+- [x] **Step 4: Implement `src/jdlib/control/session.py`**
 
 ```python
 from __future__ import annotations
@@ -188,12 +190,12 @@ class ControlPlaneSession:
         await self._session.delete(obj)
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_control_session.py -v -W error`
 Expected: PASS (3 passed)
 
-- [ ] **Step 6: Lint, type check, commit**
+- [x] **Step 6: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -216,7 +218,7 @@ git commit -m "feat: control plane session and platform audit port"
 - Consumes: `TenantRecord`; `MigrationRunner`.
 - Produces: `DeprovisionMode` (`archive`, `purge`, `destroy`) in `deprovision.py`; extended `IsolationStrategy` protocol with `async provision(tenant) -> None`, `async migrate(tenant, runner: MigrationRunner) -> None`, `async deprovision(tenant, mode: DeprovisionMode) -> None`; `SharedSchemaStrategy` implementations (`provision` no-op; `migrate` runs the tenant chain against the configured schema; `deprovision` no-op for `archive`, no-op for `purge`/`destroy` on shared since data is not physically separated).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_strategy_lifecycle.py`:
 
@@ -267,12 +269,12 @@ async def test_shared_deprovision_is_a_noop_for_all_modes():
         await strategy.deprovision(_record(), mode)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_strategy_lifecycle.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.persistence.strategies.deprovision'`
 
-- [ ] **Step 3: Implement the strategy lifecycle methods**
+- [x] **Step 3: Implement the strategy lifecycle methods**
 
 `src/jdlib/persistence/strategies/deprovision.py`:
 
@@ -337,12 +339,12 @@ class SharedSchemaStrategy:
         return None
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_strategy_lifecycle.py -v -W error`
 Expected: PASS (4 passed). Existing `tests/unit/test_router.py` must still pass; update its construction if the `SharedSchemaStrategy(engine)` signature changed (it now accepts `engine=None` and an optional schema — the positional engine call still works).
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -379,7 +381,7 @@ git commit -m "feat: strategy lifecycle methods and deprovision modes"
 - `deprovision` re-queries children inside the final transaction, raises `TenantOperationInProgress` when children exist and `detach_children=false` (fail closed: the `deprovisioning` state is already committed, so the tenant stays retryable), and its audit metadata carries `detach_children=true` and `detached_children=[id, ...]` when children were detached (same transaction as the detach, so the ids match what was actually detached).
 - A placement with no registered strategy raises `StrategyCapabilityError` (same error as `SessionRouter`) from `_strategy_for`, before any state change for `provision`/`migrate`/`purge`/`destroy`; `archive` never calls `_strategy_for`.
 
-- [ ] **Step 1: Add the control async fixture**
+- [x] **Step 1: Add the control async fixture**
 
 Append to `tests/integration/conftest.py`:
 
@@ -396,7 +398,7 @@ async def control_session_factory(async_engine):
     return async_sessionmaker(async_engine, expire_on_commit=False)
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `tests/integration/test_registry.py`:
 
@@ -1193,12 +1195,12 @@ async def test_parent_with_children_cannot_be_archived(control_session_factory):
     assert entry["metadata"]["detached_children"] == [str(child.id)]
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_registry.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.control.registry'`
 
-- [ ] **Step 4: Implement `src/jdlib/control/registry.py`**
+- [x] **Step 4: Implement `src/jdlib/control/registry.py`**
 
 ```python
 from __future__ import annotations
@@ -1877,12 +1879,12 @@ Review-fix notes (frozen-doc compliance):
 - The end-to-end test is real: `_real_registry` no longer pre-runs
   `upgrade_tenant`; `provision` performs the migration itself.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_registry.py -v -W error`
 Expected: PASS (36 passed)
 
-- [ ] **Step 6: Full suite, lint, type check, commit**
+- [x] **Step 6: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -1895,12 +1897,12 @@ git commit -m "feat: tenant registry with provisioning, servability, and write f
 
 ## Phase 4a Exit Criteria
 
-- [ ] Full suite green (Phase 1–3 plus registry tests) on real PostgreSQL 16.
-- [ ] `create` → `provision` activates only after place/migrate/seed/health; provisioning is idempotent and resumable.
-- [ ] Failed migration on an active tenant suspends it with `suspended_reason='migration_failed'` and audits; `assert_servable` enforces the single predicate.
-- [ ] Lifecycle transitions follow the frozen table; invalid transitions raise `TenantOperationInProgress`; parent/child deletion semantics enforced.
-- [ ] `RegistryWriteFence` blocks writes for tenants that are not servable (status, migration currency, relocation).
-- [ ] `ruff` and strict `mypy` clean.
+- [x] Full suite green (Phase 1–3 plus registry tests) on real PostgreSQL 16.
+- [x] `create` → `provision` activates only after place/migrate/seed/health; provisioning is idempotent and resumable.
+- [x] Failed migration on an active tenant suspends it with `suspended_reason='migration_failed'` and audits; `assert_servable` enforces the single predicate.
+- [x] Lifecycle transitions follow the frozen table; invalid transitions raise `TenantOperationInProgress`; parent/child deletion semantics enforced.
+- [x] `RegistryWriteFence` blocks writes for tenants that are not servable (status, migration currency, relocation).
+- [x] `ruff` and strict `mypy` clean.
 
 ## Plan Series (remaining)
 

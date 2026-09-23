@@ -1,6 +1,8 @@
 # jdlib Isolation Strategies & RLS (Phase 5) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status: complete — all steps executed, reviewed, merged to main.**
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Implement the remaining isolation strategies — schema-per-tenant (validated `search_path`, per-schema DDL/migrations, pool reset) and database-per-tenant (secret-resolved handles, capped pool cache, admin DDL) — plus Postgres RLS emission and fail-closed session binding for shared mode, and privileged tenant-plane purge so shared `purge`/`destroy` actually delete tenant data.
 
@@ -34,7 +36,7 @@
 **Interfaces:**
 - Produces: `TenantRecord(id, slug, status, strategy, target_handle: str | None = None)`; `SchemaPerTenantStrategy(engine, runner, *, admin_engine=None)` with `session(tenant)`, `provision(tenant)`, `migrate(tenant, runner)`, `deprovision(tenant, mode)`, `migration_schema(tenant)`; `validate_schema_name(value) -> str`.
 
-- [ ] **Step 1: Write the failing unit tests**
+- [x] **Step 1: Write the failing unit tests**
 
 `tests/unit/test_schema_strategy.py`:
 
@@ -96,12 +98,12 @@ async def test_migrate_uses_handle_schema():
     assert strategy.migration_schema(_record()) == "t_acme"
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_schema_strategy.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.persistence.strategies.schema'`
 
-- [ ] **Step 3: Implement the record field, validation, and strategy**
+- [x] **Step 3: Implement the record field, validation, and strategy**
 
 `src/jdlib/context.py` — extend `TenantRecord`:
 
@@ -219,7 +221,7 @@ def _reset_search_path(dbapi_connection, connection_record, reset_state) -> None
 
 Note for the implementer: the `"reset"` event on the sync engine fires with `(dbapi_connection, connection_record, reset_state)` for pool checkin; verify it runs under the asyncpg/psycopg facade in the integration test (a wrong signature raises at test time). If the event cannot run synchronously for the installed driver, keep checkout-set (which is mandatory) and record the reset-on-checkin as a documented deviation in the plan.
 
-- [ ] **Step 4: Integration test — real schemas and isolation**
+- [x] **Step 4: Integration test — real schemas and isolation**
 
 `tests/integration/test_schema_strategy_db.py`:
 
@@ -281,7 +283,7 @@ async def test_two_schemas_are_isolated(async_engine):
 
 Note: `_context` builds a shared-strategy context; add an optional `strategy` parameter there or construct a `TenantContext` inline with `PlacementStrategy.SCHEMA`. Prefer inline construction in this test to avoid touching shared helpers.
 
-- [ ] **Step 5: Full suite, lint, type check, commit**
+- [x] **Step 5: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -310,7 +312,7 @@ git commit -m "feat: schema-per-tenant strategy with search_path isolation"
 **Interfaces:**
 - Produces: `SecretProvider` protocol (`resolve(handle) -> str`), `MemorySecretProvider`, `EnvSecretProvider(prefix)`; `DatabasePerTenantStrategy(admin_dsn, secrets, runner, *, max_targets=32)` with `session/provision/migrate/deprovision/migration_schema` and `async dispose()`; `PoolCapacityError` on cap exhaustion.
 
-- [ ] **Step 1: Write the failing unit tests**
+- [x] **Step 1: Write the failing unit tests**
 
 `tests/unit/test_database_strategy.py`:
 
@@ -377,12 +379,12 @@ async def test_pool_cap_raises():
         await strategy.session(_record())
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/unit/test_database_strategy.py -v`
 Expected: FAIL (missing modules)
 
-- [ ] **Step 3: Implement secrets and the strategy**
+- [x] **Step 3: Implement secrets and the strategy**
 
 `src/jdlib/persistence/secrets.py`:
 
@@ -547,11 +549,11 @@ class DatabasePerTenantStrategy:
 
 Notes for the implementer: `migrate` as sketched is wrong — `MigrationRunner.upgrade_tenant(schema)` runs Alembic against `self._database_url` (the runner's own DSN), so a per-tenant database needs a runner bound to that tenant's DSN. Extend `MigrationRunner` with `upgrade_tenant_url(database_url, schema, revision="head")` (same as `upgrade_tenant` but overriding `sqlalchemy.url`) and call it with the tenant DSN; do the same for `tenant_version_url`. Add unit coverage for the URL override (monkeypatch `alembic.command.upgrade`). Drop the placeholder `dsn` lines from the sketch.
 
-- [ ] **Step 4: Integration test with a real second database**
+- [x] **Step 4: Integration test with a real second database**
 
 `tests/integration/test_database_strategy_db.py`: derive the tenant DSN from the container URL with a unique database name, use `MemorySecretProvider`, `provision` → `migrate` (real runner via the new URL override) → insert/read through a `TenantSession`; then `deprovision(PURGE)` and assert the database no longer exists (`pg_database` lookup); assert `dispose()` in a fixture teardown.
 
-- [ ] **Step 5: Full suite, lint, type check, commit**
+- [x] **Step 5: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -574,7 +576,7 @@ git commit -m "feat: database-per-tenant strategy with secret-resolved handles"
 **Interfaces:**
 - Produces: `RlsConfig(enabled: bool = False, app_role: str | None = None)` on `TenancyConfig.rls`; `emit_rls_policies(connection, *, metadata, app_role)`; `rls_eligible_tables(metadata) -> tuple[str, ...]`; `SharedSchemaStrategy(engine, schema="public", *, rls: RlsConfig | None = None)` setting `SET LOCAL app.tenant_id` when enabled; `verify_rls(engine, app_role)` startup self-check.
 
-- [ ] **Step 1: Write the failing unit tests**
+- [x] **Step 1: Write the failing unit tests**
 
 `tests/unit/test_rls_policies.py`:
 
@@ -682,12 +684,12 @@ async def test_rls_fail_closed_and_scoped(async_engine, postgres_url, rls_engine
 
 Notes for the implementer: `emit_rls_policies` is async because connections are async — that fixture helper is awkward; prefer making `emit_rls_policies` a **sync** function taking a sync `sa.Connection` (migrations run under a sync Alembic connection), and call it in the fixture via `await connection.run_sync(lambda sync: emit_rls_policies(sync, metadata=..., app_role=...))`. Update Task 3 Step 3 accordingly (sync signature), and use `run_sync` everywhere. `gen_random_uuid()` requires pgcrypto on PG16? It is built-in since PG13 — fine.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/unit/test_rls_policies.py -v`
 Expected: FAIL (missing module)
 
-- [ ] **Step 3: Implement RLS**
+- [x] **Step 3: Implement RLS**
 
 `src/jdlib/persistence/strategies/rls.py`:
 
@@ -777,11 +779,11 @@ class RlsConfig(BaseModel):
 
 Note: `SET LOCAL` requires an open transaction; SQLAlchemy's autobegin on `execute` provides it, and the UoW's single transaction uses the same connection — verify in the integration test.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/unit/test_rls_policies.py tests/integration/test_rls_db.py -v -W error`
 
-- [ ] **Step 5: Full suite, lint, type check, commit**
+- [x] **Step 5: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -804,7 +806,7 @@ git commit -m "feat: postgres RLS emission and fail-closed tenant binding"
 **Interfaces:**
 - Produces: `TenantPlanePurger(session_factory, *, factory, rls: RlsConfig | None = None)` with `async purge(tenant: TenantRecord) -> dict[str, int]`; `TenantRegistry(..., purger: TenantPlanePurger | None = None)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/integration/test_tenant_purge.py`:
 
@@ -899,7 +901,7 @@ async def test_purge_deletes_tenant_plane_rows(control_session_factory, session_
 
 where `_tenant_session` mirrors the isolation helper (creates the raw session, sets `search_path` to `jt_test`, wraps in `TenantSession` with a context for `tenant_id`). Import `ContextConfig` directly at the top instead of `__import__`.
 
-- [ ] **Step 2: Implement the purger**
+- [x] **Step 2: Implement the purger**
 
 ```python
 from __future__ import annotations
@@ -930,7 +932,7 @@ class TenantPlanePurger:
 
 Notes for the implementer: `for_system` is async — await it. `delete_where` on `SoftDelete` models requires a privileged context (system context qualifies). `tenant_table_map()` returns every `TenantRouted` model, including application resources registered at import time; the integration test must import `tests.support.invoice` first, and application models must be imported before any purge runs (see review fixes below). Registry wiring: after `strategy.deprovision`, if `placement.strategy == "shared"` and `mode is not ARCHIVE`, call the purger and include the tenant-plane counts under `tenant_counts` in the `tenant.deprovisioned` audit metadata (access-row counts stay under `counts`). The purger needs a `ContextFactory`; construct one in `TenantRegistry.__init__` from injected ports (add optional `purger` argument and call it when present, raising `ProvisioningError` when purge is requested without one).
 
-- [ ] **Step 3: Full suite, lint, type check, commit**
+- [x] **Step 3: Full suite, lint, type check, commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -960,15 +962,15 @@ git commit -m "feat: privileged tenant-plane purge for shared deprovisioning"
 
 **Interfaces:** none new.
 
-- [ ] **Step 1: Write the matrix test**
+- [x] **Step 1: Write the matrix test**
 
 Parametrize over `("shared", "schema", "database")` (and `rls on/off` for shared): for each strategy, provision a tenant, run the shared behavioral assertions (scoped read isolation, cross-tenant `get` → `None`, stamped writes, `tenant_id` immutability, unscoped bulk DML rejection, entity-less count scoping) through `TenantSession`/`TenantRepository`. Reuse the per-strategy setup helpers from Tasks 1–2. Skip RLS-on cases when `rls` is not configured.
 
-- [ ] **Step 2: Run the matrix**
+- [x] **Step 2: Run the matrix**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_strategy_matrix.py -v -W error`
 
-- [ ] **Step 3: Docs sync and commit**
+- [x] **Step 3: Docs sync and commit**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -W error && .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m mypy src/jdlib`
 
@@ -999,13 +1001,13 @@ git commit -m "test: strategy matrix; docs sync"
 
 ## Phase 5 Exit Criteria
 
-- [ ] Full suite green on real PostgreSQL 16.
-- [ ] Schema strategy: validated handles, per-begin `search_path` (rollback-proof, reset on checkin), per-schema DDL/migration, cross-schema isolation proven.
-- [ ] Database strategy: opaque handles, secret resolution, capped pool cache with no live eviction, real second-database provision/migrate/deprovision.
-- [ ] RLS: policies on every tenant-routed table, fail-closed unset setting, scoped reads/writes as the `NOBYPASSRLS` role, startup self-check.
-- [ ] Shared `purge`/`destroy` deletes tenant-plane rows with audited counts; `archive` untouched.
-- [ ] Strategy matrix runs the same behavioral assertions under all three strategies.
-- [ ] `ruff` and strict `mypy` clean.
+- [x] Full suite green on real PostgreSQL 16.
+- [x] Schema strategy: validated handles, per-begin `search_path` (rollback-proof, reset on checkin), per-schema DDL/migration, cross-schema isolation proven.
+- [x] Database strategy: opaque handles, secret resolution, capped pool cache with no live eviction, real second-database provision/migrate/deprovision.
+- [x] RLS: policies on every tenant-routed table, fail-closed unset setting, scoped reads/writes as the `NOBYPASSRLS` role, startup self-check.
+- [x] Shared `purge`/`destroy` deletes tenant-plane rows with audited counts; `archive` untouched.
+- [x] Strategy matrix runs the same behavioral assertions under all three strategies.
+- [x] `ruff` and strict `mypy` clean.
 
 ## Plan Series (remaining)
 

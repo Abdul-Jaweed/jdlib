@@ -344,13 +344,14 @@ async def test_create_normalizes_plain_string_strategy(control_session_factory):
 
 async def test_create_unknown_strategy_raises_provisioning_error(control_session_factory):
     registry, _ = _registry(control_session_factory)
-    with pytest.raises(ProvisioningError, match="unknown placement strategy"):
-        await registry.create(
-            slug=f"unknown-strategy-{uuid.uuid4().hex[:8]}",
-            name="Unknown Strategy",
-            strategy="bogus",  # type: ignore[arg-type]
-            target_handle="default",
-        )
+    for bad_strategy in ("bogus", []):
+        with pytest.raises(ProvisioningError, match="unknown placement strategy"):
+            await registry.create(
+                slug=f"unknown-strategy-{uuid.uuid4().hex[:8]}",
+                name="Unknown Strategy",
+                strategy=bad_strategy,  # type: ignore[arg-type]
+                target_handle="default",
+            )
     tenant = await registry.create(
         slug=f"valid-strategy-{uuid.uuid4().hex[:8]}",
         name="Valid Strategy",

@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 
-from jdlib.authz.guards import Enforcer, requires
+from jdlib.authz.guards import Enforcer, authorize, requires, tenant_target
 from jdlib.authz.pdp import Decision
 from jdlib.authz.scopes import ScopeRef
 from jdlib.context import Principal, PrincipalKind, TenantContext, context_scope
@@ -72,6 +72,30 @@ async def test_requires_decorator_raises_when_denied():
 
     with pytest.raises(PermissionDenied):
         await handler(session=None)
+
+
+def test_tenant_target_is_tenant_scope_without_id():
+    assert tenant_target() == ScopeRef(ScopeType.TENANT, None)
+
+
+async def test_authorize_delegates_and_returns_decision_when_allowed():
+    pdp = _PDP(True)
+    decision = await authorize(
+        "resource:read",
+        ScopeRef(ScopeType.TENANT, None),
+        enforcer=Enforcer(pdp),
+        session=None,
+    )
+    assert decision.allowed is True
+    assert pdp.calls == [("resource:read", ScopeRef(ScopeType.TENANT, None))]
+
+
+async def test_authorize_raises_when_denied():
+    enforcer = Enforcer(_PDP(False))
+    with pytest.raises(PermissionDenied):
+        await authorize(
+            "resource:read", ScopeRef(ScopeType.TENANT, None), enforcer=enforcer, session=None
+        )
 
 
 async def test_target_factory_receives_kwargs():

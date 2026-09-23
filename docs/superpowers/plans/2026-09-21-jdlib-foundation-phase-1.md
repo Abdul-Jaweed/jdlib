@@ -1,6 +1,8 @@
 # jdlib Foundation (Phase 1) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status: complete — all steps executed, reviewed, merged to main.**
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the jdlib package foundation: project scaffold, error hierarchy, UUIDv7, declarative bases and mixins, all control-plane and tenant-plane models, metadata lint L1–L19, and baseline migrations for both planes.
 
@@ -44,7 +46,7 @@
 - Consumes: nothing.
 - Produces: `jdlib.errors.JdlibError` and the full subclass tree (names frozen in spec §9); `jdlib._uuid.uuid7() -> uuid.UUID`.
 
-- [ ] **Step 1: Write `pyproject.toml`**
+- [x] **Step 1: Write `pyproject.toml`**
 
 ```toml
 [build-system]
@@ -100,7 +102,7 @@ strict = true
 files = ["src/jdlib"]
 ```
 
-- [ ] **Step 2: Write `.gitignore` and CI**
+- [x] **Step 2: Write `.gitignore` and CI**
 
 `.gitignore`:
 
@@ -138,7 +140,7 @@ jobs:
       - run: python -m pytest -q
 ```
 
-- [ ] **Step 3: Write the failing tests**
+- [x] **Step 3: Write the failing tests**
 
 `tests/unit/test_errors.py`:
 
@@ -220,12 +222,12 @@ def test_uuid7_returns_stdlib_uuid():
     assert isinstance(uuid7(), uuid.UUID)
 ```
 
-- [ ] **Step 4: Run tests to verify they fail**
+- [x] **Step 4: Run tests to verify they fail**
 
 Run: `python -m pytest tests/unit/test_errors.py tests/unit/test_uuid.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib'`
 
-- [ ] **Step 5: Implement `src/jdlib/errors.py`**
+- [x] **Step 5: Implement `src/jdlib/errors.py`**
 
 ```python
 class JdlibError(Exception):
@@ -378,7 +380,7 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 6: Implement `src/jdlib/_uuid.py`**
+- [x] **Step 6: Implement `src/jdlib/_uuid.py`**
 
 ```python
 from __future__ import annotations
@@ -397,7 +399,7 @@ def uuid7() -> uuid.UUID:
     return uuid.UUID(bytes=bytes(raw))
 ```
 
-- [ ] **Step 7: Write `src/jdlib/__init__.py`**
+- [x] **Step 7: Write `src/jdlib/__init__.py`**
 
 ```python
 from jdlib import errors
@@ -405,17 +407,17 @@ from jdlib import errors
 __all__ = ["errors"]
 ```
 
-- [ ] **Step 8: Run tests to verify they pass**
+- [x] **Step 8: Run tests to verify they pass**
 
 Run: `python -m pytest tests/unit/test_errors.py tests/unit/test_uuid.py -v`
 Expected: PASS (6 passed)
 
-- [ ] **Step 9: Run lint and type checks**
+- [x] **Step 9: Run lint and type checks**
 
 Run: `python -m ruff check . && python -m mypy src/jdlib`
 Expected: `Success: no issues found`
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add pyproject.toml .gitignore .github src tests
@@ -439,7 +441,7 @@ git commit -m "feat: scaffold jdlib, error hierarchy, uuid7"
   - Mixins `TenantOwned`, `TenantRouted`, `Timestamped`, `SoftDelete`, `OwnableByOrg`, `OwnableByTeam`.
   - `ownership_constraints() -> tuple[Constraint, ...]` for concrete-model `__table_args__`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `tests/unit/test_bases.py`:
 
@@ -509,12 +511,12 @@ def test_ownership_constraints_shape():
     }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/unit/test_bases.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.control'`
 
-- [ ] **Step 3: Implement `src/jdlib/control/base.py`**
+- [x] **Step 3: Implement `src/jdlib/control/base.py`**
 
 ```python
 from __future__ import annotations
@@ -540,7 +542,7 @@ class ControlBase(DeclarativeBase):
     )
 ```
 
-- [ ] **Step 4: Implement `src/jdlib/models/base.py`**
+- [x] **Step 4: Implement `src/jdlib/models/base.py`**
 
 ```python
 from __future__ import annotations
@@ -628,12 +630,12 @@ column order that violates the frozen `PRIMARY KEY (tenant_id, id)` contract and
 lint L4. Models that declare `tenant_id` explicitly (rather than via the mixin)
 must declare it before `id`. Do not add `index=True` to `tenant_id`: the composite primary key `(tenant_id, id)` already serves tenant-prefixed lookups in PostgreSQL.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `python -m pytest tests/unit/test_bases.py -v`
 Expected: PASS (6 passed)
 
-- [ ] **Step 6: Lint, type check, commit**
+- [x] **Step 6: Lint, type check, commit**
 
 Run: `python -m ruff check . && python -m mypy src/jdlib`
 Expected: clean.
@@ -657,7 +659,7 @@ git commit -m "feat: declarative bases, tenant mixins, ownership constraints"
 - Consumes: `ControlBase`, `uuid7`.
 - Produces: `Tenant`, `TenantPlacement`, `TenantMigrationState`, `TenantRelocation` ORM classes; `TenantStatus`, `PlacementStrategy`, `MigrationStatus`, `RelocationPhase` StrEnums; `control_engine`/`control_schema` pytest fixtures.
 
-- [ ] **Step 1: Write the integration fixtures**
+- [x] **Step 1: Write the integration fixtures**
 
 `tests/integration/conftest.py`:
 
@@ -706,7 +708,7 @@ def control_metadata(control_engine: Engine) -> Iterator[None]:
     yield
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `tests/integration/test_registry_models.py`:
 
@@ -875,12 +877,12 @@ def test_non_active_relocation_permits_new_active(control_engine, control_metada
         )
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `python -m pytest tests/integration/test_registry_models.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.control.models'`
 
-- [ ] **Step 4: Implement `src/jdlib/control/enums.py`**
+- [x] **Step 4: Implement `src/jdlib/control/enums.py`**
 
 ```python
 from __future__ import annotations
@@ -977,7 +979,7 @@ def sql_in(column: str, values: type[StrEnum]) -> str:
     return f"{column} IN ({rendered})"
 ```
 
-- [ ] **Step 5: Implement registry models in `src/jdlib/control/models.py`**
+- [x] **Step 5: Implement registry models in `src/jdlib/control/models.py`**
 
 ```python
 from __future__ import annotations
@@ -1118,12 +1120,12 @@ class TenantRelocation(ControlBase):
     )
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 Run: `python -m pytest tests/integration/test_registry_models.py -v`
 Expected: PASS (10 passed)
 
-- [ ] **Step 7: Lint, type check, commit**
+- [x] **Step 7: Lint, type check, commit**
 
 Run: `python -m ruff check . && python -m mypy src/jdlib`
 
@@ -1144,7 +1146,7 @@ git commit -m "feat: control registry models (tenants, placements, migration sta
 - Consumes: `ControlBase`, enums, `sql_in`.
 - Produces: `User`, `IdentityLink`, `PlatformOperator`, `ServiceAccount`, `ApiKey`, `Membership`, `Invitation` ORM classes.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/integration/test_identity_models.py`:
 
@@ -1349,12 +1351,12 @@ def test_invitation_single_pending_per_email_scope(control_engine, control_metad
             )
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/integration/test_identity_models.py -v`
 Expected: FAIL with `ImportError: cannot import name 'User'`
 
-- [ ] **Step 3: Append models to `src/jdlib/control/models.py`**
+- [x] **Step 3: Append models to `src/jdlib/control/models.py`**
 
 Add imports at the top of the file:
 
@@ -1717,12 +1719,12 @@ class PlatformAuditEvent(ControlBase):
     )
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/integration/test_identity_models.py -v`
 Expected: PASS (6 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `python -m ruff check . && python -m mypy src/jdlib`
 
@@ -1747,7 +1749,7 @@ git commit -m "feat: control identity and access models"
 - Consumes: `TenantBase`, mixins, `ownership_constraints`, `sql_in`.
 - Produces: `Organization`, `Team`, `TenantSetting`, `AuditEvent`; test-only `Invoice` used by lint and migration tests.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/support/invoice.py`:
 
@@ -1955,12 +1957,12 @@ def test_tenant_audit_event_shape(tenant_metadata):
 ```
 Note: `test_soft_delete_partial_unique` soft-deletes the row (`deleted_at = now()`) to prove the partial unique index (`WHERE deleted_at IS NULL`) permits a replacement row after deletion.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/integration/test_tenant_models.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.models.org'`
 
-- [ ] **Step 3: Implement `src/jdlib/models/org.py`**
+- [x] **Step 3: Implement `src/jdlib/models/org.py`**
 
 ```python
 from __future__ import annotations
@@ -2028,7 +2030,7 @@ class Team(TenantBase, TenantRouted, Timestamped, SoftDelete):
     )
 ```
 
-- [ ] **Step 4: Implement `src/jdlib/models/settings.py` and `src/jdlib/models/audit.py`**
+- [x] **Step 4: Implement `src/jdlib/models/settings.py` and `src/jdlib/models/audit.py`**
 
 `settings.py`:
 
@@ -2105,12 +2107,12 @@ class AuditEvent(TenantBase, TenantRouted):
     )
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `python -m pytest tests/integration/test_tenant_models.py -v`
 Expected: PASS (5 passed)
 
-- [ ] **Step 6: Lint, type check, commit**
+- [x] **Step 6: Lint, type check, commit**
 
 Run: `python -m ruff check . && python -m mypy src/jdlib`
 
@@ -2141,7 +2143,7 @@ with the persistence and access-control plans), L18 (requires the
   - `lint_metadata(controls: list[MetaData], rls_enabled: bool = False) -> list[LintIssue]`
   - `assert_clean(controls: list[MetaData], rls_enabled: bool = False) -> None`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_lint.py`:
 
@@ -2370,12 +2372,12 @@ def test_team_id_without_ownership_constraints_is_l15_violation():
     assert any(issue.rule == "L15" for issue in issues)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/unit/test_lint.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.lint'`
 
-- [ ] **Step 3: Implement `src/jdlib/lint.py`**
+- [x] **Step 3: Implement `src/jdlib/lint.py`**
 
 ```python
 from __future__ import annotations
@@ -2568,12 +2570,12 @@ def assert_clean(controls: list[MetaData], rls_enabled: bool = False) -> None:
         raise SchemaLintError([f"{issue.rule} {issue.table}: {issue.message}" for issue in issues])
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/unit/test_lint.py -v`
 Expected: PASS (15 passed)
 
-- [ ] **Step 5: Lint, type check, commit**
+- [x] **Step 5: Lint, type check, commit**
 
 Run: `python -m ruff check . && python -m mypy src/jdlib`
 
@@ -2589,7 +2591,7 @@ git commit -m "feat: metadata lint L1-L19"
 **Files:**
 - Create: `src/jdlib/migrations/__init__.py`
 - Create: `src/jdlib/migrations/runner.py`
-- Create: `src/jdlib/migrations/alembic.ini` (template only; config built in code)
+- No CLI `alembic.ini`: the programmatic `MigrationRunner` (config built in code per plane) is the only supported path.
 - Create: `src/jdlib/migrations/control/env.py`
 - Create: `src/jdlib/migrations/control/script.py.mako`
 - Create: `src/jdlib/migrations/control/versions/0001_control_baseline.py`
@@ -2602,7 +2604,7 @@ git commit -m "feat: metadata lint L1-L19"
 - Consumes: `ControlBase.metadata`, `TenantBase.metadata`, `CONTROL_SCHEMA`.
 - Produces: `MigrationRunner(control_url: str, tenant_url_template: str)` with `upgrade_control(revision="head")`, `upgrade_tenant(schema: str, revision="head")`, and `provision_tenant_schema(schema: str)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/integration/test_migrations.py`:
 
@@ -2679,12 +2681,12 @@ def test_invalid_schema_name_rejected_before_sql(monkeypatch):
     assert calls == []
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/integration/test_migrations.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'jdlib.migrations'`
 
-- [ ] **Step 3: Implement migration packages**
+- [x] **Step 3: Implement migration packages**
 
 `src/jdlib/migrations/runner.py`:
 
@@ -2927,17 +2929,17 @@ def downgrade() -> None:
 
 Copy the control `script.py.mako` verbatim to `src/jdlib/migrations/tenant/script.py.mako`. Create empty `src/jdlib/migrations/__init__.py`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/integration/test_migrations.py -v`
 Expected: PASS (4 passed)
 
-- [ ] **Step 5: Run the full suite, lint, type check**
+- [x] **Step 5: Run the full suite, lint, type check**
 
 Run: `python -m pytest -q && python -m ruff check . && python -m mypy src/jdlib`
 Expected: all green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src tests
@@ -2948,12 +2950,12 @@ git commit -m "feat: programmatic migration runner with control and tenant basel
 
 ## Phase 1 Exit Criteria
 
-- [ ] `python -m pytest -q` green (unit + Postgres integration).
-- [ ] `python -m ruff check .` and `python -m mypy src/jdlib` clean.
-- [ ] Metadata lint L1–L19 passes on framework + demo consumer metadata.
-- [ ] Control and tenant baselines migrate idempotently on PostgreSQL 16.
-- [ ] Ownership hierarchy (I12) and soft-delete partial uniqueness enforced at DB level.
-- [ ] Rev 7 design documents still match the shipped names (no renames).
+- [x] `python -m pytest -q` green (unit + Postgres integration).
+- [x] `python -m ruff check .` and `python -m mypy src/jdlib` clean.
+- [x] Metadata lint L1–L19 passes on framework + demo consumer metadata.
+- [x] Control and tenant baselines migrate idempotently on PostgreSQL 16.
+- [x] Ownership hierarchy (I12) and soft-delete partial uniqueness enforced at DB level.
+- [x] Rev 7 design documents still match the shipped names (no renames).
 
 ## Plan Series (next plans, not this one)
 

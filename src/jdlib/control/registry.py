@@ -204,7 +204,7 @@ class TenantRegistry:
     ) -> Tenant:
         try:
             strategy = PlacementStrategy(strategy)
-        except ValueError as exc:
+        except (ValueError, TypeError) as exc:
             raise ProvisioningError(f"unknown placement strategy: {strategy!r}") from exc
         _validate_target_handle(strategy, target_handle)
         async with await self._control() as session:

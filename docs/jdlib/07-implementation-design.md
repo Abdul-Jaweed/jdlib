@@ -119,8 +119,7 @@ src/jdlib/
 │   ├── sinks.py                # DatabaseAuditSink (plane-aware), CompositeAuditSink
 │   └── recorder.py             # AuditRecorder (mandatory vs best-effort)
 ├── migrations/
-│   ├── runner.py               # MigrationRunner (programmatic Alembic)
-│   ├── alembic.ini             # template-only Alembic config
+│   ├── runner.py               # MigrationRunner (programmatic Alembic; only supported path, no CLI ini)
 │   ├── control/                # env.py + versions/0001_control_baseline.py
 │   └── tenant/                 # env.py + versions/0001_tenant_baseline.py
 ├── testing/
