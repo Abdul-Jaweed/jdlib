@@ -53,7 +53,12 @@ resolve tenant (control plane)
 - Unique business keys are tenant-scoped (`(tenant_id, slug)`), so tenants
   cannot collide.
 - Provisioning is a control-plane operation only (no DDL).
-- RLS optional (section 6).
+- `purge`/`destroy` delete tenant-plane rows through `TenantPlanePurger`
+  (child-first, dependency-ordered `delete_where` over the registered
+  tenant-plane models in a system-privileged `TenantSession`); per-table counts
+  are audited as `tenant_counts` and `archive` deletes nothing.
+- RLS optional (section 6); when enabled, the tenant setting is re-asserted on
+  every transaction begin (section 6).
 - Failure mode: a scoping bug would expose data — this is why I1/I2 tests and
   the metadata lint are phase gates.
 
@@ -61,15 +66,17 @@ resolve tenant (control plane)
 
 - One database; schema name = `tenant_placements.target_handle`, validated at
   registration against `^t_[a-z0-9][a-z0-9_]{0,50}$`.
-- `search_path` is set by the framework on every connection checkout:
-  `SET search_path TO <quoted handle>`; identifiers are quoted with driver-level
-  quoting (`psycopg.sql.Identifier`, SQLAlchemy's identifier preparer, or
-  equivalent), never string interpolation.
+- `search_path` is re-asserted by the framework on every transaction begin
+  (`after_begin` listener): `SET search_path TO <quoted handle>`; identifiers
+  are quoted with driver-level quoting (SQLAlchemy's identifier preparer,
+  `psycopg.sql.Identifier`, or equivalent), never string interpolation. A
+  rollback or commit followed by another statement therefore stays bound to the
+  tenant schema, not the connection default.
 - Application code never sets or reads `search_path`; control-plane sessions use
   schema-qualified metadata and never share a pool with tenant sessions.
-- On checkin, reset `search_path` to the safe default `pg_catalog` (never
-  `"$user", public`); even so, correctness does not depend on the reset because
-  checkout always sets the tenant schema first.
+- On checkin, the pool `reset` listener issues `RESET search_path` (server
+  default, typically `"$user", public`); even so, correctness does not depend on
+  the reset because every transaction begins by setting the tenant schema.
 - Migration distribution: run the tenant-plane chain once per schema, bounded
   concurrency (default 4) to protect the primary; each schema keeps its own
   `alembic_version`.
@@ -98,11 +105,14 @@ resolve tenant (control plane)
   tenant-owned tables (`membership`, `role`, `role_binding`, `resource_grant`,
   `invitation`, `api_key`, `service_account`) are **not** tenant-plane RLS
   targets; they are protected by `ControlPlaneSession`, framework-only access,
-  and explicit filtering/authorization. `jdlib.migrations.rls` exposes
-  `emit_rls_policies(metadata)` so consumer Alembic envs generate the same
-  policy for their resources instead of hand-writing SQL. Metadata lint L13
-  fails the build if any tenant-routed table lacks a policy when RLS is enabled,
-  or if a control-plane table is included in tenant-plane RLS emission.
+  and explicit filtering/authorization. `jdlib.persistence.strategies.rls`
+  ships the entry points: `rls_eligible_tables(metadata)` and the sync
+  `emit_rls_policies(connection, *, metadata, app_role)` for consumer Alembic
+  envs, plus the async `install_rls(engine, *, metadata, app_role)` which emits
+  policies over a privileged connection and then runs `verify_rls`. Metadata
+  lint L13 fails the build if any tenant-routed table lacks a policy when RLS is
+  enabled, or if a control-plane table is included in tenant-plane RLS
+  emission.
 - Per table:
 
 ```sql
@@ -122,13 +132,26 @@ CREATE POLICY tenant_isolation ON t
   zero rows, zero writes. There is no SQL construct in the policy that can turn
   an unset setting into an allow.
 - Runtime role: `NOBYPASSRLS`, not the table owner, not superuser; migrations run
-  under a separate owner role. Startup self-check verifies the runtime role
-  cannot bypass RLS and fails closed if it can.
-- Every transaction begins with `SET LOCAL app.tenant_id = '<uuid>'` (transaction
-  scoped, never `SET`); the value comes from `TenantContext`.
+  under a separate owner role. The startup self-check
+  `verify_rls(engine, app_role, *, metadata)` fails closed unless the role
+  exists with `NOBYPASSRLS` and is not superuser, every eligible table has
+  `pg_class.relrowsecurity AND relforcerowsecurity` true, and a
+  `tenant_isolation` policy exists in `pg_policies`; table names resolve through
+  the connection's `search_path` (`to_regclass`), so verification runs against
+  the same schema the runtime will use. `install_rls` runs it automatically;
+  call it standalone when policies are managed by migrations.
+- Every transaction begins with the transaction-local
+  `SELECT set_config('app.tenant_id', '<uuid>', true)` (never a session-level
+  `SET`); the value comes from `TenantContext`. The shared strategy re-asserts
+  it on every transaction begin (`after_begin`), so a rollback or a commit
+  followed by further statements stays bound, and the setting is gone after
+  close/checkin.
 - Tests: pool-leakage (A → checkout → B → checkout), unset setting (zero
-  rows/writes), consumer `TenantOwned` table (tenant B invoice invisible to
-  tenant A with RLS on), and the full I1–I2 suite with RLS on and off.
+  rows/writes), commit-then-continue re-binding and unset-after-close, consumer
+  `TenantOwned` table (tenant B invoice invisible to tenant A with RLS on),
+  `install_rls` → `verify_rls` self-check plus fail-closed negatives (missing
+  policy, `NO FORCE`, bypassing role), and the strategy matrix with RLS on and
+  off.
 
 ## 7. Hybrid placement
 
@@ -165,7 +188,7 @@ tenants: acme → shared      globex → schema t_globex     initech → databas
 | Eviction candidate has checked-out connections | never evicted; `PoolCapacityError` under pressure |
 | Schema missing after placement exists | `StrategyCapabilityError`; reprovision is idempotent |
 | `alembic_version` ≠ desired | migration state `failed`/`blocked`; tenant suspended, never served on mismatch |
-| RLS requested but role can bypass | startup self-check fails closed |
+| RLS requested but role can bypass, table missing, unforced, or lacking `tenant_isolation` | `install_rls`/`verify_rls` fail closed with `StrategyCapabilityError`; no partial RLS deployment |
 | RLS enabled and a tenant-routed table lacks a policy (or a control-plane table is wrongly included) | metadata lint L13 fails the build; no partial RLS deployment |
 | RLS session setting missing | queries return zero rows (fail closed), never all rows |
 | search_path not applied | queries fail with missing relation, never cross-schema read |

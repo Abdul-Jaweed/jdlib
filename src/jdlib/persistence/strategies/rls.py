@@ -11,6 +11,23 @@ _POLICY = (
     "WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)"
 )
 
+_TABLE_CHECK = sa.text(
+    """
+    SELECT c.relrowsecurity,
+           c.relforcerowsecurity,
+           EXISTS (
+               SELECT 1
+               FROM pg_policies p
+               WHERE p.schemaname = n.nspname
+                 AND p.tablename = c.relname
+                 AND p.policyname = 'tenant_isolation'
+           ) AS has_policy
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.oid = to_regclass(:name)
+    """
+)
+
 
 def rls_eligible_tables(metadata: sa.MetaData) -> tuple[str, ...]:
     found: list[str] = []
@@ -42,7 +59,16 @@ def emit_rls_policies(
             )
 
 
-async def verify_rls(engine: AsyncEngine, app_role: str) -> None:
+async def install_rls(engine: AsyncEngine, *, metadata: sa.MetaData, app_role: str) -> None:
+    async with engine.begin() as connection:
+        await connection.run_sync(
+            lambda sync: emit_rls_policies(sync, metadata=metadata, app_role=app_role)
+        )
+    await verify_rls(engine, app_role, metadata=metadata)
+
+
+async def verify_rls(engine: AsyncEngine, app_role: str, *, metadata: sa.MetaData) -> None:
+    eligible = rls_eligible_tables(metadata)
     async with engine.connect() as connection:
         role = (
             await connection.execute(
@@ -50,8 +76,20 @@ async def verify_rls(engine: AsyncEngine, app_role: str) -> None:
                 {"name": app_role},
             )
         ).one_or_none()
-    if role is None:
-        raise StrategyCapabilityError(f"RLS app role does not exist: {app_role}")
-    bypass, is_super = role
-    if bypass or is_super:
-        raise StrategyCapabilityError(f"RLS app role {app_role} can bypass row level security")
+        if role is None:
+            raise StrategyCapabilityError(f"RLS app role does not exist: {app_role}")
+        bypass, is_super = role
+        if bypass or is_super:
+            raise StrategyCapabilityError(f"RLS app role {app_role} can bypass row level security")
+        checks: dict[str, tuple[bool, bool, bool] | None] = {}
+        for name in eligible:
+            row = (await connection.execute(_TABLE_CHECK, {"name": name})).one_or_none()
+            checks[name] = None if row is None else (bool(row[0]), bool(row[1]), bool(row[2]))
+    for name, check in checks.items():
+        if check is None:
+            raise StrategyCapabilityError(f"RLS table missing or not visible: {name}")
+        rowsecurity, force, has_policy = check
+        if not rowsecurity or not force:
+            raise StrategyCapabilityError(f"RLS is not forced on table {name}")
+        if not has_policy:
+            raise StrategyCapabilityError(f"RLS table {name} lacks tenant_isolation policy")

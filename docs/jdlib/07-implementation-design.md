@@ -70,6 +70,7 @@ src/jdlib/
 │   │                           #   RoleBinding, ResourceGrant, PlatformAuditEvent
 │   ├── session.py              # ControlPlaneSession (framework-internal)
 │   ├── registry.py             # TenantRegistry, DeprovisionMode, MigrationState
+│   ├── purge.py                # TenantPlanePurger (child-first privileged tenant-plane purge)
 │   └── access.py               # AccessControl, ownership validation
 ├── models/
 │   ├── base.py                 # TenantBase + mixins: TenantOwned, TenantRouted,
@@ -101,16 +102,18 @@ src/jdlib/
 ├── persistence/
 │   ├── session.py              # TenantSession (scoping, stamping, guards, raw_sql modes)
 │   ├── rawsql.py               # RawSqlMode, RawSqlValidator (pglast structural validation)
-│   ├── router.py               # SessionRouter, PoolCache, SecretProvider
+│   ├── router.py               # SessionRouter strategy dispatch
+│   ├── secrets.py              # SecretProvider, MemorySecretProvider, EnvSecretProvider
 │   ├── uow.py                  # UnitOfWork
 │   ├── repository.py           # TenantRepository[ModelT]
 │   ├── events.py               # SQLAlchemy event registration (do_orm_execute, before_flush)
 │   └── strategies/
 │       ├── base.py             # IsolationStrategy, StrategyCapabilities, StrategyName
-│       ├── shared.py           # SharedSchemaStrategy
+│       ├── deprovision.py      # DeprovisionMode
+│       ├── shared.py           # SharedSchemaStrategy (per-transaction RLS binding)
 │       ├── schema.py           # SchemaPerTenantStrategy, SchemaName validation
 │       ├── database.py         # DatabasePerTenantStrategy
-│       └── rls.py              # RlsPolicyEmitter, emit_rls_policies(metadata)
+│       └── rls.py              # rls_eligible_tables, emit_rls_policies, install_rls, verify_rls
 ├── audit/
 │   ├── base.py                 # AuditRecord, AuditSink
 │   ├── sinks.py                # DatabaseAuditSink (plane-aware), CompositeAuditSink

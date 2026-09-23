@@ -790,6 +790,8 @@ git add src/jdlib/persistence/strategies/rls.py src/jdlib/config.py src/jdlib/pe
 git commit -m "feat: postgres RLS emission and fail-closed tenant binding"
 ```
 
+**Task 3 review — Important deferred to Task 5:** the review found RLS was never actually turned on: there was no install entry point, `verify_rls` only checked the role, and `SharedSchemaStrategy` bound the tenant GUC with a one-shot statement. Task 5 closes all three (see the Task 5 back-port below for the frozen contract).
+
 ---
 
 ### Task 4: Privileged tenant-plane purge
@@ -974,6 +976,14 @@ Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -
 git add tests/integration/test_strategy_matrix.py docs
 git commit -m "test: strategy matrix; docs sync"
 ```
+
+**Shipped (Task 5, including the Task 3 review deferral):** authoritative snippets live in `src/jdlib/persistence/strategies/rls.py`, `shared.py`, `tests/integration/test_strategy_matrix.py` and `tests/integration/strategy_support.py`; the notes below are the frozen contract deltas.
+
+- **RLS install/verify entry points (closes the "RLS never turned on" gap).** `install_rls(engine, *, metadata, app_role)` opens a privileged connection, runs the sync `emit_rls_policies` via `run_sync`, then calls the extended `verify_rls`. `verify_rls(engine, app_role, *, metadata)` fails closed unless the role exists with `NOBYPASSRLS` and is not superuser, every eligible table is visible through the connection `search_path` (`to_regclass`) with `pg_class.relrowsecurity AND relforcerowsecurity` true, and a `tenant_isolation` policy exists in `pg_policies`. Negative coverage: missing role, superuser, bypassing role, missing policy, `NO FORCE`.
+- **Per-transaction tenant rebinding.** `SharedSchemaStrategy.session()` registers an `after_begin` listener that issues transaction-local `SELECT set_config('app.tenant_id', :id, true)` on every transaction begin (replacing the one-shot bind), so a commit or rollback followed by further statements stays scoped; the setting is gone after close/checkin.
+- **Strategy matrix.** `tests/integration/test_strategy_matrix.py` parametrizes `("shared", "shared-rls", "schema", "database")` and runs identical assertions through `TenantSession`/`TenantRepository`: scoped reads, cross-tenant `get` → `None`, stamped writes, `tenant_id` immutability, unscoped bulk DML rejection, entity-less count scoping. Per-strategy provisioning/session helpers were extracted to `tests/integration/strategy_support.py` and reused by the Task 1/2 integration tests; RLS-on cases install the role + policies with `install_rls` and skip when the role is not installable.
+- **Docs.** `06-strategy-matrix.md` documents the shipped RLS install/verify entry points, per-transaction `search_path`/GUC behavior, the checkin `RESET search_path`, and the `TenantPlanePurger` purge coverage; `07-implementation-design.md` adds `persistence/secrets.py`, `persistence/strategies/deprovision.py` and `control/purge.py` to the file map and updates the `rls.py` line.
+- **Counts:** `tests/integration/test_rls_db.py` 9 passed (was 4); `tests/integration/test_strategy_matrix.py` 24 passed; full suite 505 passed (was 476); `ruff` and strict `mypy` clean.
 
 ---
 

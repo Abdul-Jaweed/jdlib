@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -33,10 +35,21 @@ class SharedSchemaStrategy:
             raise StrategyCapabilityError("shared strategy has no engine configured")
         session = AsyncSession(self._engine, expire_on_commit=False)
         if self._rls is not None and self._rls.enabled:
-            await session.execute(
-                sa.text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
-                {"tenant_id": str(tenant.id)},
-            )
+            tenant_id = str(tenant.id)
+
+            def _bind_tenant(
+                sync_session: sa.orm.Session, transaction: Any, connection: sa.Connection
+            ) -> None:
+                connection.execute(
+                    sa.text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+                    {"tenant_id": tenant_id},
+                )
+
+            try:
+                sa.event.listen(session.sync_session, "after_begin", _bind_tenant)
+            except Exception:
+                await session.close()
+                raise
         return session
 
     async def provision(self, tenant: TenantRecord) -> None:
