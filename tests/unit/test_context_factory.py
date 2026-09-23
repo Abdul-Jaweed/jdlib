@@ -31,8 +31,10 @@ from tests.support.context_fakes import (
 )
 
 TENANT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+OTHER_TENANT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
 USER_ID = uuid.uuid4()
 OPERATOR_ID = uuid.uuid4()
+SERVICE_ACCOUNT_ID = uuid.uuid4()
 
 
 def _record() -> TenantRecord:
@@ -103,6 +105,62 @@ async def test_for_principal_rejects_unentitled_principal():
     factory, _ = _factory(allowed=set())
     with pytest.raises(TenantAccessDenied):
         await factory.for_principal(_user(), TenantRef(slug="acme"), request_id="req-1")
+
+
+def _service_account(tenant_id: uuid.UUID | None) -> Principal:
+    return Principal(kind=PrincipalKind.SERVICE_ACCOUNT, id=SERVICE_ACCOUNT_ID, tenant_id=tenant_id)
+
+
+def _pin_factory(
+    *,
+    allowed: set[tuple[uuid.UUID, uuid.UUID]],
+    suspended: set[uuid.UUID] | None = None,
+) -> ContextFactory:
+    other = TenantRecord(
+        id=OTHER_TENANT_ID,
+        slug="other",
+        status=TenantStatus.ACTIVE,
+        strategy=PlacementStrategy.SHARED,
+    )
+    return ContextFactory(
+        config=ContextConfig(signing_key="test-key"),
+        principals=StaticPrincipals({SERVICE_ACCOUNT_ID}),
+        tenants=DictTenants([_record(), other]),
+        servability=ServabilityStub(suspended),
+        entitlements=EntitlementsStub(allowed),
+        operators=OperatorsStub(),
+        audit=RecordingPrivilegeAudit(),
+        clock=FrozenClock(),
+    )
+
+
+async def test_for_principal_allows_matching_service_account_tenant_pin():
+    factory = _pin_factory(allowed={(SERVICE_ACCOUNT_ID, TENANT_ID)})
+    context = await factory.for_principal(
+        _service_account(TENANT_ID), TenantRef(slug="acme"), request_id="req-1"
+    )
+    assert context.tenant_id == TENANT_ID
+    assert context.principal.tenant_id == TENANT_ID
+
+
+async def test_for_principal_denies_mismatched_service_account_tenant_pin():
+    factory = _pin_factory(
+        allowed={(SERVICE_ACCOUNT_ID, OTHER_TENANT_ID)}, suspended={OTHER_TENANT_ID}
+    )
+    with pytest.raises(TenantAccessDenied):
+        await factory.for_principal(
+            _service_account(TENANT_ID), TenantRef(slug="other"), request_id="req-1"
+        )
+
+
+async def test_for_principal_denies_mismatched_pin_before_entitlement_and_servability():
+    factory = _pin_factory(
+        allowed={(SERVICE_ACCOUNT_ID, TENANT_ID)}, suspended={TENANT_ID}
+    )
+    with pytest.raises(TenantAccessDenied):
+        await factory.for_principal(
+            _service_account(OTHER_TENANT_ID), TenantRef(slug="acme"), request_id="req-1"
+        )
 
 
 async def test_for_operator_requires_platform_operator_kind():

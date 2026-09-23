@@ -5,6 +5,7 @@ from typing import NamedTuple
 import sqlalchemy as sa
 
 from jdlib.authn.apikey import ApiKeyAuthenticator, hash_api_key_secret
+from jdlib.config import ApiKeyConfig
 from jdlib.context import PrincipalKind
 from jdlib.control.audit import RecordingPlatformAudit
 from jdlib.control.models import ApiKey, ServiceAccount, Tenant
@@ -97,7 +98,7 @@ async def test_every_denial_path_audits_exact_reason_without_key_material(
         session_factory=control_session_factory, audit=audit, clock=FrozenClock()
     )
     attempts = (
-        (_request("not-a-key"), "InvalidToken"),
+        (_request("jd.malformed"), "InvalidToken"),
         (_request("jd.unknown.key"), "invalid_api_key"),
         (_request(f"{seeded.prefix}.wrong"), "invalid_api_key"),
         (_request(f"{revoked.prefix}.{revoked.secret}"), "invalid_api_key"),
@@ -115,7 +116,7 @@ async def test_every_denial_path_audits_exact_reason_without_key_material(
     assert [entry["actor_id"] for entry in audit.entries] == [None] * len(attempts)
     rendered = repr(audit.entries)
     material = (
-        "not-a-key",
+        "jd.malformed",
         "jd.unknown.key",
         seeded.prefix,
         seeded.secret,
@@ -149,3 +150,44 @@ async def test_missing_or_malformed_bearer_header_denies_without_audit(
     for value in (None, "", "Basic abc", "Bearer", "Bearer "):
         assert await authenticator.authenticate(_header_request(value)) is None
     assert audit.entries == []
+
+
+async def test_tokens_without_the_configured_prefix_are_ignored_without_audit(
+    control_session_factory,
+):
+    audit = RecordingPlatformAudit()
+    authenticator = ApiKeyAuthenticator(
+        session_factory=control_session_factory, audit=audit, clock=FrozenClock()
+    )
+    jwt_like = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.signature"
+    for token in ("not-a-key", "sk.other.secret", "prefixless", jwt_like):
+        assert await authenticator.authenticate(_request(token)) is None
+    assert audit.entries == []
+
+
+async def test_configured_prefix_gates_auditing(control_session_factory):
+    audit = RecordingPlatformAudit()
+    authenticator = ApiKeyAuthenticator(
+        session_factory=control_session_factory,
+        audit=audit,
+        config=ApiKeyConfig(prefix="acme"),
+        clock=FrozenClock(),
+    )
+    assert await authenticator.authenticate(_request("jd.anything.here")) is None
+    assert audit.entries == []
+    assert await authenticator.authenticate(_request("acme.unknown.key")) is None
+    assert [entry["metadata"]["reason"] for entry in audit.entries] == ["invalid_api_key"]
+
+
+async def test_unexpected_errors_fail_closed_and_audit_without_material():
+    def broken_factory():
+        raise sa.exc.SQLAlchemyError("control plane down")
+
+    audit = RecordingPlatformAudit()
+    authenticator = ApiKeyAuthenticator(
+        session_factory=broken_factory, audit=audit, clock=FrozenClock()
+    )
+    token = "jd.broken.secret"
+    assert await authenticator.authenticate(_request(token)) is None
+    assert [entry["metadata"]["reason"] for entry in audit.entries] == ["SQLAlchemyError"]
+    assert token not in str(audit.entries)

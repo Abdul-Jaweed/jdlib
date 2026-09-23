@@ -78,13 +78,14 @@ src/jdlib/
 │   ├── settings.py             # TenantSetting
 │   └── audit.py                # AuditEvent
 ├── authn/
-│   ├── base.py                 # Authenticator protocol (imports RequestInfo)
+│   ├── base.py                 # Authenticator protocol, bearer_token,
+│   │                           #   record_authn_failure (imports RequestInfo)
 │   ├── oidc.py                 # OidcAuthenticator, JwksCache, TokenVerifier,
 │   │                           #   ClaimMapper, UserLinker
 │   ├── apikey.py               # ApiKeyAuthenticator, KeyParser
 │   ├── composite.py            # CompositeAuthenticator
-│   └── wiring.py               # ContextFactory port adapters over
-│                               #   TenantRegistry/ControlAccessReader
+│   └── wiring.py               # build_authenticator + ContextFactory port
+│                               #   adapters over TenantRegistry/ControlAccessReader
 ├── authz/
 │   ├── permissions.py          # Permission, PermissionCatalog, builtin catalog
 │   ├── resource_types.py       # ResourceTypeDefinition, ResourceTypeRegistry
@@ -189,9 +190,12 @@ class ContextFactory:
                        issuer: _PrivilegeIssuer) -> TenantContext: ...
 ```
 
-`for_principal` runs the authoritative flow (entitlement first, then tenant
-servability, so non-entitled principals never learn tenant state) and never
-trusts caller-supplied state beyond ids.
+`for_principal` runs the authoritative flow (service-account tenant-pin check
+first, then entitlement, then tenant servability, so a pinned service account
+never reaches another tenant and non-entitled principals never learn tenant
+state) and never trusts caller-supplied state beyond ids. A service-account
+principal whose `tenant_id` is set must resolve to that same tenant; a mismatch
+raises `TenantAccessDenied`.
 `for_system`/`for_test` require the internal `_PrivilegeIssuer` instance held by
 the factory; their use is audited.
 
@@ -560,14 +564,31 @@ class CompositeAuthenticator(Authenticator):
     # first authenticator that returns a Principal wins; all failures audited
 ```
 
+`UserLinker.link` returns a `User` bound to a session that closes before the
+caller reads it, so the control-plane session factory must be created with
+`expire_on_commit=False`; otherwise the commit expires every attribute and the
+detached instance cannot be read.
+
+Each authenticator audits only credentials that match its own scheme: the OIDC
+authenticator only when the token parses as a JWT with a `kid` header, the
+API-key authenticator only when the token's first segment equals
+`ApiKeyConfig.prefix` (default `jd`). Failures that escape the authentication
+flow itself (`JdlibError`, SQLAlchemy errors, JWKS fetch errors) are audited
+fail-closed as `authn.failed` with the exception class name as reason, never
+with token material.
+
 `authn/wiring.py` adapts the shipped services to the `ContextFactory` ports
 with translation only, no policy: `PrincipalDirectoryAdapter` and
 `EntitlementAdapter` over `ControlAccessReader` (`can_act` short-circuits on an
 inactive principal before checking membership), and `TenantDirectoryAdapter`
 over `TenantRegistry.find`, which returns the tenant row plus its placement as a
-`TenantRecord` or `None` when either is missing. The middleware's
-`PrincipalProvider` port is callable, so callers pass a bound
-`authenticator.authenticate` (or an equivalent adapter).
+`TenantRecord` or `None` when either is missing (`assert_servable` raises
+`ProvisioningError` for the same missing-placement condition, a registry
+invariant). `build_authenticator(config, session_factory, audit)` assembles the
+OIDC and API-key authenticators from `TenancyConfig` into a
+`CompositeAuthenticator`, skipping the OIDC member when `TenancyConfig.oidc` is
+`None`. The middleware's `PrincipalProvider` port is callable, so callers pass
+a bound `authenticator.authenticate` (or an equivalent adapter).
 
 `RequestInfo` is defined in `jdlib.tenancy.resolution` and imported by `authn/base.py`.
 

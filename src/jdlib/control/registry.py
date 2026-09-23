@@ -523,6 +523,12 @@ class TenantRegistry:
             return list((await session.execute(statement)).scalars().all())
 
     async def find(self, ref: TenantRef) -> TenantRecord | None:
+        """Look a tenant up by id or slug, returning None for a miss or unplaced tenant.
+
+        ``assert_servable`` raises ``ProvisioningError`` for the same missing-placement
+        condition, which is a registry invariant.
+        """
+
         async with await self._control() as session:
             statement = sa.select(Tenant)
             if ref.id is not None:

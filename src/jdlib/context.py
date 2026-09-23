@@ -231,6 +231,14 @@ class ContextFactory:
         if not await self._principals.is_active(principal):
             raise UnknownPrincipal(str(principal.id))
         record = await self._resolve_tenant(tenant_ref)
+        if (
+            principal.kind is PrincipalKind.SERVICE_ACCOUNT
+            and principal.tenant_id is not None
+            and principal.tenant_id != record.id
+        ):
+            raise TenantAccessDenied(
+                f"principal {principal.id} is pinned to tenant {principal.tenant_id}"
+            )
         if not await self._entitlements.can_act(principal, record.id):
             raise TenantAccessDenied(f"principal {principal.id} cannot act in {record.id}")
         await self._servability.assert_servable(record.id)

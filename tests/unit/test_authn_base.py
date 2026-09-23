@@ -45,6 +45,16 @@ def test_bearer_token_extraction():
     assert bearer_token(_request()) is None
 
 
+def test_bearer_token_splits_on_any_whitespace_and_rejects_empty_values():
+    assert bearer_token(_request({"authorization": "Bearer\tabc.def"})) == "abc.def"
+    assert bearer_token(_request({"authorization": "Bearer   abc"})) == "abc"
+    assert bearer_token(_request({"authorization": "Bearer \t abc"})) == "abc"
+    assert bearer_token(_request({"authorization": "Bearer "})) is None
+    assert bearer_token(_request({"authorization": "Bearer\t"})) is None
+    assert bearer_token(_request({"authorization": "Bearer"})) is None
+    assert bearer_token(_request({"authorization": "   "})) is None
+
+
 class _Authenticator:
     def __init__(self, principal: Principal | None) -> None:
         self._principal = principal

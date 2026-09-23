@@ -8,7 +8,7 @@ import pytest
 import sqlalchemy as sa
 
 from jdlib._uuid import uuid7
-from jdlib.context import TenantRecord
+from jdlib.context import TenantRecord, TenantRef
 from jdlib.control.audit import RecordingPlatformAudit
 from jdlib.control.enums import MigrationStatus, PlacementStrategy, TenantStatus
 from jdlib.control.models import (
@@ -481,6 +481,38 @@ async def test_failure_audit_error_prevents_failure_state_commit(control_session
     state = await _migration_state(control_session_factory, tenant.id)
     assert state.status == MigrationStatus.SUCCESS.value
     assert state.current_version == DESIRED_VERSION
+
+
+async def test_find_returns_record_for_id_and_slug(control_session_factory):
+    registry, _ = _registry(control_session_factory)
+    tenant = await _active(registry, "findable")
+    by_id = await registry.find(TenantRef(id=tenant.id))
+    by_slug = await registry.find(TenantRef(slug=tenant.slug))
+    assert by_id is not None
+    assert by_id == by_slug
+    assert by_id == TenantRecord(
+        id=tenant.id,
+        slug=tenant.slug,
+        status=TenantStatus.ACTIVE,
+        strategy=PlacementStrategy.SHARED,
+    )
+
+
+async def test_find_unknown_id_and_slug_return_none(control_session_factory):
+    registry, _ = _registry(control_session_factory)
+    assert await registry.find(TenantRef(id=uuid7())) is None
+    assert await registry.find(TenantRef(slug="no-such-slug")) is None
+    assert await registry.find(TenantRef()) is None
+
+
+async def test_find_missing_placement_returns_none(control_session_factory):
+    registry, _ = _registry(control_session_factory)
+    tenant = await _active(registry, "find-noplace")
+    await _execute(
+        control_session_factory,
+        sa.delete(TenantPlacement).where(TenantPlacement.tenant_id == tenant.id),
+    )
+    assert await registry.find(TenantRef(id=tenant.id)) is None
 
 
 async def test_assert_servable_returns_active_tenant(control_session_factory):

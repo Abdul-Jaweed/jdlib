@@ -46,6 +46,13 @@ async def test_link_by_identity_link(control_session_factory):
         IdentityClaims(issuer="https://idp", subject="sub-1", email=None, email_verified=False)
     )
     assert user is not None and user.id == user_id
+    async with control_session_factory() as session:
+        last_login = (
+            await session.execute(
+                sa.select(IdentityLink.last_login_at).where(IdentityLink.subject == "sub-1")
+            )
+        ).scalar_one()
+    assert last_login is not None
 
 
 async def test_link_by_trusted_email(control_session_factory):
@@ -71,7 +78,7 @@ async def test_link_by_trusted_email(control_session_factory):
     assert link.issuer == "https://idp"
 
 
-async def test_untrusted_or_unverified_email_does_not_link(control_session_factory):
+async def test_untrusted_verified_email_does_not_link_or_duplicate(control_session_factory):
     user_id = uuid.uuid4()
     async with control_session_factory() as session:
         session.add(User(id=user_id, email="plain@example.com", status="active"))
@@ -84,17 +91,30 @@ async def test_untrusted_or_unverified_email_does_not_link(control_session_facto
         email_verified=True,
     )
     assert await untrusted.link(untrusted_claims) is None
-    trusted = UserLinker(control_session_factory, _config(trusted=True))
-    unverified_claims = IdentityClaims(
-        issuer="https://idp",
-        subject="sub-4",
-        email="plain@example.com",
-        email_verified=False,
-    )
-    assert await trusted.link(unverified_claims) is None
+    async with control_session_factory() as session:
+        links = (
+            (
+                await session.execute(
+                    sa.select(IdentityLink).where(IdentityLink.subject == "sub-3")
+                )
+            )
+            .scalars()
+            .all()
+        )
+        users = (
+            (
+                await session.execute(
+                    sa.select(User).where(sa.func.lower(User.email) == "plain@example.com")
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert links == []
+    assert [user.id for user in users] == [user_id]
 
 
-async def test_no_silent_provisioning(control_session_factory):
+async def test_unlinked_identity_creates_user(control_session_factory):
     linker = UserLinker(control_session_factory, _config(trusted=True))
     claims = IdentityClaims(
         issuer="https://idp",
@@ -102,7 +122,44 @@ async def test_no_silent_provisioning(control_session_factory):
         email="nobody@example.com",
         email_verified=True,
     )
-    assert await linker.link(claims) is None
+    user = await linker.link(claims)
+    assert user is not None
+    assert user.status == "active"
+    assert user.email == "nobody@example.com"
+    async with control_session_factory() as session:
+        stored = await session.get(User, user.id)
+        assert stored is not None and stored.status == "active"
+        link = (
+            await session.execute(
+                sa.select(IdentityLink).where(
+                    IdentityLink.issuer == "https://idp", IdentityLink.subject == "sub-5"
+                )
+            )
+        ).scalar_one()
+    assert link.user_id == user.id
+
+
+async def test_unverified_email_is_not_stored(control_session_factory):
+    linker = UserLinker(control_session_factory, _config(trusted=True))
+    claims = IdentityClaims(
+        issuer="https://idp",
+        subject="sub-6",
+        email="unverified@example.com",
+        email_verified=False,
+    )
+    user = await linker.link(claims)
+    assert user is not None
+    assert user.status == "active"
+    assert user.email is None
+    async with control_session_factory() as session:
+        link = (
+            await session.execute(
+                sa.select(IdentityLink).where(
+                    IdentityLink.issuer == "https://idp", IdentityLink.subject == "sub-6"
+                )
+            )
+        ).scalar_one()
+    assert link.user_id == user.id
 
 
 async def test_link_race_returns_winning_user(control_session_factory):

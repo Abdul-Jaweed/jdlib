@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import jwt as pyjwt
@@ -10,7 +10,8 @@ import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jdlib.authn.base import bearer_token
+from jdlib._uuid import uuid7
+from jdlib.authn.base import bearer_token, record_authn_failure
 from jdlib.config import OidcConfig
 from jdlib.context import Clock, Principal, PrincipalKind, SystemClock
 from jdlib.control.audit import PlatformAudit
@@ -161,27 +162,38 @@ class UserLinker:
             linked = await self._linked_user(session, claims)
             if linked is not None:
                 return linked
-            if not self._config.email_trusted or not claims.email_verified or not claims.email:
-                return None
-            found: User | None = (
-                await session.execute(
-                    sa.select(User).where(
-                        sa.func.lower(User.email) == claims.email.lower(),
-                        User.status == "active",
-                    )
-                )
-            ).scalar_one_or_none()
-            if found is None:
-                return None
-            session.add(
-                IdentityLink(user_id=found.id, issuer=claims.issuer, subject=claims.subject)
-            )
             try:
+                user = await self._trusted_email_user(session, claims)
+                if user is None:
+                    user = User(
+                        id=uuid7(),
+                        email=claims.email if claims.email_verified else None,
+                        status="active",
+                    )
+                    session.add(user)
+                    await session.flush()
+                session.add(
+                    IdentityLink(user_id=user.id, issuer=claims.issuer, subject=claims.subject)
+                )
                 await session.commit()
             except IntegrityError:
                 await session.rollback()
                 return await self._linked_user(session, claims)
-            return found
+            return user
+
+    async def _trusted_email_user(
+        self, session: ControlPlaneSession, claims: IdentityClaims
+    ) -> User | None:
+        if not self._config.email_trusted or not claims.email_verified or not claims.email:
+            return None
+        return (
+            await session.execute(
+                sa.select(User).where(
+                    sa.func.lower(User.email) == claims.email.lower(),
+                    User.status == "active",
+                )
+            )
+        ).scalar_one_or_none()
 
     async def _linked_user(
         self, session: ControlPlaneSession, claims: IdentityClaims
@@ -199,6 +211,8 @@ class UserLinker:
         user: User | None = await session.get(User, link.user_id)
         if user is None or user.status != "active":
             return None
+        link.last_login_at = datetime.now(UTC)
+        await session.commit()
         return user
 
 
@@ -224,7 +238,6 @@ class OidcAuthenticator:
         linker: UserLinker,
         audit: PlatformAudit,
     ) -> None:
-        self._config = config
         self._cache = cache
         self._verifier = verifier
         self._mapper = mapper
@@ -236,26 +249,20 @@ class OidcAuthenticator:
         if token is None:
             return None
         try:
-            key = await self._cache.signing_key(_kid(token))
+            kid = _kid(token)
+        except AuthenticationError:
+            return None
+        try:
+            key = await self._cache.signing_key(kid)
             if key is None:
                 raise InvalidToken("unknown signing key")
             claims = self._verifier.verify(token, key)
             identity = self._mapper.map(claims)
-        except AuthenticationError as exc:
-            await self._audit.record(
-                action="authn.failed",
-                tenant_id=None,
-                actor_id=None,
-                metadata={"reason": type(exc).__name__},
-            )
+            user = await self._linker.link(identity)
+        except Exception as exc:
+            await record_authn_failure(self._audit, type(exc).__name__)
             return None
-        user = await self._linker.link(identity)
         if user is None:
-            await self._audit.record(
-                action="authn.failed",
-                tenant_id=None,
-                actor_id=None,
-                metadata={"reason": "unlinked_identity"},
-            )
+            await record_authn_failure(self._audit, "unlinked_identity")
             return None
         return Principal(kind=PrincipalKind.USER, id=user.id, user_id=user.id)

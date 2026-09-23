@@ -4,7 +4,7 @@
 
 **Goal:** Build authentication adapters — OIDC/JWT verification with JWKS caching and the frozen user-linking algorithm, API keys with Argon2 verification and tenant pinning, the composite authenticator — and wire the `ContextFactory` ports (`PrincipalDirectory`, `TenantDirectory`, `EntitlementChecker`) to the shipped registry/reader so the ASGI middleware runs end-to-end with real authentication.
 
-**Architecture:** `jdlib.authn` verifies credentials and returns a `Principal`; it never creates contexts. `OidcAuthenticator` verifies tokens with PyJWT against a rotation-aware `JwksCache` and links identities through `UserLinker` (IdentityLink → trusted-email link → deny; no auto-provisioning). `ApiKeyAuthenticator` looks up `key_prefix` in the control plane, verifies the secret with Argon2, and pins the principal to the key's tenant. A `wiring` module adapts `TenantRegistry`/`ControlAccessReader` to the `ContextFactory` ports.
+**Architecture:** `jdlib.authn` verifies credentials and returns a `Principal`; it never creates contexts. `OidcAuthenticator` verifies tokens with PyJWT against a rotation-aware `JwksCache` and links identities through `UserLinker` (IdentityLink → trusted-email link → create user). `ApiKeyAuthenticator` looks up `key_prefix` in the control plane, verifies the secret with Argon2, and pins the principal to the key's tenant. A `wiring` module adapts `TenantRegistry`/`ControlAccessReader` to the `ContextFactory` ports.
 
 **Tech Stack:** PyJWT + cryptography (already dependencies), httpx (JWKS fetch), argon2-cffi, SQLAlchemy async. No new dependencies.
 
@@ -14,7 +14,7 @@
 
 - No password storage, no session issuance: the package verifies credentials only.
 - Canonical principal rule: for USER principals, `Principal.id == user_id`; for SERVICE_ACCOUNT, `id` is the service-account id and `tenant_id` is pinned.
-- Login linking: `IdentityLink(issuer, subject)` match → active user; else trusted-email match → link; else deny. Unverified email is never trusted; no silent auto-provisioning.
+- Login linking: `IdentityLink(issuer, subject)` match → active user; else trusted-email match → link; else create a user. A new user stores its email only when the claim is verified, otherwise `email=None`. Unverified email is never trusted or linked.
 - API keys: `prefix.keyid.secret`, `key_prefix` unique lookup, Argon2id hash at rest, optional scopes narrow only, pinned to one tenant and service account, revocable/expiring.
 - Authentication failures are audited through `PlatformAudit` (mandatory, fail-closed) with no token material in metadata.
 - Commands: `.venv/Scripts/python -m pytest ...`, `ruff check .`, `mypy src/jdlib`; integration tests need `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1` and a fresh DB.
@@ -537,7 +537,7 @@ async def test_link_by_trusted_email(control_session_factory):
     assert link.issuer == "https://idp"
 
 
-async def test_untrusted_or_unverified_email_does_not_link(control_session_factory):
+async def test_untrusted_verified_email_does_not_link_or_duplicate(control_session_factory):
     user_id = uuid.uuid4()
     async with control_session_factory() as session:
         session.add(User(id=user_id, email="plain@example.com", status="active"))
@@ -552,29 +552,34 @@ async def test_untrusted_or_unverified_email_does_not_link(control_session_facto
         )
         is None
     )
-    trusted = UserLinker(control_session_factory, _config(trusted=True))
-    assert (
-        await trusted.link(
-            IdentityClaims(
-                issuer="https://idp", subject="sub-4", email="plain@example.com",
-                email_verified=False,
-            )
-        )
-        is None
-    )
+    # no IdentityLink for sub-3 and no duplicate user: the taken email fails
+    # the users.email partial unique index, so the request fails closed
 
 
-async def test_no_silent_provisioning(control_session_factory):
+async def test_unlinked_identity_creates_user(control_session_factory):
     linker = UserLinker(control_session_factory, _config(trusted=True))
-    assert (
-        await linker.link(
-            IdentityClaims(
-                issuer="https://idp", subject="sub-5", email="nobody@example.com",
-                email_verified=True,
-            )
+    user = await linker.link(
+        IdentityClaims(
+            issuer="https://idp", subject="sub-5", email="nobody@example.com",
+            email_verified=True,
         )
-        is None
     )
+    assert user is not None and user.status == "active"
+    assert user.email == "nobody@example.com"
+    # IdentityLink(issuer, subject=sub-5) exists and points at the new user
+
+
+async def test_unverified_email_is_not_stored(control_session_factory):
+    linker = UserLinker(control_session_factory, _config(trusted=True))
+    user = await linker.link(
+        IdentityClaims(
+            issuer="https://idp", subject="sub-6", email="unverified@example.com",
+            email_verified=False,
+        )
+    )
+    assert user is not None and user.status == "active"
+    assert user.email is None
+    # IdentityLink(issuer, subject=sub-6) exists and points at the new user
 ```
 
 Add `import sqlalchemy as sa` at the top.
@@ -676,11 +681,14 @@ Append to `src/jdlib/authn/oidc.py`:
 
 ```python
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 import sqlalchemy as sa
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jdlib.authn.base import bearer_token
+from jdlib._uuid import uuid7
+from jdlib.authn.base import bearer_token, record_authn_failure
 from jdlib.control.audit import PlatformAudit
 from jdlib.control.models import IdentityLink, User
 from jdlib.control.session import ControlPlaneSession
@@ -697,36 +705,61 @@ class UserLinker:
 
     async def link(self, claims: IdentityClaims) -> User | None:
         async with ControlPlaneSession(self._session_factory()) as session:
-            link = (
-                await session.execute(
-                    sa.select(IdentityLink).where(
-                        IdentityLink.issuer == claims.issuer,
-                        IdentityLink.subject == claims.subject,
+            linked = await self._linked_user(session, claims)
+            if linked is not None:
+                return linked
+            try:
+                user = await self._trusted_email_user(session, claims)
+                if user is None:
+                    user = User(
+                        id=uuid7(),
+                        email=claims.email if claims.email_verified else None,
+                        status="active",
                     )
+                    session.add(user)
+                    await session.flush()
+                session.add(
+                    IdentityLink(user_id=user.id, issuer=claims.issuer, subject=claims.subject)
                 )
-            ).scalar_one_or_none()
-            if link is not None:
-                user = await session.get(User, link.user_id)
-                if user is None or user.status != "active":
-                    return None
-                return user
-            if not self._config.email_trusted or not claims.email_verified or not claims.email:
-                return None
-            user = (
-                await session.execute(
-                    sa.select(User).where(
-                        sa.func.lower(User.email) == claims.email.lower(),
-                        User.status == "active",
-                    )
-                )
-            ).scalar_one_or_none()
-            if user is None:
-                return None
-            session.add(
-                IdentityLink(user_id=user.id, issuer=claims.issuer, subject=claims.subject)
-            )
-            await session.commit()
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                return await self._linked_user(session, claims)
             return user
+
+    async def _trusted_email_user(
+        self, session: ControlPlaneSession, claims: IdentityClaims
+    ) -> User | None:
+        if not self._config.email_trusted or not claims.email_verified or not claims.email:
+            return None
+        return (
+            await session.execute(
+                sa.select(User).where(
+                    sa.func.lower(User.email) == claims.email.lower(),
+                    User.status == "active",
+                )
+            )
+        ).scalar_one_or_none()
+
+    async def _linked_user(
+        self, session: ControlPlaneSession, claims: IdentityClaims
+    ) -> User | None:
+        link: IdentityLink | None = (
+            await session.execute(
+                sa.select(IdentityLink).where(
+                    IdentityLink.issuer == claims.issuer,
+                    IdentityLink.subject == claims.subject,
+                )
+            )
+        ).scalar_one_or_none()
+        if link is None:
+            return None
+        user: User | None = await session.get(User, link.user_id)
+        if user is None or user.status != "active":
+            return None
+        link.last_login_at = datetime.now(UTC)
+        await session.commit()
+        return user
 
 
 class OidcAuthenticator:
@@ -740,7 +773,6 @@ class OidcAuthenticator:
         linker: UserLinker,
         audit: PlatformAudit,
     ) -> None:
-        self._config = config
         self._cache = cache
         self._verifier = verifier
         self._mapper = mapper
@@ -752,27 +784,21 @@ class OidcAuthenticator:
         if token is None:
             return None
         try:
-            key = await self._cache.signing_key(_kid(token))
+            kid = _kid(token)
+        except AuthenticationError:
+            return None
+        try:
+            key = await self._cache.signing_key(kid)
             if key is None:
                 raise InvalidToken("unknown signing key")
             claims = self._verifier.verify(token, key)
             identity = self._mapper.map(claims)
-        except AuthenticationError as exc:
-            await self._audit.record(
-                action="authn.failed",
-                tenant_id=None,
-                actor_id=None,
-                metadata={"reason": type(exc).__name__},
-            )
+            user = await self._linker.link(identity)
+        except Exception as exc:
+            await record_authn_failure(self._audit, type(exc).__name__)
             return None
-        user = await self._linker.link(identity)
         if user is None:
-            await self._audit.record(
-                action="authn.failed",
-                tenant_id=None,
-                actor_id=None,
-                metadata={"reason": "unlinked_identity"},
-            )
+            await record_authn_failure(self._audit, "unlinked_identity")
             return None
         return Principal(kind=PrincipalKind.USER, id=user.id, user_id=user.id)
 ```
@@ -796,7 +822,7 @@ and import `AuthenticationError` from `jdlib.errors`.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/unit/test_oidc_authenticator.py tests/integration/test_oidc_linking.py -v -W error`
-Expected: PASS (6 passed)
+Expected: PASS (14 passed)
 
 - [ ] **Step 5: Full suite, lint, type check, commit**
 
@@ -806,6 +832,14 @@ Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest -q -
 git add src/jdlib/authn/oidc.py tests/unit/test_oidc_authenticator.py tests/integration/test_oidc_linking.py
 git commit -m "feat: oidc user linking and authenticator"
 ```
+
+**Review fixes applied (follow-up commit from the Phase 4d final review):**
+
+- Linking now implements the frozen third branch: no IdentityLink and no trusted-email match → create a `User` (email only when `claims.email_verified`, else `None`), flush it (FK ordering), insert the `IdentityLink`, commit. `test_no_silent_provisioning` became `test_unlinked_identity_creates_user`; `test_unverified_email_is_not_stored` was added and the untrusted-email test now asserts no link and no duplicate user (a taken email fails the `users.email` partial unique index, so the request fails closed).
+- `IdentityLink.last_login_at` is set on link matches.
+- The authenticator audits only tokens that parse as a JWT with a `kid` header (`_kid` success path); foreign tokens return `None` silently. `test_authenticator_denies_and_audits_failures` was replaced by `test_authenticator_ignores_tokens_outside_its_scheme_without_audit` and `test_authenticator_audits_jwt_failures_without_token_material`.
+- The authenticate body is fail-closed: `JdlibError`, SQLAlchemy, and JWKS fetch errors are audited as `authn.failed` with the exception class name (`test_authenticator_fails_closed_when_jwks_fetch_raises`, `test_authenticator_fails_closed_when_linking_raises`), never with token material.
+- The unused `OidcAuthenticator._config` attribute was dropped; the constructor still accepts `config` for symmetry.
 
 ---
 
@@ -817,7 +851,7 @@ git commit -m "feat: oidc user linking and authenticator"
 - Create: `tests/integration/test_apikey_auth.py`
 
 **Interfaces:**
-- Produces: `parse_api_key(token) -> ParsedApiKey(key_prefix, secret)`; `hash_api_key_secret(secret) -> str`; `ApiKeyAuthenticator(session_factory, audit)` with `async authenticate(request) -> Principal | None`.
+- Produces: `parse_api_key(token) -> ParsedApiKey(key_prefix, secret)`; `hash_api_key_secret(secret) -> str`; `ApiKeyAuthenticator(session_factory, audit, config: ApiKeyConfig | None = None)` with `async authenticate(request) -> Principal | None`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -994,34 +1028,26 @@ class ApiKeyAuthenticator:
         *,
         session_factory: Callable[[], AsyncSession],
         audit: PlatformAudit,
+        config: ApiKeyConfig | None = None,
         clock: Clock | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._audit = audit
+        self._prefix = (config or ApiKeyConfig()).prefix
         self._clock = clock or SystemClock()
 
     async def authenticate(self, request: RequestInfo) -> Principal | None:
         token = bearer_token(request)
-        if token is None:
+        if token is None or token.split(".", 1)[0] != self._prefix:
             return None
         try:
             parsed = parse_api_key(token)
             principal = await self._resolve(parsed)
-        except AuthenticationError as exc:
-            await self._audit.record(
-                action="authn.failed",
-                tenant_id=None,
-                actor_id=None,
-                metadata={"reason": type(exc).__name__},
-            )
+        except Exception as exc:
+            await record_authn_failure(self._audit, type(exc).__name__)
             return None
         if principal is None:
-            await self._audit.record(
-                action="authn.failed",
-                tenant_id=None,
-                actor_id=None,
-                metadata={"reason": "invalid_api_key"},
-            )
+            await record_authn_failure(self._audit, "invalid_api_key")
         return principal
 
     async def _resolve(self, parsed: ParsedApiKey) -> Principal | None:
@@ -1042,22 +1068,23 @@ class ApiKeyAuthenticator:
             )
             if account is None or account.status != "active":
                 return None
-            key.last_used_at = self._clock.now()
-            await session.commit()
             scopes = frozenset(key.scopes) if key.scopes is not None else None
-            return Principal(
+            principal = Principal(
                 kind=PrincipalKind.SERVICE_ACCOUNT,
                 id=account.id,
                 tenant_id=key.tenant_id,
                 api_key_id=key.id,
                 scopes=scopes,
             )
+            key.last_used_at = self._clock.now()
+            await session.commit()
+            return principal
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/unit/test_apikey_parser.py tests/integration/test_apikey_auth.py -v -W error`
-Expected: PASS (5 passed)
+Expected: PASS (9 passed)
 
 - [ ] **Step 5: Full suite, lint, type check, commit**
 
@@ -1072,6 +1099,12 @@ git commit -m "feat: api key authentication with tenant pinning"
 
 - `tests/integration/test_apikey_auth.py` now asserts the exact audit count, action (`authn.failed`), reason values (`InvalidToken` for a malformed token; `invalid_api_key` for unknown prefix, wrong secret, revoked, expired, and suspended-SA denials), and null tenant/actor for every denial path, plus that no token, secret, prefix, or stored Argon2 hash material appears in any entry (the seed helper returns the hash).
 - Missing/malformed `Authorization` headers (absent, empty, non-Bearer scheme, `Bearer` with no value) deny with `None` and record nothing.
+
+**Final review fixes applied (follow-up commit from the Phase 4d final review):**
+
+- `ApiKeyAuthenticator` takes `config: ApiKeyConfig | None` and audits only tokens whose first segment equals the configured prefix (default `jd`); a JWT or any foreign token returns `None` silently (`test_tokens_without_the_configured_prefix_are_ignored_without_audit`, `test_configured_prefix_gates_auditing`).
+- The authenticate body is fail-closed: unexpected errors (SQLAlchemy, `JdlibError`) are audited as `authn.failed` with the exception class name and no token material (`test_unexpected_errors_fail_closed_and_audit_without_material`).
+- The principal reads (`key.scopes`, `key.id`, `account.id`, `key.tenant_id`) happen before the `last_used_at` commit so the detached `Principal` never triggers a lazy refresh.
 
 ---
 
@@ -1312,7 +1345,7 @@ Note: type `tenant_id` as `uuid.UUID`; add the import.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 .venv/Scripts/python -m pytest tests/integration/test_auth_wiring.py -v -W error`
-Expected: PASS (2 passed)
+Expected: PASS (3 passed)
 
 - [ ] **Step 5: Docs, full suite, lint, type check, commit**
 
@@ -1325,17 +1358,23 @@ git add src/jdlib/control/registry.py src/jdlib/authn/wiring.py tests/integratio
 git commit -m "feat: context factory port adapters and end-to-end auth wiring"
 ```
 
-**Final state (shipped):** `TenantRegistry.find` builds the `TenantRecord` inline from the tenant row plus its placement and returns `None` for an empty ref, an unknown id/slug, or a missing placement. `src/jdlib/authn/wiring.py` ships the three adapters exactly as sketched (with `can_act`'s `tenant_id` typed `uuid.UUID`). Test corrections over the sketch: `ContextFactory(operators=...)` receives a two-line inline `OperatorAuthorizer` stub (`ControlAccessReader` is not one); the middleware chain is `[HeaderResolver, ApiKeyResolver]` so the API-key's pinned tenant resolves when no header is present; and `principal_provider=authenticator.authenticate` because the `PrincipalProvider` port is callable while `Authenticator` exposes `authenticate`. The test also covers `PrincipalDirectoryAdapter.is_active` denial and `EntitlementAdapter.can_act` for an active non-member, and drops the unused `async_engine` fixture argument. `build_authenticator` from the Interfaces line was not implemented: no step, signature, or test required it, and authenticator assembly belongs with the FastAPI/CLI integrations (Plan 6).
+**Final state (shipped):** `TenantRegistry.find` builds the `TenantRecord` inline from the tenant row plus its placement and returns `None` for an empty ref, an unknown id/slug, or a missing placement (`test_find_returns_record_for_id_and_slug`, `test_find_unknown_id_and_slug_return_none`, `test_find_missing_placement_returns_none`); `assert_servable` raises `ProvisioningError` for the same missing-placement condition (registry invariant). `src/jdlib/authn/wiring.py` ships the three adapters exactly as sketched (with `can_act`'s `tenant_id` typed `uuid.UUID`). Test corrections over the sketch: `ContextFactory(operators=...)` receives a two-line inline `OperatorAuthorizer` stub (`ControlAccessReader` is not one); the middleware chain is `[HeaderResolver, ApiKeyResolver]` so the API-key's pinned tenant resolves when no header is present; and `principal_provider=authenticator.authenticate` because the `PrincipalProvider` port is callable while `Authenticator` exposes `authenticate`. The test also covers `PrincipalDirectoryAdapter.is_active` denial and `EntitlementAdapter.can_act` for an active non-member, and drops the unused `async_engine` fixture argument.
+
+**Final review fixes applied (follow-up commit from the Phase 4d final review):**
+
+- `ContextFactory.for_principal` enforces a service-account tenant pin: when `principal.kind is SERVICE_ACCOUNT` and `principal.tenant_id` differs from the resolved tenant id it raises `TenantAccessDenied` before entitlement and servability (unit tests in `tests/unit/test_context_factory.py`; end-to-end `test_api_key_pinned_to_tenant_a_presenting_tenant_b_gets_404` sends a tenant-A key with `X-Tenant-Slug` for tenant B and gets 404).
+- `build_authenticator(config, session_factory, audit)` is now implemented: it assembles OIDC + API-key into a `CompositeAuthenticator` from `TenancyConfig`, skipping the OIDC member when `config.oidc is None`, with an httpx JWKS fetcher. Unit-tested in `tests/unit/test_authn_wiring.py`.
+- `tests/integration/test_authn_composite.py` proves the chain audits nothing on success in both orders (valid JWT with an API-key authenticator present; valid API key with an OIDC authenticator present), covering the per-scheme audit scoping.
 
 ---
 
 ## Phase 4d Exit Criteria
 
 - [ ] Full suite green on real PostgreSQL 16.
-- [ ] OIDC: JWKS caching/rotation, verification (issuer/audience/algorithms/leeway), claim mapping, linking algorithm (IdentityLink → trusted verified email → deny), failures audited without token material.
-- [ ] API keys: shape parsing, Argon2id verification, status/expiry checks, tenant pinning, scopes, `last_used_at`, failures audited.
-- [ ] Composite authenticator first-wins; no authentication bypass.
-- [ ] `ContextFactory` ports wired to registry/reader; API-key principal flows through `TenantMiddleware` to a tenant context end-to-end.
+- [ ] OIDC: JWKS caching/rotation, verification (issuer/audience/algorithms/leeway), claim mapping, linking algorithm (IdentityLink → trusted verified email → create user, unverified email never stored), failures audited without token material.
+- [ ] API keys: shape parsing, Argon2id verification, status/expiry checks, tenant pinning, scopes, `last_used_at`, failures audited only for tokens with the configured prefix.
+- [ ] Composite authenticator first-wins; each authenticator audits only its own scheme; unexpected failures are audited fail-closed; no authentication bypass.
+- [ ] `ContextFactory` ports wired to registry/reader; API-key principal flows through `TenantMiddleware` to a tenant context end-to-end; a service-account tenant pin mismatch is denied with 404.
 - [ ] `ruff` and strict `mypy` clean.
 
 ## Plan Series (remaining)
