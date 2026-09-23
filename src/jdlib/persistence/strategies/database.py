@@ -33,6 +33,19 @@ def _database_name(dsn: str) -> str:
 
 
 class DatabasePerTenantStrategy:
+    """Database-per-tenant isolation with a bounded, handle-keyed engine cache.
+
+    Engines are created lazily from the secret resolved for each tenant handle
+    and kept in LRU order. When ``max_targets`` is reached, eviction considers
+    idle engines only, least-recently-used first; an engine with checked-out
+    connections is never closed and cap pressure raises ``PoolCapacityError``.
+
+    Secret rotation contract: a cached engine keeps the DSN that was resolved
+    when it was created. Rotating a handle's secret takes effect only after
+    that engine leaves the cache (deprovision, idle eviction, or ``dispose``);
+    there is no hot reload.
+    """
+
     name = "database"
     capabilities = StrategyCapabilities(supports_rls=False, supports_ddl=True)
 

@@ -14,9 +14,16 @@ _TENANT_SCHEMA_RE = re.compile(r"t_[a-z0-9][a-z0-9_]{0,50}")
 DEPLOYMENT_SCHEMA_RE = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 
+_POSTGRES_DRIVERS = {
+    "postgresql",
+    "postgresql+asyncpg",
+    "postgresql+psycopg2",
+}
+
+
 def _sync_url(database_url: str) -> str:
     url = sa.engine.make_url(database_url)
-    if url.drivername == "postgresql+asyncpg":
+    if url.drivername in _POSTGRES_DRIVERS:
         url = url.set(drivername="postgresql+psycopg")
     return url.render_as_string(hide_password=False)
 
@@ -55,7 +62,7 @@ class MigrationRunner:
             raise ProvisioningError(f"invalid schema name: {schema!r}")
 
     def upgrade_control(self, revision: str = "head") -> None:
-        engine = sa.create_engine(self._database_url, future=True)
+        engine = sa.create_engine(_sync_url(self._database_url), future=True)
         with engine.begin() as connection:
             connection.execute(sa.schema.CreateSchema(CONTROL_SCHEMA, if_not_exists=True))
         engine.dispose()
@@ -75,7 +82,7 @@ class MigrationRunner:
 
     def provision_tenant_schema(self, schema: str, revision: str = "head") -> None:
         self._validate_tenant_schema(schema)
-        engine = sa.create_engine(self._database_url, future=True)
+        engine = sa.create_engine(_sync_url(self._database_url), future=True)
         with engine.begin() as connection:
             connection.execute(sa.schema.CreateSchema(schema, if_not_exists=True))
         engine.dispose()

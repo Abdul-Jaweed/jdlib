@@ -45,7 +45,6 @@ async def make_strategy(
     yield factory
     for strategy in created:
         await strategy.dispose()
-        await strategy.dispose()
 
 
 async def test_provision_migrate_deprovision_second_database(postgres_url, make_strategy):

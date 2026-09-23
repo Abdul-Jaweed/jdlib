@@ -8,7 +8,7 @@ import sqlalchemy as sa
 from jdlib.context import TenantRecord
 from jdlib.control.enums import PlacementStrategy, TenantStatus
 from jdlib.errors import PoolCapacityError, StrategyCapabilityError
-from jdlib.migrations.runner import MigrationRunner
+from jdlib.migrations.runner import MigrationRunner, _sync_url
 from jdlib.persistence.secrets import EnvSecretProvider, MemorySecretProvider
 from jdlib.persistence.strategies.database import DatabasePerTenantStrategy
 from jdlib.persistence.strategies.deprovision import DeprovisionMode
@@ -277,6 +277,50 @@ def test_tenant_version_url_overrides_sqlalchemy_url(monkeypatch):
     assert version == "0001_tenant_baseline"
     assert captured["url"] == "postgresql+psycopg://u:p@h/tenant_db"
     assert engine.disposed is True
+
+
+def test_sync_url_normalizes_postgres_drivers_to_psycopg():
+    assert _sync_url("postgresql://u:p@h/db") == "postgresql+psycopg://u:p@h/db"
+    assert _sync_url("postgresql+psycopg2://u:p@h/db") == "postgresql+psycopg://u:p@h/db"
+    assert _sync_url("postgresql+asyncpg://u:p@h/db") == "postgresql+psycopg://u:p@h/db"
+    assert _sync_url("postgresql+psycopg://u:p@h/db") == "postgresql+psycopg://u:p@h/db"
+    engine = sa.create_engine(_sync_url("postgresql+asyncpg://u:p@h/db"), future=True)
+    try:
+        assert engine.dialect.driver == "psycopg"
+    finally:
+        engine.dispose()
+
+
+class _NullBegin:
+    def __enter__(self) -> _NullBegin:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def execute(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+def test_sync_engine_creation_from_asyncpg_dsn_without_masked_create_engine(monkeypatch):
+    captured: list[str] = []
+    real_create_engine = sa.create_engine
+
+    def recording_create_engine(url: str, **kwargs: object) -> sa.Engine:
+        engine = real_create_engine(url, **kwargs)
+        captured.append(engine.url.render_as_string(hide_password=False))
+        monkeypatch.setattr(engine, "begin", lambda: _NullBegin())
+        return engine
+
+    monkeypatch.setattr("jdlib.migrations.runner.sa.create_engine", recording_create_engine)
+    monkeypatch.setattr("jdlib.migrations.runner.command.upgrade", lambda *args, **kwargs: None)
+    runner = MigrationRunner("postgresql+asyncpg://u:p@h/base")
+    runner.upgrade_control()
+    runner.provision_tenant_schema("t_sync")
+    assert captured == [
+        "postgresql+psycopg://u:p@h/base",
+        "postgresql+psycopg://u:p@h/base",
+    ]
 
 
 def test_percent_encoded_dsn_survives_config_interpolation(monkeypatch):

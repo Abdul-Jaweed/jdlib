@@ -33,14 +33,18 @@ resolve tenant (control plane)
   → TenantSession(context, connection)
 ```
 
-- Pools are keyed by `(strategy, target_handle)`; a connection never serves two
-  targets.
-- `SessionRouter` caches pools lazily with a configurable max-pool cap
-  (default: 64) and LRU eviction of idle pools. A hybrid deployment with many
-  dedicated tenants cannot exhaust connections silently; cap exhaustion raises
-  `PoolCapacityError`.
-- Eviction safety: a pool with any checked-out connection is never evicted;
-  eviction only closes fully idle pools. When the cap is reached and every
+- A connection never serves two targets: shared/schema strategies own a single
+  engine each, and the database strategy keys one cached engine per resolved
+  handle.
+- `SessionRouter` is a thin dispatcher: it selects the registered
+  `IsolationStrategy` for the tenant's placement and delegates; it owns no
+  pools of its own.
+- Pool caching lives in `DatabasePerTenantStrategy`: engines are keyed by
+  resolved handle, created lazily, and capped by `max_targets` (default 32). A
+  hybrid deployment with many dedicated tenants cannot exhaust connections
+  silently; cap exhaustion raises `PoolCapacityError`.
+- Eviction safety: eviction is LRU over fully idle pools only; a pool with any
+  checked-out connection is never evicted. When the cap is reached and every
   candidate has checked-out connections, `PoolCapacityError` is raised instead
   of closing a live pool (test: checked-out Pool A must survive cap pressure).
 - No strategy ever falls back to another target. Unresolvable placement raises
@@ -98,8 +102,11 @@ resolve tenant (control plane)
 
 ## 6. RLS (shared schema only)
 
-- Enabled by config `rls: on`; requesting it with `schema`/`database` placement
-  raises `StrategyCapabilityError` at startup.
+- Enabled by config `rls: on` (`RlsConfig.enabled`); `install_rls`/`verify_rls`
+  ship and are exercised by tests. The startup gate (requesting RLS with
+  `schema`/`database` placement raises `StrategyCapabilityError` before
+  serving) and the CLI wiring that runs `install_rls`/`verify_rls` at deploy
+  time are Plan 6 exit items.
 - Coverage contract: **every tenant-routed model is RLS-eligible — framework
   tenant-plane tables and application resources alike**. Control-plane
   tenant-owned tables (`membership`, `role`, `role_binding`, `resource_grant`,

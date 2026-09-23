@@ -415,21 +415,21 @@ class TenantRepository(Generic[ModelT]):
     async def count(self, *criteria) -> int: ...
 
 class SessionRouter:
-    def __init__(self, config: TenancyConfig, control_engine: AsyncEngine,
-                 secret_provider: SecretProvider,
-                 strategies: Mapping[StrategyName, IsolationStrategy]) -> None: ...
-    async def tenant_session(self, ctx: TenantContext) -> TenantSession: ...
-    async def control_session(self) -> ControlPlaneSession: ...   # internal
-    async def dispose(self) -> None: ...
+    def __init__(self, strategies: Mapping[PlacementStrategy, IsolationStrategy]) -> None: ...
+    async def session(self, tenant: TenantRecord) -> AsyncSession: ...
 
 class SharedSchemaStrategy:  name, capabilities, session, provision, migrate, deprovision
-class SchemaPerTenantStrategy: ...  # search_path set on checkout, validated handle
+class SchemaPerTenantStrategy: ...  # per-begin search_path, validated handle
 class DatabasePerTenantStrategy: ...  # handle → SecretProvider → pool
 ```
 
-`SessionRouter` owns the `PoolCache` (LRU, cap, never evicts pools with
-checked-out connections) and rejects `context.tenant_id` mismatches before
-opening a session.
+`SessionRouter` is a thin dispatcher over the strategy registry: it selects
+the `IsolationStrategy` for `tenant.strategy` and delegates, raising
+`StrategyCapabilityError` for an unregistered placement. The pool cache lives
+in `DatabasePerTenantStrategy` (`max_targets`, default 32): engines are created
+lazily per handle and evicted LRU among fully idle pools only; a pool with any
+checked-out connection is never closed, and cap exhaustion raises
+`PoolCapacityError`.
 
 ## 8. Control-plane services
 

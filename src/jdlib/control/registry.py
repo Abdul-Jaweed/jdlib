@@ -208,6 +208,27 @@ class TenantRegistry:
                         f"tenant {slug} already exists with a different placement"
                     )
                 return existing
+            if strategy in (PlacementStrategy.SCHEMA, PlacementStrategy.DATABASE):
+                await self._handle_lock(session, target_handle)
+                conflict: uuid.UUID | None = (
+                    await session.execute(
+                        sa.select(TenantPlacement.tenant_id)
+                        .where(
+                            TenantPlacement.target_handle == target_handle,
+                            TenantPlacement.strategy.in_(
+                                (
+                                    PlacementStrategy.SCHEMA.value,
+                                    PlacementStrategy.DATABASE.value,
+                                )
+                            ),
+                        )
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if conflict is not None:
+                    raise ProvisioningError(
+                        f"target handle {target_handle!r} is already assigned to another tenant"
+                    )
             tenant = Tenant(
                 slug=slug,
                 name=name,
@@ -252,6 +273,13 @@ class TenantRegistry:
         await session.execute(
             sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))").bindparams(
                 key=f"jdlib:tenant-slug:{slug}"
+            )
+        )
+
+    async def _handle_lock(self, session: ControlPlaneSession, handle: str) -> None:
+        await session.execute(
+            sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))").bindparams(
+                key=f"jdlib:tenant-handle:{handle}"
             )
         )
 

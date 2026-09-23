@@ -987,6 +987,16 @@ git commit -m "test: strategy matrix; docs sync"
 
 ---
 
+**Final review fixes applied (follow-up commit `fix: sync dsn normalization, placement handle uniqueness, docs sync`):**
+
+- **DSN normalization (merge-blocking).** `_sync_url` now normalizes `postgresql://`, `postgresql+psycopg2://` and `postgresql+asyncpg://` to the declared `postgresql+psycopg` driver, and both `upgrade_control` and `provision_tenant_schema` route through it before `sa.create_engine`; previously those two paths handed the raw DSN to a sync engine, so an asyncpg DSN produced an unusable engine (`MissingGreenlet` at connect). Unit coverage creates a real sync engine from an asyncpg DSN with the real `create_engine` (recording wrapper, not a mask) and asserts plain `postgresql://` normalizes to psycopg.
+- **Placement handle uniqueness (Important).** `TenantRegistry.create` rejects a `target_handle` already owned by another tenant's `schema`/`database` placement with `ProvisioningError`, because duplicate handles would make `deprovision` drop the wrong target. The check is advisory-locked on the handle (mirroring the slug lock); shared placements remain free to reuse a handle.
+- **Docs drift.** `06-strategy-matrix.md` §2/§6 and `07-implementation-design.md` §7 now describe the shipped router/pool split: `SessionRouter` is a thin dispatcher; the handle-keyed LRU cache with `max_targets=32` and idle-only eviction lives in `DatabasePerTenantStrategy`; the RLS `enabled` startup gate and the CLI wiring of `install_rls`/`verify_rls` are Plan 6 exit items.
+- **Interface-compat `runner` params (minor).** The constructor `runner` parameters on `SchemaPerTenantStrategy` and `DatabasePerTenantStrategy` are unused: `IsolationStrategy.migrate(tenant, runner)` receives the runner explicitly and the constructor reference is never read. They are retained only so existing construction sites keep their signatures and can be deleted in a breaking cleanup.
+- **Minor cleanup.** `DatabasePerTenantStrategy` documents the idle-only LRU eviction and the secret-rotation contract (a cached engine keeps its resolved DSN until it is evicted; no hot reload); the duplicated `await strategy.dispose()` in the database-strategy integration fixture is removed.
+
+---
+
 ## Phase 5 Exit Criteria
 
 - [ ] Full suite green on real PostgreSQL 16.
