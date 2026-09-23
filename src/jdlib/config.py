@@ -43,9 +43,30 @@ class ResolverConfig(BaseModel):
         return value
 
 
+class OidcConfig(BaseModel):
+    issuer: str
+    audience: str
+    algorithms: list[str] = ["RS256"]
+    jwks_url: str | None = None
+    jwks_ttl: timedelta = timedelta(hours=1)
+    leeway: timedelta = timedelta(seconds=60)
+    email_trusted: bool = False
+
+    def resolved_jwks_url(self) -> str:
+        if self.jwks_url:
+            return self.jwks_url
+        return self.issuer.rstrip("/") + "/.well-known/jwks.json"
+
+
+class ApiKeyConfig(BaseModel):
+    prefix: str = "jd"
+
+
 class TenancyConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="JDLIB_", env_nested_delimiter="__")
 
     control_dsn: SecretStr | None = None
     context: ContextConfig
     resolvers: ResolverConfig = ResolverConfig()
+    oidc: OidcConfig | None = None
+    api_keys: ApiKeyConfig = ApiKeyConfig()
