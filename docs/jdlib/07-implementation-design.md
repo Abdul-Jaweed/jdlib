@@ -750,17 +750,30 @@ routed-table set.
 FastAPI (`integrations/fastapi.py`):
 
 ```python
-def install(app: FastAPI, container: JdlibContainer) -> None: ...  # middleware + handlers
+@dataclass(frozen=True, slots=True)
+class JdlibContainer:
+    session_factory: Callable[[], AsyncSession]
+    uow_factory: Callable[[], UnitOfWork]
+    enforcer: Enforcer
 
-async def get_context() -> TenantContext: ...          # dependency
-async def get_uow() -> AsyncIterator[UnitOfWork]: ...  # one UoW per request
-def require(permission: str, target_factory: Callable[..., ScopeRef] = tenant_target) -> ...: ...
+def install(
+    app: FastAPI,
+    *,
+    factory: ContextFactory,
+    chain: ResolverChain,
+    principal_provider: PrincipalProvider,
+    container: JdlibContainer | None = None,
+) -> None: ...  # middleware + handlers
+
+async def get_context() -> TenantContext: ...  # dependency
+async def get_uow(request: Request) -> AsyncIterator[UnitOfWork]: ...  # one UoW per request
+def require(permission: str, target_factory: Callable[..., Target] | None = None) -> ...: ...
 ```
 
-CLI (`integrations/cli.py`, typer): `tenant create|provision|suspend|resume|
-archive|deprovision|migrate|relocate`, `db upgrade-control|upgrade-tenants`,
-`lint schema`, `operator grant`. Every command builds a system/operator context
-and audits.
+CLI (`integrations/cli.py`, typer): `tenant create|provision|list`,
+`db upgrade-control|upgrade-tenants`, `rls install|verify`, `schema lint`.
+Every command accepts `--database-url` (default `JDLIB_CONTROL_DSN`) and
+`--json`.
 
 ## 15. Testing design
 
@@ -769,16 +782,21 @@ and audits.
 - Integration tests: one parametrized fixture
   (`strategy_matrix`) yields `(strategy, rls_on)` combinations against
   testcontainers Postgres; the same behavioral tests run everywhere.
-- `jdlib.testing` exports `tenants`, `tenant_context`, `strategy_matrix`,
-  `assert_isolation`, `assert_cross_tenant_rejected`, `assert_rls_matrix`.
+- `jdlib.testing` exports `assert_scoped_count`, `assert_tenant_isolated`,
+  `assert_cross_tenant_write_rejected`; the `pytest11` plugin supplies
+  `jdlib_database_url`, `jdlib_schema`, `jdlib_models`, `jdlib_engine`, and
+  `jdlib_session_factory` fixtures.
 - Lint tests run L1–L19 against the consumer's combined metadata.
 - TDD is the implementation workflow: each phase's gate tests are written
   before the phase's code.
 
 ## 16. Cross-cutting rules
 
-- Public API is exactly the re-exports in `jdlib/__init__.py`; everything else
-  is internal-by-convention with an underscore or module privacy.
+- Public API is exactly the re-exports in `jdlib/__init__.py`: `TenancyConfig`,
+  `TenantContext`, `current_tenant`, `current_principal`, `ContextFactory`,
+  `UnitOfWork`, `TenantRepository`, `TenantRegistry`, `AccessControl`,
+  `requires`, `authorize`, `JdlibError`, and the `errors` module; everything
+  else is internal-by-convention with an underscore or module privacy.
 - Strict typing (`pyright`/`mypy --strict` for `src/jdlib`); public functions
   carry complete annotations; no `Any` in public signatures.
 - Immutable value objects for context/principals/decisions; ORM models are

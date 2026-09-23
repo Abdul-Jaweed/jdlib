@@ -351,6 +351,26 @@ git add src/jdlib/__init__.py README.md docs tests/unit/test_public_api.py
 git commit -m "feat: public api, readme, final validation"
 ```
 
+**Shipped (back-port from the Task 4 implementation):** the public API is
+exactly `TenancyConfig`, `TenantContext`, `current_tenant`, `current_principal`,
+`ContextFactory`, `UnitOfWork`, `TenantRepository`, `TenantRegistry`,
+`AccessControl`, `requires`, `authorize`, `JdlibError`, and the `errors`
+module, with `__version__ = "0.1.0"`; `tests/unit/test_public_api.py` pins the
+exact `__all__` set, name resolution, the version type, and the
+no-`fastapi`/`typer`/`pytest` import contract in a clean subprocess.
+`README.md` covers install, the 60-second quickstart (config, migrate,
+provision, FastAPI/authn wiring), tenant-scoped data access, the strategy
+matrix, RLS enablement, the testing kit, the CLI, and extension points.
+`docs/jdlib/07-implementation-design.md` was updated to the final public API
+list and to the shipped `install`/`require` signatures, CLI groups, and
+`jdlib.testing` exports. Validation: full suite `543 passed` with `-W error`
+and testcontainers (`TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1`), `ruff check .`
+clean, strict `mypy src/jdlib` clean (64 source files), `import jdlib` prints
+`0.1.0`; no `TODO|FIXME|XXX|NotImplementedError` hits and no `print(`/
+`echo=True` output in `src`/`tests`; the plain
+`pytest tests/unit/test_public_api.py` run passes with the plugin
+autoloaded.
+
 ---
 
 ## Phase 6 Exit Criteria
