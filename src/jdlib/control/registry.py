@@ -258,6 +258,7 @@ class TenantRegistry:
                 tenant_id=tenant.id,
                 actor_id=actor_id,
                 metadata={"slug": slug},
+                session=session,
             )
             await session.commit()
             return tenant
@@ -318,7 +319,10 @@ class TenantRegistry:
                 state.status = MigrationStatus.SUCCESS.value
                 state.last_error = None
                 await self._audit.record(
-                    action="tenant.migration.succeeded", tenant_id=tenant_id, actor_id=None
+                    action="tenant.migration.succeeded",
+                    tenant_id=tenant_id,
+                    actor_id=None,
+                    session=session,
                 )
             except Exception as exc:
                 state.status = MigrationStatus.FAILED.value
@@ -328,6 +332,7 @@ class TenantRegistry:
                     tenant_id=tenant_id,
                     actor_id=None,
                     metadata={"error": str(exc)},
+                    session=session,
                 )
                 await session.commit()
                 raise
@@ -335,7 +340,7 @@ class TenantRegistry:
             tenant.suspended_reason = None
             tenant.suspended_at = None
             await self._audit.record(
-                action="tenant.activated", tenant_id=tenant_id, actor_id=None
+                action="tenant.activated", tenant_id=tenant_id, actor_id=None, session=session
             )
             await session.commit()
             return tenant
@@ -366,6 +371,7 @@ class TenantRegistry:
                     tenant_id=tenant_id,
                     actor_id=None,
                     metadata={"error": str(exc)},
+                    session=session,
                 )
                 await session.commit()
                 raise
@@ -373,7 +379,10 @@ class TenantRegistry:
             state.status = MigrationStatus.SUCCESS.value
             state.last_error = None
             await self._audit.record(
-                action="tenant.migration.succeeded", tenant_id=tenant_id, actor_id=None
+                action="tenant.migration.succeeded",
+                tenant_id=tenant_id,
+                actor_id=None,
+                session=session,
             )
             await session.commit()
             return tenant
@@ -425,7 +434,11 @@ class TenantRegistry:
             _require_transition(current, target)
             _apply_status(tenant, target, reason=reason)
             await self._audit.record(
-                action=action, tenant_id=tenant_id, actor_id=actor_id, metadata={"reason": reason}
+                action=action,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                metadata={"reason": reason},
+                session=session,
             )
             await session.commit()
             return tenant
@@ -473,6 +486,7 @@ class TenantRegistry:
                     tenant_id=tenant_id,
                     actor_id=actor_id,
                     metadata=metadata,
+                    session=session,
                 )
                 await session.commit()
                 return tenant
@@ -514,6 +528,7 @@ class TenantRegistry:
                 tenant_id=tenant_id,
                 actor_id=actor_id,
                 metadata=metadata,
+                session=session,
             )
             await session.commit()
             return tenant

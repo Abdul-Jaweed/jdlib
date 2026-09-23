@@ -265,6 +265,7 @@ class AccessControl:
                 tenant_id=tenant_id,
                 actor_id=actor_id,
                 metadata={"role_id": str(role.id), "name": name},
+                session=session,
             )
             await session.commit()
             return role
@@ -320,6 +321,7 @@ class AccessControl:
                     "added": sorted(new_codes - existing_codes),
                     "removed": sorted(existing_codes - new_codes),
                 },
+                session=session,
             )
             await session.commit()
             return role
@@ -368,6 +370,7 @@ class AccessControl:
                 tenant_id=tenant_id,
                 actor_id=actor_id,
                 metadata={"role_id": str(role_id)},
+                session=session,
             )
             await session.commit()
 
@@ -425,6 +428,7 @@ class AccessControl:
                     "principal_id": str(principal_id),
                     "scope": f"{scope_type}:{scope_id}",
                 },
+                session=session,
             )
             await session.commit()
             return binding
@@ -502,6 +506,7 @@ class AccessControl:
                 tenant_id=tenant_id,
                 actor_id=actor_id,
                 metadata={"binding_id": str(binding_id)},
+                session=session,
             )
             await session.commit()
 
@@ -613,6 +618,7 @@ class AccessControl:
                     "permission": permission,
                     "principal_id": str(principal_id),
                 },
+                session=session,
             )
             await session.commit()
             return grant
@@ -637,6 +643,7 @@ class AccessControl:
                 tenant_id=tenant_id,
                 actor_id=actor_id,
                 metadata={"grant_id": str(grant_id)},
+                session=session,
             )
             await session.commit()
 
@@ -883,6 +890,7 @@ class AccessControl:
                         tenant_id=tenant_id,
                         actor_id=invited_by,
                         metadata={"invitation_id": str(stale_id)},
+                        session=session,
                     )
             invitation = Invitation(
                 tenant_id=tenant_id,
@@ -902,6 +910,7 @@ class AccessControl:
                 tenant_id=tenant_id,
                 actor_id=invited_by,
                 metadata={"email": email, "role_id": str(role_id)},
+                session=session,
             )
             await session.commit()
             return invitation, token
@@ -1010,6 +1019,7 @@ class AccessControl:
                 tenant_id=invitation.tenant_id,
                 actor_id=user_id,
                 metadata={"invitation_id": str(invitation.id)},
+                session=session,
             )
             await session.commit()
             return membership
