@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from jdlib.config import RlsConfig
 from jdlib.context import TenantRecord
 from jdlib.errors import StrategyCapabilityError
 from jdlib.migrations.runner import DEPLOYMENT_SCHEMA_RE, MigrationRunner
@@ -13,16 +15,29 @@ class SharedSchemaStrategy:
     name = "shared"
     capabilities = StrategyCapabilities(supports_rls=True, supports_ddl=False)
 
-    def __init__(self, engine: AsyncEngine | None, schema: str = "public") -> None:
+    def __init__(
+        self,
+        engine: AsyncEngine | None,
+        schema: str = "public",
+        *,
+        rls: RlsConfig | None = None,
+    ) -> None:
         if DEPLOYMENT_SCHEMA_RE.fullmatch(schema) is None:
             raise StrategyCapabilityError(f"invalid schema name: {schema!r}")
         self._engine = engine
         self._schema = schema
+        self._rls = rls
 
     async def session(self, tenant: TenantRecord) -> AsyncSession:
         if self._engine is None:
             raise StrategyCapabilityError("shared strategy has no engine configured")
-        return AsyncSession(self._engine, expire_on_commit=False)
+        session = AsyncSession(self._engine, expire_on_commit=False)
+        if self._rls is not None and self._rls.enabled:
+            await session.execute(
+                sa.text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(tenant.id)},
+            )
+        return session
 
     async def provision(self, tenant: TenantRecord) -> None:
         return None

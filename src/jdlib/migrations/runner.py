@@ -37,7 +37,10 @@ class MigrationRunner:
             "script_location",
             str(Path(__file__).parent / plane),
         )
-        config.set_main_option("sqlalchemy.url", _sync_url(database_url or self._database_url))
+        config.set_main_option(
+            "sqlalchemy.url",
+            _sync_url(database_url or self._database_url).replace("%", "%%"),
+        )
         config.attributes["tenant_schema"] = tenant_schema
         return config
 

@@ -1,7 +1,7 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from jdlib.config import ContextConfig, ResolverConfig, ResolverName, TenancyConfig
+from jdlib.config import ContextConfig, ResolverConfig, ResolverName, RlsConfig, TenancyConfig
 
 
 def test_signing_key_is_required():
@@ -49,3 +49,15 @@ def test_secret_is_not_leaked_in_repr():
     config = TenancyConfig(context=ContextConfig(signing_key="top-secret"))
     assert "top-secret" not in repr(config)
     assert isinstance(config.context.signing_key, SecretStr)
+
+
+def test_rls_defaults_to_disabled():
+    config = TenancyConfig(context=ContextConfig(signing_key="s3cret"))
+    assert config.rls.enabled is False
+    assert config.rls.app_role is None
+    explicit = TenancyConfig(
+        context=ContextConfig(signing_key="s3cret"),
+        rls=RlsConfig(enabled=True, app_role="jdlib_app"),
+    )
+    assert explicit.rls.enabled is True
+    assert explicit.rls.app_role == "jdlib_app"

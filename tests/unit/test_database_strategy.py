@@ -277,3 +277,27 @@ def test_tenant_version_url_overrides_sqlalchemy_url(monkeypatch):
     assert version == "0001_tenant_baseline"
     assert captured["url"] == "postgresql+psycopg://u:p@h/tenant_db"
     assert engine.disposed is True
+
+
+def test_percent_encoded_dsn_survives_config_interpolation(monkeypatch):
+    secret = "p%40ss%25word"
+    dsn = f"postgresql+asyncpg://u:{secret}@h/tenant_db"
+    captured: list[str] = []
+    messages: list[str] = []
+
+    def fake_upgrade(config, revision):
+        captured.append(config.get_main_option("sqlalchemy.url"))
+
+    monkeypatch.setattr("jdlib.migrations.runner.command.upgrade", fake_upgrade)
+    monkeypatch.setattr(sa, "create_engine", lambda *args, **kwargs: _FakeAdminEngine())
+    runner = MigrationRunner(dsn)
+    calls = (runner.upgrade_control, lambda: runner.upgrade_tenant_url(dsn, "t_abc"))
+    for call in calls:
+        try:
+            call()
+        except Exception as exc:
+            messages.append(str(exc))
+    assert secret not in "".join(messages)
+    assert messages == []
+    expected = f"postgresql+psycopg://u:{secret}@h/tenant_db"
+    assert captured == [expected, expected]

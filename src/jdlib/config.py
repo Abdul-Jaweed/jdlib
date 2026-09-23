@@ -62,6 +62,11 @@ class ApiKeyConfig(BaseModel):
     prefix: str = "jd"
 
 
+class RlsConfig(BaseModel):
+    enabled: bool = False
+    app_role: str | None = None
+
+
 class TenancyConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="JDLIB_", env_nested_delimiter="__")
 
@@ -70,3 +75,4 @@ class TenancyConfig(BaseSettings):
     resolvers: ResolverConfig = ResolverConfig()
     oidc: OidcConfig | None = None
     api_keys: ApiKeyConfig = ApiKeyConfig()
+    rls: RlsConfig = RlsConfig()
