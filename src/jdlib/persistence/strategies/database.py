@@ -19,10 +19,16 @@ _HANDLE_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,50}")
 _MIGRATION_SCHEMA = "public"
 
 
+def validate_database_handle(value: str) -> str:
+    if _HANDLE_RE.fullmatch(value) is None:
+        raise StrategyCapabilityError(f"invalid tenant database handle: {value!r}")
+    return value
+
+
 def _handle(tenant: TenantRecord) -> str:
-    if tenant.target_handle is None or _HANDLE_RE.fullmatch(tenant.target_handle) is None:
+    if tenant.target_handle is None:
         raise StrategyCapabilityError(f"invalid database handle for tenant {tenant.slug}")
-    return tenant.target_handle
+    return validate_database_handle(tenant.target_handle)
 
 
 def _database_name(dsn: str) -> str:
@@ -41,9 +47,12 @@ class DatabasePerTenantStrategy:
     connections is never closed and cap pressure raises ``PoolCapacityError``.
 
     Secret rotation contract: a cached engine keeps the DSN that was resolved
-    when it was created. Rotating a handle's secret takes effect only after
-    that engine leaves the cache (deprovision, idle eviction, or ``dispose``);
-    there is no hot reload.
+    when it was created. After rotating a handle's secret, call
+    ``await invalidate(handle)`` to dispose and drop the cached engine; the
+    next ``session`` resolves the secret again and builds a fresh engine.
+    Without ``invalidate`` the rotation takes effect only once the engine
+    leaves the cache (deprovision, idle eviction, or ``dispose``); there is no
+    hot reload.
     """
 
     name = "database"
@@ -103,6 +112,16 @@ class DatabasePerTenantStrategy:
             if handle is None:
                 return
             await self._engines.pop(handle).dispose()
+
+    async def invalidate(self, handle: str) -> None:
+        """Dispose and drop the cached engine for ``handle``.
+
+        The rotation entry point: the next ``session`` for this handle
+        resolves the secret again instead of reusing the old DSN.
+        """
+        engine = self._engines.pop(handle, None)
+        if engine is not None:
+            await engine.dispose()
 
     def _admin(self) -> AsyncEngine:
         if self._admin_engine is None:

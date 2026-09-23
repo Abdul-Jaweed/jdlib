@@ -217,12 +217,14 @@ class AccessControl:
         record = await self._resource_lookup(tenant_id, resource_type, resource_id)
         if record is None:
             raise InvalidReference(f"resource not found: {resource_type}:{resource_id}")
-        if record.tenant_id != tenant_id or record.deleted:
+        if record.tenant_id != tenant_id:
             raise CrossTenantReferenceError(
                 f"{resource_type} resource {resource_id}",
                 str(tenant_id),
                 str(record.tenant_id),
             )
+        if record.deleted:
+            raise InvalidReference(f"resource is deleted: {resource_type}:{resource_id}")
 
     async def _lock(self, session: ControlPlaneSession, tenant_id: uuid.UUID) -> None:
         await session.execute(

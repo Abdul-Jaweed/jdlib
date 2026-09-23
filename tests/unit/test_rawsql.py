@@ -90,6 +90,17 @@ def test_any_predicate_rejected(validator):
         )
 
 
+def test_all_predicate_rejected(validator):
+    with pytest.raises(UnscopedRawSql):
+        validator.validate_tenant_bound(
+            _compiled(
+                "SELECT * FROM invoices WHERE tenant_id = ALL(:tenant_id)",
+                tenant_id=TENANT_ID,
+            ),
+            TENANT_ID,
+        )
+
+
 def test_join_requires_predicate_on_every_relation(validator):
     sql = (
         "SELECT * FROM invoices i JOIN projects p ON p.tenant_id = i.tenant_id "

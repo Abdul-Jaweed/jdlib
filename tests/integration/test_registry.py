@@ -320,6 +320,50 @@ async def test_create_rejects_target_handle_owned_by_another_tenant(control_sess
     assert (await registry.get(owner.id)).status == TenantStatus.PROVISIONING
 
 
+async def test_create_rejects_invalid_schema_handle(control_session_factory):
+    registry, _ = _registry(control_session_factory)
+    for handle in ("public", "t_BAD", "t_", "t_x y"):
+        with pytest.raises(ProvisioningError, match="schema"):
+            await _create(
+                registry,
+                "bad-schema",
+                strategy=PlacementStrategy.SCHEMA,
+                target_handle=handle,
+            )
+
+
+async def test_create_rejects_invalid_database_handle(control_session_factory):
+    registry, _ = _registry(control_session_factory)
+    for handle in ("db_acme", "DB-acme", "", "-db-acme"):
+        with pytest.raises(ProvisioningError, match="database"):
+            await _create(
+                registry,
+                "bad-db",
+                strategy=PlacementStrategy.DATABASE,
+                target_handle=handle,
+            )
+
+
+async def test_create_rejects_empty_shared_handle(control_session_factory):
+    registry, _ = _registry(control_session_factory)
+    with pytest.raises(ProvisioningError, match="shared"):
+        await _create(registry, "empty-shared", target_handle="")
+
+
+async def test_create_accepts_valid_handles(control_session_factory):
+    registry, _ = _registry(control_session_factory)
+    schema_tenant = await _create(
+        registry, "good-schema", strategy=PlacementStrategy.SCHEMA, target_handle="t_acme_1"
+    )
+    database_tenant = await _create(
+        registry, "good-db", strategy=PlacementStrategy.DATABASE, target_handle="db-acme-1"
+    )
+    shared_tenant = await _create(registry, "good-shared", target_handle="default")
+    assert schema_tenant.status == TenantStatus.PROVISIONING
+    assert database_tenant.status == TenantStatus.PROVISIONING
+    assert shared_tenant.status == TenantStatus.PROVISIONING
+
+
 async def test_create_rejects_duplicate_database_handle(control_session_factory):
     registry, _ = _registry(control_session_factory)
     await _create(

@@ -233,6 +233,25 @@ async def test_checked_out_engine_is_never_evicted(monkeypatch):
     assert session_b is created["postgresql+asyncpg://u:p@h/beta"]
 
 
+async def test_invalidate_disposes_engine_and_reresolves_secret(monkeypatch):
+    created = _fake_engines(monkeypatch)
+    secrets = MemorySecretProvider({"db-acme": "postgresql+asyncpg://u:p@h/acme"})
+    strategy = DatabasePerTenantStrategy(
+        admin_dsn="postgresql+asyncpg://u:p@h/db", secrets=secrets, runner=_Runner()
+    )
+    first = await strategy.session(_record())
+    assert first is created["postgresql+asyncpg://u:p@h/acme"]
+    secrets._mapping["db-acme"] = "postgresql+asyncpg://u:p@h/acme-rotated"
+    await strategy.invalidate("db-acme")
+    assert created["postgresql+asyncpg://u:p@h/acme"].disposed is True
+    second = await strategy.session(_record())
+    assert second is created["postgresql+asyncpg://u:p@h/acme-rotated"]
+
+
+async def test_invalidate_unknown_handle_is_a_noop():
+    await _strategy().invalidate("db-unknown")
+
+
 async def test_idle_engines_evict_least_recently_used(monkeypatch):
     created = _fake_engines(monkeypatch)
     strategy = _strategy(max_targets=2)

@@ -36,6 +36,7 @@ class _Reader:
         *,
         tenant_status: str = "active",
         principal_active: bool = True,
+        service_account_active: bool = True,
         membership_active: bool = True,
         role_permissions: dict[uuid.UUID, frozenset[str]] | None = None,
         bindings: list[tuple[uuid.UUID, ScopeType, uuid.UUID | None]] | None = None,
@@ -44,6 +45,7 @@ class _Reader:
     ) -> None:
         self.tenant_status = tenant_status
         self._principal_active = principal_active
+        self._service_account_active = service_account_active
         self._membership_active = membership_active
         self.role_permissions = role_permissions or {}
         self.bindings = bindings or []
@@ -55,6 +57,11 @@ class _Reader:
 
     async def principal_active(self, principal: Principal) -> bool:
         return self._principal_active
+
+    async def service_account_active(
+        self, tenant_id: uuid.UUID, service_account_id: uuid.UUID
+    ) -> bool:
+        return self._service_account_active
 
     async def membership_active(self, principal: Principal, tenant_id: uuid.UUID) -> bool:
         return self._membership_active

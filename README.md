@@ -122,6 +122,7 @@ from jdlib.migrations.runner import MigrationRunner
 from jdlib.persistence.strategies.schema import SchemaPerTenantStrategy
 from jdlib.persistence.strategies.shared import SharedSchemaStrategy
 from jdlib.tenancy.resolution import ApiKeyResolver, HeaderResolver, ResolverChain
+from myapp.models import Invoice  # your TenantBase + TenantRouted model
 
 config = TenancyConfig()
 engine = create_async_engine(config.control_dsn.get_secret_value())
@@ -206,8 +207,8 @@ async def list_invoices(
         return [row.number for row in await TenantRepository(session, Invoice).list()]
 ```
 
-(`Invoice` stands for your application's `TenantOwned` model, imported from your
-own package.)
+(`Invoice` is your application's `TenantBase` + `TenantRouted` model, imported
+from your own package as shown; the tenant-scoped snippets below reuse it.)
 
 `install` adds the ASGI middleware, the `JdlibError` -> JSON exception handler
 (401/403/404/409/423/500 mapped from the error class), and stores the container

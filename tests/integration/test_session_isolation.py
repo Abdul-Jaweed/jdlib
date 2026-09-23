@@ -344,6 +344,39 @@ async def test_scoped_bulk_helpers_work(session_factory):
         assert changed == 1
 
 
+async def test_delete_where_works_on_non_soft_delete_model(session_factory):
+    invoice_a, invoice_b = uuid.uuid4(), uuid.uuid4()
+    async with await _session(session_factory, TENANT_B) as session:
+        await session.add(Invoice(id=invoice_b, number=f"B-{uuid.uuid4().hex[:8]}"))
+        await session.flush()
+        await session.add(LineItem(invoice_id=invoice_b, amount_cents=100))
+        await session.commit()
+    async with await _session(session_factory, TENANT_A) as session:
+        await session.add(Invoice(id=invoice_a, number=f"A-{uuid.uuid4().hex[:8]}"))
+        await session.flush()
+        await session.add(LineItem(invoice_id=invoice_a, amount_cents=200))
+        await session.flush()
+        deleted = await session.delete_where(LineItem, LineItem.invoice_id == invoice_a)
+        assert deleted == 1
+        assert (
+            await session.execute(
+                sa.select(sa.func.count())
+                .select_from(LineItem)
+                .where(LineItem.invoice_id == invoice_a)
+            )
+        ).scalar_one() == 0
+        await session.commit()
+    async with await _session(session_factory, TENANT_B) as session:
+        remaining = (
+            await session.execute(
+                sa.select(sa.func.count())
+                .select_from(LineItem)
+                .where(LineItem.invoice_id == invoice_b)
+            )
+        ).scalar_one()
+        assert remaining == 1
+
+
 async def test_delete_where_rejects_soft_delete_without_privilege(session_factory):
     invoice = Invoice(number=f"A-{uuid.uuid4().hex[:8]}")
     async with await _session(session_factory, TENANT_A) as session:

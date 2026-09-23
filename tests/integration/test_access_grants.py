@@ -342,7 +342,7 @@ async def test_grant_rejects_soft_deleted_resource(control_session_factory):
     control, _ = _access(control_session_factory)
     member = await _member(control_session_factory, tenant_id)
     deleted_invoice = await _invoice(control_session_factory, tenant_id, deleted=True)
-    with pytest.raises(CrossTenantReferenceError):
+    with pytest.raises(InvalidReference, match="deleted"):
         await _grant(
             control, tenant_id, owner, resource_id=deleted_invoice, principal_id=member.user_id
         )

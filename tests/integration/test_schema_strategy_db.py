@@ -76,6 +76,26 @@ async def test_search_path_survives_rollback(async_engine):
     assert await row_count(async_engine, handle_b) == 0
 
 
+async def test_search_path_survives_savepoint_rollback(async_engine):
+    strategy = SchemaPerTenantStrategy(async_engine, SchemaRunner(async_engine))
+    tenant = _tenant()
+    handle = str(tenant.target_handle)
+    await provision_schema(strategy, tenant, async_engine)
+    raw = await strategy.session(tenant)
+    try:
+        session = TenantSession(raw, tenant_context(tenant))
+        await session.add(Invoice(number="INV-SAVEPOINT"))
+        await session.flush()
+        savepoint = await raw.begin_nested()
+        await savepoint.rollback()
+        current = (await raw.execute(sa.text("SELECT current_schema()"))).scalar_one()
+        assert current == handle
+        await session.commit()
+    finally:
+        await raw.close()
+    assert await row_count(async_engine, handle) == 1
+
+
 async def test_provision_and_purge_are_idempotent(async_engine):
     strategy = SchemaPerTenantStrategy(async_engine, SchemaRunner(async_engine))
     tenant = _tenant()

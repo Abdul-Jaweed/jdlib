@@ -14,6 +14,7 @@ from jdlib.errors import StrategyCapabilityError
 from jdlib.models.base import TenantBase
 from jdlib.persistence.strategies.rls import emit_rls_policies, install_rls, verify_rls
 from jdlib.persistence.strategies.shared import SharedSchemaStrategy
+from tests.integration.rls_support import run_rls_ddl
 from tests.support.invoice import Invoice
 
 APP_ROLE = "jdlib_rls_app"
@@ -97,13 +98,14 @@ async def rls_app_role(async_engine: AsyncEngine) -> str:
     return APP_ROLE
 
 
+def _emit_policies(sync: sa.Connection) -> None:
+    sync.execute(sa.text(f'SET search_path TO "{TENANT_SCHEMA}"'))
+    emit_rls_policies(sync, metadata=TenantBase.metadata, app_role=APP_ROLE)
+
+
 @pytest.fixture()
 async def rls_engine(async_engine: AsyncEngine, rls_app_role: str) -> AsyncEngine:
-    async with async_engine.begin() as connection:
-        await connection.execute(sa.text(f'SET search_path TO "{TENANT_SCHEMA}"'))
-        await connection.run_sync(
-            lambda sync: emit_rls_policies(sync, metadata=TenantBase.metadata, app_role=APP_ROLE)
-        )
+    await run_rls_ddl(async_engine, _emit_policies)
     yield async_engine
 
 
@@ -258,8 +260,10 @@ async def test_verify_rls_rejects_missing_policy(rls_app_role: str, postgres_url
     engine = _bound_engine(postgres_url)
     try:
         await install_rls(engine, metadata=TenantBase.metadata, app_role=APP_ROLE)
-        async with engine.begin() as connection:
-            await connection.execute(sa.text("DROP POLICY tenant_isolation ON invoices"))
+        await run_rls_ddl(
+            engine,
+            lambda sync: sync.execute(sa.text("DROP POLICY tenant_isolation ON invoices")),
+        )
         with pytest.raises(StrategyCapabilityError, match="policy"):
             await verify_rls(engine, APP_ROLE, metadata=TenantBase.metadata)
     finally:
@@ -270,10 +274,12 @@ async def test_verify_rls_rejects_unforced_table(rls_app_role: str, postgres_url
     engine = _bound_engine(postgres_url)
     try:
         await install_rls(engine, metadata=TenantBase.metadata, app_role=APP_ROLE)
-        async with engine.begin() as connection:
-            await connection.execute(
+        await run_rls_ddl(
+            engine,
+            lambda sync: sync.execute(
                 sa.text("ALTER TABLE invoices NO FORCE ROW LEVEL SECURITY")
-            )
+            ),
+        )
         with pytest.raises(StrategyCapabilityError, match="forced"):
             await verify_rls(engine, APP_ROLE, metadata=TenantBase.metadata)
     finally:

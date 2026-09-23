@@ -34,6 +34,7 @@ from jdlib.persistence.session import TenantSession
 from jdlib.persistence.strategies.deprovision import DeprovisionMode
 from jdlib.persistence.strategies.rls import emit_rls_policies
 from jdlib.persistence.strategies.shared import SharedSchemaStrategy
+from tests.integration.rls_support import run_rls_ddl
 from tests.support.context_fakes import FrozenClock, RecordingPrivilegeAudit
 from tests.support.invoice import Invoice, LineItem
 
@@ -126,32 +127,30 @@ def _app_url(postgres_url: str) -> URL:
 
 @pytest.fixture()
 async def rls_app_engine(async_engine: AsyncEngine, postgres_url: str):
-    async with async_engine.begin() as connection:
-        await connection.execute(sa.text(f'SET search_path TO "{TENANT_SCHEMA}"'))
-        await connection.execute(
+    def _install(sync: sa.Connection) -> None:
+        sync.execute(sa.text(f'SET search_path TO "{TENANT_SCHEMA}"'))
+        sync.execute(
             sa.text(
                 f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{APP_ROLE}') "
                 f"THEN CREATE ROLE {APP_ROLE} LOGIN PASSWORD '{APP_PASSWORD}' NOBYPASSRLS; "
                 "END IF; END $$;"
             )
         )
-        await connection.execute(
-            sa.text(f'GRANT USAGE ON SCHEMA "{TENANT_SCHEMA}" TO {APP_ROLE}')
-        )
-        await connection.execute(
+        sync.execute(sa.text(f'GRANT USAGE ON SCHEMA "{TENANT_SCHEMA}" TO {APP_ROLE}'))
+        sync.execute(
             sa.text(
                 f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "
                 f'"{TENANT_SCHEMA}" TO {APP_ROLE}'
             )
         )
-        await connection.execute(
+        sync.execute(
             sa.text(
                 f'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA "{TENANT_SCHEMA}" TO {APP_ROLE}'
             )
         )
-        await connection.run_sync(
-            lambda sync: emit_rls_policies(sync, metadata=TenantBase.metadata, app_role=APP_ROLE)
-        )
+        emit_rls_policies(sync, metadata=TenantBase.metadata, app_role=APP_ROLE)
+
+    await run_rls_ddl(async_engine, _install)
     engine = create_async_engine(_app_url(postgres_url))
     yield engine
     await engine.dispose()

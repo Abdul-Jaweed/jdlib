@@ -37,7 +37,9 @@ from jdlib.errors import (
 )
 from jdlib.migrations.runner import MigrationRunner
 from jdlib.persistence.strategies.base import IsolationStrategy
+from jdlib.persistence.strategies.database import validate_database_handle
 from jdlib.persistence.strategies.deprovision import DeprovisionMode
+from jdlib.persistence.strategies.schema import validate_schema_name
 
 CRITICAL_RELOCATION_PHASES = {
     RelocationPhase.COPYING.value,
@@ -74,6 +76,18 @@ class SeedHook(Protocol):
 class _NoopSeedHook:
     async def seed(self, tenant: TenantRecord) -> None:
         return None
+
+
+def _validate_target_handle(strategy: PlacementStrategy, target_handle: str) -> None:
+    try:
+        if strategy is PlacementStrategy.SCHEMA:
+            validate_schema_name(target_handle)
+        elif strategy is PlacementStrategy.DATABASE:
+            validate_database_handle(target_handle)
+        elif not target_handle:
+            raise StrategyCapabilityError("shared target handle must not be empty")
+    except StrategyCapabilityError as exc:
+        raise ProvisioningError(str(exc)) from exc
 
 
 def _require_transition(current: TenantStatus, target: TenantStatus) -> None:
@@ -188,6 +202,7 @@ class TenantRegistry:
         parent_tenant_id: uuid.UUID | None = None,
         actor_id: uuid.UUID | None = None,
     ) -> Tenant:
+        _validate_target_handle(strategy, target_handle)
         async with await self._control() as session:
             await self._slug_lock(session, slug)
             existing: Tenant | None = (

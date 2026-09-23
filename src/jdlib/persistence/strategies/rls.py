@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from jdlib.errors import StrategyCapabilityError
 from jdlib.models.base import TenantRouted
+
+_DDL_LOCK_TIMEOUT = "5s"
+_DDL_ATTEMPTS = 3
+_DDL_RETRY_DELAY = 0.25
+_RETRYABLE_DDL_ERRORS = {"DeadlockDetectedError", "LockNotAvailableError"}
 
 _POLICY = (
     "USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) "
@@ -59,11 +66,37 @@ def emit_rls_policies(
             )
 
 
+def retryable_ddl_error(exc: BaseException) -> bool:
+    """Whether a DDL failure is a transient lock conflict worth retrying."""
+    names = {type(exc).__name__}
+    orig = getattr(exc, "orig", None)
+    if orig is not None:
+        names.add(type(orig).__name__)
+    return bool(names & _RETRYABLE_DDL_ERRORS)
+
+
 async def install_rls(engine: AsyncEngine, *, metadata: sa.MetaData, app_role: str) -> None:
-    async with engine.begin() as connection:
-        await connection.run_sync(
-            lambda sync: emit_rls_policies(sync, metadata=metadata, app_role=app_role)
-        )
+    """Emit and verify RLS policies, retrying transient lock conflicts.
+
+    The DDL takes ``ACCESS EXCLUSIVE`` locks; a live deployment or a lingering
+    pooled connection can deadlock or hold the lock past ``lock_timeout``.
+    Three bounded attempts (with a small backoff) keep migrations from
+    flaking while still failing closed on a real lock holder.
+    """
+    for attempt in range(_DDL_ATTEMPTS):
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    sa.text(f"SET LOCAL lock_timeout = '{_DDL_LOCK_TIMEOUT}'")
+                )
+                await connection.run_sync(
+                    lambda sync: emit_rls_policies(sync, metadata=metadata, app_role=app_role)
+                )
+            break
+        except Exception as exc:
+            if attempt + 1 >= _DDL_ATTEMPTS or not retryable_ddl_error(exc):
+                raise
+            await asyncio.sleep(_DDL_RETRY_DELAY * (attempt + 1))
     await verify_rls(engine, app_role, metadata=metadata)
 
 
@@ -87,7 +120,10 @@ async def verify_rls(engine: AsyncEngine, app_role: str, *, metadata: sa.MetaDat
             checks[name] = None if row is None else (bool(row[0]), bool(row[1]), bool(row[2]))
     for name, check in checks.items():
         if check is None:
-            raise StrategyCapabilityError(f"RLS table missing or not visible: {name}")
+            raise StrategyCapabilityError(
+                f"RLS table missing or not visible: {name}; "
+                "the engine must be bound to the target schema (search_path)"
+            )
         rowsecurity, force, has_policy = check
         if not rowsecurity or not force:
             raise StrategyCapabilityError(f"RLS is not forced on table {name}")
