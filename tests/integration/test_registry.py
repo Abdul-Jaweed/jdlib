@@ -92,6 +92,11 @@ class _FailingAudit(RecordingPlatformAudit):
         )
 
 
+class _StubPurger:
+    async def purge(self, tenant: TenantRecord) -> dict[str, int]:
+        return {}
+
+
 class _FlakyStrategy(SharedSchemaStrategy):
     def __init__(self, *, fail_times: int = 1) -> None:
         super().__init__(engine=None, schema=TENANT_SCHEMA)
@@ -122,6 +127,7 @@ def _registry(
         runner=runner or _Runner(),
         seeder=seeder or _Seeder(),
         audit=audit,
+        purger=_StubPurger(),
     )
     return registry, audit
 

@@ -25,6 +25,7 @@ from jdlib.control.models import (
     TenantPlacement,
     TenantRelocation,
 )
+from jdlib.control.purge import TenantPlanePurger
 from jdlib.control.session import ControlPlaneSession
 from jdlib.errors import (
     ProvisioningError,
@@ -135,6 +136,7 @@ class TenantRegistry:
         audit: PlatformAudit,
         seeder: SeedHook | None = None,
         desired_version: str = "0001_tenant_baseline",
+        purger: TenantPlanePurger | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._strategies = dict(strategies)
@@ -142,6 +144,7 @@ class TenantRegistry:
         self._audit = audit
         self._seeder = seeder or _NoopSeedHook()
         self._desired_version = desired_version
+        self._purger = purger
 
     def _strategy_for(self, placement: TenantPlacement) -> IsolationStrategy:
         strategy = self._strategies.get(PlacementStrategy(placement.strategy))
@@ -446,6 +449,10 @@ class TenantRegistry:
                 await session.commit()
                 return tenant
             record = _record(tenant, placement)
+            purge_required = placement.strategy == PlacementStrategy.SHARED.value
+            purger = self._purger if purge_required else None
+            if purge_required and purger is None:
+                raise ProvisioningError("shared purge/destroy requires a tenant-plane purger")
             strategy = self._strategy_for(placement)
             _apply_status(tenant, TenantStatus.DEPROVISIONING, reason=None)
             await session.commit()
@@ -470,6 +477,8 @@ class TenantRegistry:
                 metadata["detached_children"] = [str(child) for child in children]
             counts = await self._delete_access_rows(session, tenant_id)
             await strategy.deprovision(record, mode)
+            if purger is not None:
+                counts.update(await purger.purge(record))
             tenant.status = TenantStatus.DELETED.value
             metadata["counts"] = counts
             await self._audit.record(
