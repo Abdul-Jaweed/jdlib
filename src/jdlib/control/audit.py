@@ -75,19 +75,22 @@ class DatabaseAuditSink:
 
         owns_session = session is None
         control = session or ControlPlaneSession(self._session_factory())
-        control.add(
-            PlatformAuditEvent(
-                action=action,
-                tenant_id=tenant_id,
-                actor_id=actor_id,
-                actor_type="system" if actor_id is None else "user",
-                metadata_json=dict(metadata or {}),
+        try:
+            control.add(
+                PlatformAuditEvent(
+                    action=action,
+                    tenant_id=tenant_id,
+                    actor_id=actor_id,
+                    actor_type="system" if actor_id is None else "user",
+                    metadata_json=dict(metadata or {}),
+                )
             )
-        )
-        await control.flush()
-        if owns_session:
-            await control.commit()
-            await control.close()
+            await control.flush()
+            if owns_session:
+                await control.commit()
+        finally:
+            if owns_session:
+                await control.close()
 
 
 class CompositeAuditSink:
