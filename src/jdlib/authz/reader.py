@@ -30,6 +30,10 @@ class AccessReader(Protocol):
 
     async def principal_active(self, principal: Principal) -> bool: ...
 
+    async def service_account_active(
+        self, tenant_id: uuid.UUID, service_account_id: uuid.UUID
+    ) -> bool: ...
+
     async def membership_active(self, principal: Principal, tenant_id: uuid.UUID) -> bool: ...
 
     async def bindings_for(
@@ -92,6 +96,22 @@ class ControlAccessReader:
             query = query.where(ServiceAccount.tenant_id == principal.tenant_id)
         async with await self._session() as session:
             status = (await session.execute(query)).scalar_one_or_none()
+        return status == "active"
+
+    async def service_account_active(
+        self, tenant_id: uuid.UUID, service_account_id: uuid.UUID
+    ) -> bool:
+        from jdlib.control.models import ServiceAccount
+
+        async with await self._session() as session:
+            status = (
+                await session.execute(
+                    sa.select(ServiceAccount.status).where(
+                        ServiceAccount.tenant_id == tenant_id,
+                        ServiceAccount.id == service_account_id,
+                    )
+                )
+            ).scalar_one_or_none()
         return status == "active"
 
     async def membership_active(self, principal: Principal, tenant_id: uuid.UUID) -> bool:

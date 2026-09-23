@@ -12,7 +12,7 @@ from jdlib.authn.composite import CompositeAuthenticator
 from jdlib.authn.oidc import ClaimMapper, JwksCache, OidcAuthenticator, TokenVerifier, UserLinker
 from jdlib.authz.reader import AccessReader
 from jdlib.config import TenancyConfig
-from jdlib.context import Principal, TenantRecord, TenantRef
+from jdlib.context import Principal, PrincipalKind, TenantRecord, TenantRef
 from jdlib.control.audit import PlatformAudit
 from jdlib.control.registry import TenantRegistry
 
@@ -78,6 +78,10 @@ class EntitlementAdapter:
         self._reader = reader
 
     async def can_act(self, principal: Principal, tenant_id: uuid.UUID) -> bool:
+        if principal.kind is PrincipalKind.SERVICE_ACCOUNT:
+            return principal.tenant_id == tenant_id and await self._reader.service_account_active(
+                tenant_id, principal.id
+            )
         if not await self._reader.principal_active(principal):
             return False
         return await self._reader.membership_active(principal, tenant_id)

@@ -114,6 +114,43 @@ async def test_control_reader_handles_service_accounts_and_grants(control_sessio
     assert await reader.principal_active(foreign) is False
 
 
+async def test_control_reader_service_account_active_is_tenant_scoped(
+    control_session_factory,
+):
+    tenant_id = uuid.uuid4()
+    other_tenant_id = uuid.uuid4()
+    account_id = uuid.uuid4()
+    suspended_id = uuid.uuid4()
+    async with control_session_factory() as session:
+        session.add(
+            Tenant(id=tenant_id, slug=f"sa-{tenant_id.hex[:8]}", name="SA", status="active")
+        )
+        session.add(
+            Tenant(
+                id=other_tenant_id,
+                slug=f"sa-{other_tenant_id.hex[:8]}",
+                name="SB",
+                status="active",
+            )
+        )
+        await session.flush()
+        session.add(
+            ServiceAccount(tenant_id=tenant_id, id=account_id, name="bot", status="active")
+        )
+        session.add(
+            ServiceAccount(
+                tenant_id=tenant_id, id=suspended_id, name="frozen", status="suspended"
+            )
+        )
+        await session.commit()
+
+    reader = ControlAccessReader(control_session_factory)
+    assert await reader.service_account_active(tenant_id, account_id) is True
+    assert await reader.service_account_active(other_tenant_id, account_id) is False
+    assert await reader.service_account_active(tenant_id, uuid.uuid4()) is False
+    assert await reader.service_account_active(tenant_id, suspended_id) is False
+
+
 async def test_control_reader_denies_platform_operators(control_session_factory):
     reader = ControlAccessReader(control_session_factory)
     operator = Principal(kind=PrincipalKind.PLATFORM_OPERATOR, id=uuid.uuid4())

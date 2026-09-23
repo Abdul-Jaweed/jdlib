@@ -1,5 +1,7 @@
 import uuid
 
+import pytest
+
 from jdlib.authn.apikey import ApiKeyAuthenticator, hash_api_key_secret
 from jdlib.authn.wiring import (
     EntitlementAdapter,
@@ -10,12 +12,15 @@ from jdlib.authz.reader import ControlAccessReader
 from jdlib.config import ContextConfig
 from jdlib.context import (
     ContextFactory,
+    EnvelopeCodec,
     Principal,
     PrincipalKind,
+    TenantContext,
     TenantRef,
     current_tenant,
 )
 from jdlib.control.audit import RecordingPlatformAudit
+from jdlib.control.enums import PlacementStrategy
 from jdlib.control.models import (
     ApiKey,
     Membership,
@@ -26,6 +31,8 @@ from jdlib.control.models import (
     User,
 )
 from jdlib.control.registry import TenantRegistry
+from jdlib.errors import UnknownPrincipal
+from jdlib.tenancy.jobs import ContextPropagator
 from jdlib.tenancy.middleware import TenantMiddleware
 from jdlib.tenancy.resolution import ApiKeyResolver, HeaderResolver, ResolverChain
 from tests.support.context_fakes import FrozenClock
@@ -42,6 +49,22 @@ class _Runner:
 class _OperatorStub:
     async def authorize(self, principal: Principal, capability: str) -> bool:
         return False
+
+
+async def _seed_placed_tenant(session, tenant_id: uuid.UUID, slug: str) -> None:
+    session.add(Tenant(id=tenant_id, slug=slug, name=slug, status="active"))
+    await session.flush()
+    session.add(
+        TenantPlacement(tenant_id=tenant_id, strategy="shared", target_handle="default")
+    )
+    session.add(
+        TenantMigrationState(
+            tenant_id=tenant_id,
+            current_version="0001_tenant_baseline",
+            desired_version="0001_tenant_baseline",
+            status="success",
+        )
+    )
 
 
 async def test_tenant_directory_and_entitlement_adapters(control_session_factory):
@@ -285,3 +308,77 @@ async def test_api_key_pinned_to_tenant_a_presenting_tenant_b_gets_404(
     await middleware(scope, receive, send)
     assert next(m["status"] for m in sent if m["type"] == "http.response.start") == 404
     assert seen == []
+
+
+async def test_entitlement_adapter_denies_service_account_outside_its_tenant(
+    control_session_factory,
+):
+    tenant_a = uuid.uuid4()
+    tenant_b = uuid.uuid4()
+    account_id = uuid.uuid4()
+    async with control_session_factory() as session:
+        session.add(
+            Tenant(id=tenant_a, slug=f"sa-a-{tenant_a.hex[:8]}", name="SA", status="active")
+        )
+        session.add(
+            Tenant(id=tenant_b, slug=f"sa-b-{tenant_b.hex[:8]}", name="SB", status="active")
+        )
+        await session.flush()
+        session.add(
+            ServiceAccount(tenant_id=tenant_a, id=account_id, name="bot", status="active")
+        )
+        await session.commit()
+    entitlements = EntitlementAdapter(ControlAccessReader(control_session_factory))
+    pinned = Principal(
+        kind=PrincipalKind.SERVICE_ACCOUNT, id=account_id, tenant_id=tenant_a
+    )
+    assert await entitlements.can_act(pinned, tenant_a) is True
+    assert await entitlements.can_act(pinned, tenant_b) is False
+    unpinned = Principal(kind=PrincipalKind.SERVICE_ACCOUNT, id=account_id)
+    assert await entitlements.can_act(unpinned, tenant_a) is False
+
+
+async def test_reconstruct_denies_service_account_absent_from_envelope_tenant(
+    control_session_factory,
+):
+    envelope_tenant = uuid.uuid4()
+    account_tenant = uuid.uuid4()
+    envelope_slug = f"job-a-{envelope_tenant.hex[:8]}"
+    account_id = uuid.uuid4()
+    async with control_session_factory() as session:
+        await _seed_placed_tenant(session, envelope_tenant, envelope_slug)
+        await _seed_placed_tenant(session, account_tenant, f"job-b-{account_tenant.hex[:8]}")
+        session.add(
+            ServiceAccount(
+                tenant_id=account_tenant, id=account_id, name="bot", status="active"
+            )
+        )
+        await session.commit()
+    registry = TenantRegistry(
+        session_factory=control_session_factory,
+        strategies={},
+        runner=_Runner(),
+        audit=RecordingPlatformAudit(),
+        desired_version="0001_tenant_baseline",
+    )
+    reader = ControlAccessReader(control_session_factory)
+    codec = EnvelopeCodec(config=ContextConfig(signing_key="k"), clock=FrozenClock())
+    propagator = ContextPropagator(
+        codec=codec,
+        principals=PrincipalDirectoryAdapter(reader),
+        tenants=TenantDirectoryAdapter(registry),
+        servability=registry,
+        entitlements=EntitlementAdapter(reader),
+    )
+    token = codec.encode(
+        TenantContext(
+            tenant_id=envelope_tenant,
+            tenant_slug=envelope_slug,
+            strategy=PlacementStrategy.SHARED,
+            principal=Principal(kind=PrincipalKind.SERVICE_ACCOUNT, id=account_id),
+            request_id="req-1",
+            correlation_id="corr-1",
+        )
+    )
+    with pytest.raises(UnknownPrincipal):
+        await propagator.reconstruct(token)

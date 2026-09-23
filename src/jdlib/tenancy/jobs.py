@@ -9,6 +9,7 @@ from jdlib.context import (
     EnvelopeCodec,
     Principal,
     PrincipalDirectory,
+    PrincipalKind,
     ServabilityChecker,
     TenantContext,
     TenantDirectory,
@@ -38,7 +39,15 @@ class ContextPropagator:
 
     async def reconstruct(self, token: str) -> TenantContext:
         envelope = self._codec.decode(token)
-        principal = Principal(kind=envelope.principal_type, id=envelope.principal_id)
+        principal = Principal(
+            kind=envelope.principal_type,
+            id=envelope.principal_id,
+            tenant_id=(
+                envelope.tenant_id
+                if envelope.principal_type is PrincipalKind.SERVICE_ACCOUNT
+                else None
+            ),
+        )
         if not await self._principals.is_active(principal):
             raise UnknownPrincipal(str(principal.id))
         record = await self._tenants.get(TenantRef(id=envelope.tenant_id))

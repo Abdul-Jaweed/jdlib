@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - No password storage, no session issuance: the package verifies credentials only.
-- Canonical principal rule: for USER principals, `Principal.id == user_id`; for SERVICE_ACCOUNT, `id` is the service-account id and `tenant_id` is pinned.
+- Canonical principal rule: for USER principals, `Principal.id == user_id`; for SERVICE_ACCOUNT, `id` is the service-account id and `tenant_id` is pinned (an unpinned, `tenant_id is None`, service account is denied).
 - Login linking: `IdentityLink(issuer, subject)` match → active user; else trusted-email match → link; else create a user. A new user stores its email only when the claim is verified, otherwise `email=None`. Unverified email is never trusted or linked.
 - API keys: `prefix.keyid.secret`, `key_prefix` unique lookup, Argon2id hash at rest, optional scopes narrow only, pinned to one tenant and service account, revocable/expiring.
 - Authentication failures are audited through `PlatformAudit` (mandatory, fail-closed) with no token material in metadata.
@@ -1366,6 +1366,8 @@ git commit -m "feat: context factory port adapters and end-to-end auth wiring"
 - `build_authenticator(config, session_factory, audit)` is now implemented: it assembles OIDC + API-key into a `CompositeAuthenticator` from `TenancyConfig`, skipping the OIDC member when `config.oidc is None`, with an httpx JWKS fetcher. Unit-tested in `tests/unit/test_authn_wiring.py`.
 - `tests/integration/test_authn_composite.py` proves the chain audits nothing on success in both orders (valid JWT with an API-key authenticator present; valid API key with an OIDC authenticator present), covering the per-scheme audit scoping.
 
+**Phase 4d hardening back-port (unpinned service accounts):** `ContextFactory.for_principal` now requires `principal.tenant_id == record.id` for SERVICE_ACCOUNT principals — `tenant_id is None` denies with `TenantAccessDenied` — closing the bypass where a reconstructed job principal (built without a pin) passed the old `is not None` guard. `AccessReader`/`ControlAccessReader` gained `service_account_active(tenant_id, service_account_id)` (composite-PK status lookup, active only); `EntitlementAdapter.can_act` routes SERVICE_ACCOUNT through pin equality plus that lookup (USER keeps `principal_active` + `membership_active`; platform operators stay denied), and `ContextPropagator.reconstruct` rebuilds SERVICE_ACCOUNT principals pinned to `envelope.tenant_id` so pin equality holds and the fixed entitlement check is authoritative on the job path. Tests: `tests/unit/test_context_factory.py::test_for_principal_denies_unpinned_service_account`; `tests/unit/test_jobs.py::test_reconstruct_rebuilds_service_account_pinned_to_envelope_tenant`, `::test_reconstruct_rejects_service_account_absent_from_envelope_tenant`; `tests/integration/test_pdp_control_reader.py::test_control_reader_service_account_active_is_tenant_scoped`; `tests/integration/test_auth_wiring.py::test_entitlement_adapter_denies_service_account_outside_its_tenant`, `::test_reconstruct_denies_service_account_absent_from_envelope_tenant`.
+
 ---
 
 ## Phase 4d Exit Criteria
@@ -1374,7 +1376,7 @@ git commit -m "feat: context factory port adapters and end-to-end auth wiring"
 - [ ] OIDC: JWKS caching/rotation, verification (issuer/audience/algorithms/leeway), claim mapping, linking algorithm (IdentityLink → trusted verified email → create user, unverified email never stored), failures audited without token material.
 - [ ] API keys: shape parsing, Argon2id verification, status/expiry checks, tenant pinning, scopes, `last_used_at`, failures audited only for tokens with the configured prefix.
 - [ ] Composite authenticator first-wins; each authenticator audits only its own scheme; unexpected failures are audited fail-closed; no authentication bypass.
-- [ ] `ContextFactory` ports wired to registry/reader; API-key principal flows through `TenantMiddleware` to a tenant context end-to-end; a service-account tenant pin mismatch is denied with 404.
+- [ ] `ContextFactory` ports wired to registry/reader; API-key principal flows through `TenantMiddleware` to a tenant context end-to-end; a service-account pin mismatch or missing pin is denied with 404, and `ContextPropagator.reconstruct` denies a service account that is absent from the envelope's tenant.
 - [ ] `ruff` and strict `mypy` clean.
 
 ## Plan Series (remaining)

@@ -25,11 +25,13 @@ from tests.support.context_fakes import (
     EntitlementsStub,
     FrozenClock,
     ServabilityStub,
+    ServiceAccountEntitlementsStub,
     StaticPrincipals,
 )
 
 TENANT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 USER_ID = uuid.uuid4()
+SERVICE_ACCOUNT_ID = uuid.uuid4()
 
 
 def _record() -> TenantRecord:
@@ -64,6 +66,49 @@ def _propagator(
         entitlements=EntitlementsStub({(USER_ID, TENANT_ID)} if allowed else set()),
     )
     return propagator, codec
+
+
+def _service_account_propagator(
+    *, registered: set[tuple[uuid.UUID, uuid.UUID]]
+) -> tuple[ContextPropagator, EnvelopeCodec]:
+    codec = EnvelopeCodec(config=ContextConfig(signing_key="k"), clock=FrozenClock())
+    propagator = ContextPropagator(
+        codec=codec,
+        principals=StaticPrincipals({SERVICE_ACCOUNT_ID}),
+        tenants=DictTenants([_record()]),
+        servability=ServabilityStub(),
+        entitlements=ServiceAccountEntitlementsStub(registered),
+    )
+    return propagator, codec
+
+
+def _service_account_context() -> TenantContext:
+    return TenantContext(
+        tenant_id=TENANT_ID,
+        tenant_slug="acme",
+        strategy=PlacementStrategy.SHARED,
+        principal=Principal(
+            kind=PrincipalKind.SERVICE_ACCOUNT, id=SERVICE_ACCOUNT_ID, tenant_id=TENANT_ID
+        ),
+        request_id="req-1",
+        correlation_id="corr-1",
+    )
+
+
+async def test_reconstruct_rebuilds_service_account_pinned_to_envelope_tenant():
+    propagator, codec = _service_account_propagator(
+        registered={(TENANT_ID, SERVICE_ACCOUNT_ID)}
+    )
+    context = await propagator.reconstruct(codec.encode(_service_account_context()))
+    assert context.principal.kind is PrincipalKind.SERVICE_ACCOUNT
+    assert context.principal.id == SERVICE_ACCOUNT_ID
+    assert context.principal.tenant_id == TENANT_ID
+
+
+async def test_reconstruct_rejects_service_account_absent_from_envelope_tenant():
+    propagator, codec = _service_account_propagator(registered=set())
+    with pytest.raises(TenantAccessDenied):
+        await propagator.reconstruct(codec.encode(_service_account_context()))
 
 
 async def test_reconstruct_rebuilds_context_without_privilege():

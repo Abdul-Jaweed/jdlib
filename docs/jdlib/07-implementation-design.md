@@ -194,8 +194,8 @@ class ContextFactory:
 first, then entitlement, then tenant servability, so a pinned service account
 never reaches another tenant and non-entitled principals never learn tenant
 state) and never trusts caller-supplied state beyond ids. A service-account
-principal whose `tenant_id` is set must resolve to that same tenant; a mismatch
-raises `TenantAccessDenied`.
+principal must resolve to the tenant it is pinned to; a missing (`None`) or
+mismatched pin raises `TenantAccessDenied`.
 `for_system`/`for_test` require the internal `_PrivilegeIssuer` instance held by
 the factory; their use is audited.
 
@@ -579,12 +579,20 @@ with token material.
 
 `authn/wiring.py` adapts the shipped services to the `ContextFactory` ports
 with translation only, no policy: `PrincipalDirectoryAdapter` and
-`EntitlementAdapter` over `ControlAccessReader` (`can_act` short-circuits on an
-inactive principal before checking membership), and `TenantDirectoryAdapter`
+`EntitlementAdapter` over `ControlAccessReader` (`can_act` routes USER
+principals through `principal_active` + `membership_active`, and
+SERVICE_ACCOUNT principals through pin equality plus
+`service_account_active(tenant_id, id)`; platform operators stay denied), and
+`TenantDirectoryAdapter`
 over `TenantRegistry.find`, which returns the tenant row plus its placement as a
 `TenantRecord` or `None` when either is missing (`assert_servable` raises
 `ProvisioningError` for the same missing-placement condition, a registry
-invariant). `build_authenticator(config, session_factory, audit)` assembles the
+invariant). The service-account invariant is that a service account may act only
+in the tenant it is pinned to and only while `service_account_active` reports
+`active`: an unpinned or foreign-tenant service account is denied on every path,
+and `ContextPropagator.reconstruct` rebuilds a SERVICE_ACCOUNT principal pinned
+to `envelope.tenant_id` so the same check holds on the job path.
+`build_authenticator(config, session_factory, audit)` assembles the
 OIDC and API-key authenticators from `TenancyConfig` into a
 `CompositeAuthenticator`, skipping the OIDC member when `TenancyConfig.oidc` is
 `None`. The middleware's `PrincipalProvider` port is callable, so callers pass

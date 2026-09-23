@@ -233,11 +233,10 @@ class ContextFactory:
         record = await self._resolve_tenant(tenant_ref)
         if (
             principal.kind is PrincipalKind.SERVICE_ACCOUNT
-            and principal.tenant_id is not None
             and principal.tenant_id != record.id
         ):
             raise TenantAccessDenied(
-                f"principal {principal.id} is pinned to tenant {principal.tenant_id}"
+                f"principal {principal.id} is not pinned to tenant {record.id}"
             )
         if not await self._entitlements.can_act(principal, record.id):
             raise TenantAccessDenied(f"principal {principal.id} cannot act in {record.id}")

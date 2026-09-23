@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from jdlib.context import (
     Clock,
     Principal,
+    PrincipalKind,
     PrivilegeKind,
     TenantRecord,
     TenantRef,
@@ -77,6 +78,20 @@ class EntitlementsStub:
 
     async def can_act(self, principal: Principal, tenant_id: uuid.UUID) -> bool:
         return (principal.id, tenant_id) in self._allowed
+
+
+class ServiceAccountEntitlementsStub:
+    """Models the EntitlementAdapter service-account path: pinned and registered."""
+
+    def __init__(self, registered: set[tuple[uuid.UUID, uuid.UUID]] | None = None) -> None:
+        self._registered = registered or set()
+
+    async def can_act(self, principal: Principal, tenant_id: uuid.UUID) -> bool:
+        if principal.kind is not PrincipalKind.SERVICE_ACCOUNT:
+            return False
+        return (
+            principal.tenant_id == tenant_id and (tenant_id, principal.id) in self._registered
+        )
 
 
 class OperatorsStub:

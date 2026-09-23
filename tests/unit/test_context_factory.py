@@ -163,6 +163,14 @@ async def test_for_principal_denies_mismatched_pin_before_entitlement_and_servab
         )
 
 
+async def test_for_principal_denies_unpinned_service_account():
+    factory = _pin_factory(allowed={(SERVICE_ACCOUNT_ID, TENANT_ID)})
+    with pytest.raises(TenantAccessDenied):
+        await factory.for_principal(
+            _service_account(None), TenantRef(slug="acme"), request_id="req-1"
+        )
+
+
 async def test_for_operator_requires_platform_operator_kind():
     factory, _ = _factory()
     operator = Principal(kind=PrincipalKind.USER, id=OPERATOR_ID)
