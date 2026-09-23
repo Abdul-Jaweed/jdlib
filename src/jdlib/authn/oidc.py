@@ -132,6 +132,11 @@ class JwksCache:
         return bool(self._keys)
 
     @property
+    def url(self) -> str:
+        """The JWKS endpoint this cache refreshes from."""
+        return self._url
+
+    @property
     def stale(self) -> bool:
         """Operational signal: cached keys are older than the configured TTL."""
         return self._stale()

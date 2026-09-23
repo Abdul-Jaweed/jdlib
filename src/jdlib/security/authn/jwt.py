@@ -105,6 +105,11 @@ class JwtTokenValidator:
 
     # -- TokenValidator port ------------------------------------------------
 
+    @property
+    def keys(self) -> SigningKeySource:
+        """The key source backing this validator (diagnostics, health wiring)."""
+        return self._keys
+
     async def validate(self, token: str) -> ValidatedToken:
         """Validate ``token``, raising a typed authentication error on failure."""
         kid = self._kid(token)

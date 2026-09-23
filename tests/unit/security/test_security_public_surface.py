@@ -91,3 +91,49 @@ def test_core_public_api_is_unchanged() -> None:
     assert "SecurityConfig" not in jdlib.__all__
     for name in jdlib.__all__:
         assert getattr(jdlib, name) is not None
+
+
+AUTHN_SURFACE = frozenset(
+    {
+        "ASYMMETRIC_ALGORITHMS",
+        "ClientAuthMethod",
+        "ClientCredentialsConfig",
+        "ClientCredentialsTokenProvider",
+        "JwksFetch",
+        "JwtClaimMapping",
+        "JwtTokenValidator",
+        "SigningKeySource",
+        "TokenAcquisitionError",
+        "TokenEndpointUnavailable",
+        "TokenFetch",
+        "ZitadelConfig",
+        "assert_safe_algorithms",
+        "build_zitadel_token_provider",
+        "build_zitadel_token_validator",
+        "zitadel_provider_config",
+    }
+)
+
+
+def test_authn_surface_is_exactly_the_documented_api() -> None:
+    from jdlib.security import authn
+
+    assert frozenset(authn.__all__) == AUTHN_SURFACE
+    for name in authn.__all__:
+        assert getattr(authn, name) is not None
+
+
+def test_authn_import_does_not_pull_optional_dependencies() -> None:
+    script = (
+        "import json, sys, jdlib.security.authn; "
+        f"loaded = sorted({{name.split('.')[0] for name in sys.modules}} "
+        f"& set({OPTIONAL_DISTRIBUTIONS!r})); "
+        "print(json.dumps(loaded))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(result.stdout) == []
