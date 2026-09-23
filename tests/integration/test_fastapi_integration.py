@@ -134,6 +134,43 @@ async def _build_app(control_session_factory, container: JdlibContainer | None =
     return app, pinned_tenant, other_slug, f"Bearer {prefix}.{secret}"
 
 
+async def test_grant_against_soft_deleted_resource_returns_409(control_session_factory):
+    from tests.integration.test_access_grants import (
+        _access,
+        _invoice,
+        _member,
+        _owner_with_grant_permissions,
+    )
+
+    app, pinned_tenant, _, token = await _build_app(control_session_factory)
+    owner = await _owner_with_grant_permissions(control_session_factory, pinned_tenant)
+    member = await _member(control_session_factory, pinned_tenant)
+    deleted_invoice = await _invoice(control_session_factory, pinned_tenant, deleted=True)
+    control, _ = _access(control_session_factory)
+
+    @app.post("/grants")
+    async def grant_route(
+        context: Annotated[TenantContext, fastapi.Depends(get_context)],
+    ) -> dict[str, str]:
+        grant = await control.grant_resource(
+            context.tenant_id,
+            resource_type="invoice",
+            resource_id=deleted_invoice,
+            principal_type="user",
+            principal_id=member.user_id,
+            permission="invoice:approve",
+            actor_id=owner.user_id,
+            actor_principal=owner,
+        )
+        return {"id": str(grant.id)}
+
+    async with _client(app) as client:
+        response = await client.post("/grants", headers={"Authorization": token})
+
+    assert response.status_code == 409
+    assert response.json()["error"] == "InvalidReference"
+
+
 def _client(app) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://jdlib.test"

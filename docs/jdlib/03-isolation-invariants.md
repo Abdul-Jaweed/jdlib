@@ -146,9 +146,11 @@ validates three things at write time: the referenced object **exists**, it
 (not deleted/archived when the reference requires an active target).
 
 Enforcement: `AccessControl` validates through the `ResourceTypeRegistry`
-(resource types) and tenant-plane lookups (org/team scopes); violations raise
-`CrossTenantReferenceError` or `InvalidReference`. Reads treat dangling
-references as invalid and never as allow.
+(resource types) and tenant-plane lookups (org/team scopes); a missing target
+raises `InvalidReference` ("not found"), a same-tenant soft-deleted target
+raises `InvalidReference` ("... is deleted"), and a target owned by another
+tenant raises `CrossTenantReferenceError`. Reads treat dangling references as
+invalid and never as allow.
 
 Tests: grant to a resource id from another tenant rejected; binding to a team of
 another tenant rejected; binding/grant to a soft-deleted or archived target

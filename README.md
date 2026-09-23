@@ -211,9 +211,11 @@ async def list_invoices(
 from your own package as shown; the tenant-scoped snippets below reuse it.)
 
 `install` adds the ASGI middleware, the `JdlibError` -> JSON exception handler
-(401/403/404/409/423/500 mapped from the error class), and stores the container
-on `app.state`. The example uses one shared tenant engine; hybrid deployments
-route inside `uow_factory` by `context.strategy` (see `SessionRouter`).
+(401/403/404/409/423/500 mapped from the error class; `InvalidReference`
+("... is deleted") and `CrossTenantReferenceError` both map to 409), and stores
+the container on `app.state`. The example uses one shared tenant engine;
+hybrid deployments route inside `uow_factory` by `context.strategy` (see
+`SessionRouter`).
 
 `DefaultPDP` memoizes through a request-scoped `AuthzCache`: never build one
 PDP/cache at import time and share it across requests; the snippet builds a

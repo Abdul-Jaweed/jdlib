@@ -28,7 +28,12 @@ def validate_database_handle(value: str) -> str:
 def _handle(tenant: TenantRecord) -> str:
     if tenant.target_handle is None:
         raise StrategyCapabilityError(f"invalid database handle for tenant {tenant.slug}")
-    return validate_database_handle(tenant.target_handle)
+    try:
+        return validate_database_handle(tenant.target_handle)
+    except StrategyCapabilityError as exc:
+        raise StrategyCapabilityError(
+            f"invalid database handle for tenant {tenant.slug}: {tenant.target_handle!r}"
+        ) from exc
 
 
 def _database_name(dsn: str) -> str:
@@ -53,6 +58,12 @@ class DatabasePerTenantStrategy:
     Without ``invalidate`` the rotation takes effect only once the engine
     leaves the cache (deprovision, idle eviction, or ``dispose``); there is no
     hot reload.
+
+    ``invalidate`` disposes even an engine with checked-out connections:
+    SQLAlchemy closes those connections as they are returned to the pool, so a
+    session already open keeps using the old secret until it is closed. A
+    concurrent ``_engine_for`` that resolved the secret before the
+    invalidation re-resolves it instead of inserting a stale-DSN engine.
     """
 
     name = "database"
@@ -71,6 +82,7 @@ class DatabasePerTenantStrategy:
         self._runner = runner
         self._max_targets = max_targets
         self._engines: OrderedDict[str, AsyncEngine] = OrderedDict()
+        self._generation = 0
         self._admin_engine: AsyncEngine | None = None
 
     def _resolve(self, tenant: TenantRecord) -> tuple[str, str]:
@@ -87,17 +99,25 @@ class DatabasePerTenantStrategy:
         return _MIGRATION_SCHEMA
 
     async def _engine_for(self, tenant: TenantRecord) -> AsyncEngine:
-        handle, dsn = self._resolve(tenant)
-        engine = self._engines.get(handle)
-        if engine is not None:
-            self._engines.move_to_end(handle)
+        while True:
+            handle, dsn = self._resolve(tenant)
+            engine = self._engines.get(handle)
+            if engine is not None:
+                self._engines.move_to_end(handle)
+                return engine
+            generation = self._generation
+            await self._evict_idle()
+            engine = self._engines.get(handle)
+            if engine is not None:
+                self._engines.move_to_end(handle)
+                return engine
+            if generation != self._generation:
+                continue
+            if len(self._engines) >= self._max_targets:
+                raise PoolCapacityError(f"database pool cap reached ({self._max_targets})")
+            engine = create_async_engine(dsn)
+            self._engines[handle] = engine
             return engine
-        await self._evict_idle()
-        if len(self._engines) >= self._max_targets:
-            raise PoolCapacityError(f"database pool cap reached ({self._max_targets})")
-        engine = create_async_engine(dsn)
-        self._engines[handle] = engine
-        return engine
 
     async def _evict_idle(self) -> None:
         while len(self._engines) >= self._max_targets:
@@ -117,8 +137,12 @@ class DatabasePerTenantStrategy:
         """Dispose and drop the cached engine for ``handle``.
 
         The rotation entry point: the next ``session`` for this handle
-        resolves the secret again instead of reusing the old DSN.
+        resolves the secret again instead of reusing the old DSN. Engines with
+        checked-out connections are still disposed; their open sessions keep
+        the old secret until closed. The generation bump makes a concurrent
+        ``_engine_for`` that already resolved the old secret re-resolve it.
         """
+        self._generation += 1
         engine = self._engines.pop(handle, None)
         if engine is not None:
             await engine.dispose()

@@ -12,6 +12,7 @@ from jdlib.errors import (
     AuthenticationError,
     AuthorizationError,
     CrossTenantReferenceError,
+    InvalidReference,
     JdlibError,
     TenantAccessDenied,
     TenantNotFound,
@@ -30,6 +31,7 @@ _STATUS_MAP: tuple[tuple[type[JdlibError], int], ...] = (
     (TenantSuspended, 423),
     (TenantNotWritable, 423),
     (CrossTenantReferenceError, 409),
+    (InvalidReference, 409),
 )
 
 

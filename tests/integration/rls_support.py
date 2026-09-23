@@ -6,11 +6,16 @@ from collections.abc import Callable
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from jdlib.persistence.strategies.rls import retryable_ddl_error
+from jdlib.persistence.strategies.rls import (
+    _DDL_ATTEMPTS,
+    _DDL_LOCK_TIMEOUT,
+    _DDL_RETRY_DELAY,
+    _retryable_ddl_error,
+)
 
-LOCK_TIMEOUT = "5s"
-ATTEMPTS = 3
-RETRY_DELAY = 0.25
+LOCK_TIMEOUT = _DDL_LOCK_TIMEOUT
+ATTEMPTS = _DDL_ATTEMPTS
+RETRY_DELAY = _DDL_RETRY_DELAY
 
 _TERMINATE_IDLE = sa.text(
     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
@@ -38,6 +43,6 @@ async def run_rls_ddl(engine: AsyncEngine, callback: Callable[[sa.Connection], o
                 await connection.run_sync(callback)
             return
         except Exception as exc:
-            if attempt + 1 >= ATTEMPTS or not retryable_ddl_error(exc):
+            if attempt + 1 >= ATTEMPTS or not _retryable_ddl_error(exc):
                 raise
             await asyncio.sleep(RETRY_DELAY * (attempt + 1))

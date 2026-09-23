@@ -306,18 +306,40 @@ async def test_create_rejects_target_handle_owned_by_another_tenant(control_sess
         await _create(
             registry, "handle-thief", strategy=PlacementStrategy.SCHEMA, target_handle="t_dup"
         )
+    database_owner = await _create(
+        registry, "handle-owner-db", strategy=PlacementStrategy.DATABASE, target_handle="db-dup"
+    )
     with pytest.raises(ProvisioningError):
         await _create(
             registry,
             "handle-thief-db",
             strategy=PlacementStrategy.DATABASE,
-            target_handle="t_dup",
+            target_handle="db-dup",
         )
     allowed = await _create(
         registry, "shared-handle", strategy=PlacementStrategy.SHARED, target_handle="t_dup"
     )
     assert allowed.status == TenantStatus.PROVISIONING
     assert (await registry.get(owner.id)).status == TenantStatus.PROVISIONING
+    assert (await registry.get(database_owner.id)).status == TenantStatus.PROVISIONING
+
+
+async def test_create_normalizes_plain_string_strategy(control_session_factory):
+    registry, _ = _registry(control_session_factory)
+    tenant = await registry.create(
+        slug=f"string-strategy-{uuid.uuid4().hex[:8]}",
+        name="String Strategy",
+        strategy="shared",  # type: ignore[arg-type]
+        target_handle="default",
+    )
+    assert tenant.status == TenantStatus.PROVISIONING
+    with pytest.raises(ProvisioningError, match="database"):
+        await registry.create(
+            slug=f"string-strategy-bad-{uuid.uuid4().hex[:8]}",
+            name="String Strategy Bad",
+            strategy="database",  # type: ignore[arg-type]
+            target_handle="bad handle",
+        )
 
 
 async def test_create_rejects_invalid_schema_handle(control_session_factory):
@@ -362,17 +384,6 @@ async def test_create_accepts_valid_handles(control_session_factory):
     assert schema_tenant.status == TenantStatus.PROVISIONING
     assert database_tenant.status == TenantStatus.PROVISIONING
     assert shared_tenant.status == TenantStatus.PROVISIONING
-
-
-async def test_create_rejects_duplicate_database_handle(control_session_factory):
-    registry, _ = _registry(control_session_factory)
-    await _create(
-        registry, "db-owner", strategy=PlacementStrategy.DATABASE, target_handle="db-dup"
-    )
-    with pytest.raises(ProvisioningError):
-        await _create(
-            registry, "db-thief", strategy=PlacementStrategy.DATABASE, target_handle="db-dup"
-        )
 
 
 async def test_create_repeat_returns_existing_for_same_placement(control_session_factory):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
@@ -250,6 +251,30 @@ async def test_invalidate_disposes_engine_and_reresolves_secret(monkeypatch):
 
 async def test_invalidate_unknown_handle_is_a_noop():
     await _strategy().invalidate("db-unknown")
+
+
+async def test_invalidate_during_eviction_await_creates_fresh_engine(monkeypatch):
+    created = _fake_engines(monkeypatch)
+    secrets = MemorySecretProvider({"db-acme": "postgresql+asyncpg://u:p@h/acme"})
+    strategy = DatabasePerTenantStrategy(
+        admin_dsn="postgresql+asyncpg://u:p@h/db", secrets=secrets, runner=_Runner()
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def gated_evict() -> None:
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(strategy, "_evict_idle", gated_evict)
+    task = asyncio.create_task(strategy.session(_record()))
+    await started.wait()
+    secrets._mapping["db-acme"] = "postgresql+asyncpg://u:p@h/acme-rotated"
+    await strategy.invalidate("db-acme")
+    release.set()
+    session = await task
+    assert session is created["postgresql+asyncpg://u:p@h/acme-rotated"]
+    assert "postgresql+asyncpg://u:p@h/acme" not in created
 
 
 async def test_idle_engines_evict_least_recently_used(monkeypatch):

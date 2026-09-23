@@ -202,6 +202,7 @@ class TenantRegistry:
         parent_tenant_id: uuid.UUID | None = None,
         actor_id: uuid.UUID | None = None,
     ) -> Tenant:
+        strategy = PlacementStrategy(strategy)
         _validate_target_handle(strategy, target_handle)
         async with await self._control() as session:
             await self._slug_lock(session, slug)

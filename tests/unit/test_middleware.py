@@ -10,6 +10,7 @@ from jdlib.errors import (
     AuthenticationError,
     AuthorizationError,
     CrossTenantReferenceError,
+    InvalidReference,
     JdlibError,
     TenantAccessDenied,
     TenantNotFound,
@@ -38,6 +39,7 @@ def test_http_status_mapping_is_frozen():
     assert http_status_for(TenantAccessDenied("x")) == 404
     assert http_status_for(TenantSuspended("x")) == 423
     assert http_status_for(CrossTenantReferenceError("r", "a", "b")) == 409
+    assert http_status_for(InvalidReference("resource is deleted")) == 409
     assert http_status_for(JdlibError("other")) == 500
 
 

@@ -66,7 +66,7 @@ def emit_rls_policies(
             )
 
 
-def retryable_ddl_error(exc: BaseException) -> bool:
+def _retryable_ddl_error(exc: BaseException) -> bool:
     """Whether a DDL failure is a transient lock conflict worth retrying."""
     names = {type(exc).__name__}
     orig = getattr(exc, "orig", None)
@@ -82,6 +82,11 @@ async def install_rls(engine: AsyncEngine, *, metadata: sa.MetaData, app_role: s
     pooled connection can deadlock or hold the lock past ``lock_timeout``.
     Three bounded attempts (with a small backoff) keep migrations from
     flaking while still failing closed on a real lock holder.
+
+    Assumes PostgreSQL transactional DDL: a failed attempt rolls back
+    atomically, and the policy set is emitted idempotently (``DROP POLICY IF
+    EXISTS`` + ``CREATE POLICY``), so a retry re-runs the whole emission
+    without duplicating policies.
     """
     for attempt in range(_DDL_ATTEMPTS):
         try:
@@ -94,7 +99,7 @@ async def install_rls(engine: AsyncEngine, *, metadata: sa.MetaData, app_role: s
                 )
             break
         except Exception as exc:
-            if attempt + 1 >= _DDL_ATTEMPTS or not retryable_ddl_error(exc):
+            if attempt + 1 >= _DDL_ATTEMPTS or not _retryable_ddl_error(exc):
                 raise
             await asyncio.sleep(_DDL_RETRY_DELAY * (attempt + 1))
     await verify_rls(engine, app_role, metadata=metadata)
