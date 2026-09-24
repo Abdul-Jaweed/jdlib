@@ -87,6 +87,17 @@ A denial-by-construction covers every failure mode, and each has a test:
 | Unknown effect token (anything but `EFFECT_ALLOW`) | denied |
 | Requested action absent from the result | denied, and named in `denied_actions` |
 | All actions requested, at least one not allowed | denied (all-or-nothing) |
+| Query whose principal carries no roles | denied, **not** degraded, `reason="no_roles"`; the engine is never called |
+
+The last row is the one failure mode that is decided locally, and it was added
+after the reference application met it: Cerbos refuses a principal with no roles
+as an invalid request (400, `principal.roles: value is required`), and a client
+error is not an answer — routed through the failure path it became a *degraded*
+decision, which the middleware turns into `503`, for what is really a denial. No
+role-based policy can grant anything to a principal that carries no roles, so
+`CerbosPDP.decide` answers it without asking (`tests/unit/security/test_cerbos_pdp.py`,
+mutation-checked). The "non-2xx response" row above is unchanged: it covers the
+requests the library does send.
 
 There is no configuration field that can change this: `CerbosConfig` rejects
 unknown fields and has no `fail_open`/`allow_on_error` switch (tested).

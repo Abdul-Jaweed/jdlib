@@ -94,14 +94,16 @@ def _pdp(transport: Transport, **overrides: object):
     )
 
 
-def _query(*, actions: tuple[str, ...] = ("read",)) -> AuthorizationQuery:
+def _query(
+    *, actions: tuple[str, ...] = ("read",), roles: frozenset[str] = frozenset({"editor"})
+) -> AuthorizationQuery:
     return AuthorizationQuery(
         principal_id="user-1",
         tenant_id=TENANT_ID,
         resource_kind="document",
         resource_id="doc-42",
         actions=actions,
-        roles=frozenset({"editor"}),
+        roles=roles,
         attributes={"classification": SECRET_ATTRIBUTE},
     )
 
@@ -195,6 +197,7 @@ async def test_request_carries_a_request_id_when_the_query_has_one() -> None:
         resource_kind="document",
         resource_id="doc-42",
         actions=("read",),
+        roles=frozenset({"editor"}),
         request_id="req-abc",
     )
     await _pdp(transport).decide(query)
@@ -329,3 +332,24 @@ async def test_a_denied_decision_never_becomes_allowed_by_missing_meta() -> None
     decision = await _pdp(transport).decide(_query())
     assert isinstance(decision, AuthorizationDecision)
     assert decision.allowed is False
+
+
+async def test_a_principal_with_no_roles_is_denied_without_being_sent() -> None:
+    """A role-less principal is refused here, not mistaken for an engine outage.
+
+    Cerbos rejects a principal carrying no roles as an invalid request (400,
+    "principal.roles: value is required"). A client error is not an answer, so it
+    travels back through the failure path and surfaces as a *degraded* decision -
+    the caller is told the policy engine is unavailable and answers 503, for what
+    is really a denial. No role-based policy can grant anything to a principal
+    with no roles at all, so the question is answered without being asked.
+    """
+
+    transport = Transport(_response({"read": "EFFECT_ALLOW"}))
+    decision = await _pdp(transport).decide(_query(roles=frozenset()))
+
+    assert transport.calls == [], "a request Cerbos will reject was still sent"
+    assert decision.allowed is False
+    assert decision.degraded is False
+    assert decision.reason == "no_roles"
+    assert decision.decided_at == NOW

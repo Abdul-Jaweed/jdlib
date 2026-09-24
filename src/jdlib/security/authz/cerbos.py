@@ -92,6 +92,20 @@ class CerbosPDP:
 
     async def decide(self, query: AuthorizationQuery) -> AuthorizationDecision:
         decided_at = self._clock.now()
+        if not query.roles:
+            # Cerbos requires at least one role on the principal and answers a
+            # role-less one with a client error (400, "principal.roles: value is
+            # required"). A client error is not an answer, so it would come back
+            # through the failure path as a *degraded* decision - the caller is
+            # told the policy engine is unavailable and answers 503, for what is
+            # really a denial. No role-based policy can grant anything to a
+            # principal that carries no roles, so this is decided here instead of
+            # being asked, and the reason says why.
+            return AuthorizationDecision.deny(
+                reason="no_roles",
+                decided_at=decided_at,
+                denied_actions=tuple(query.actions),
+            )
         payload = self._payload(query)
         call = self._transport(self._config.check_resources_url(), payload, {})
         try:

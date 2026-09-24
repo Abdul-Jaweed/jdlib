@@ -304,3 +304,31 @@ names the commit that fixed it.
 * **Found by** the reference application's request-path suite, which asserts the
   status code a caller receives rather than the exception the library raises.
   `tests/unit -q -W error` → 859 passed at this revision.
+
+### A principal with no roles was reported as an authorization outage — 6f8120b
+
+* **Symptom.** A request whose principal carries no roles in the tenant came back
+  as `503 Service Unavailable` — "the policy engine could not answer" — when the
+  truth is a denial. Nothing grants permission to a principal with no roles, and
+  the caller is not facing an unavailable decision.
+* **Cause.** Cerbos rejects such a principal at the API boundary (400,
+  `principal.roles: value is required`). `CerbosPDP.decide` sends the query, the
+  transport reports the client error as a failure, and every failure becomes a
+  *degraded* decision. A request the library should never have built was
+  indistinguishable from an engine outage.
+* **Fix.** `security/authz/cerbos.py` answers a role-less query locally: a denied,
+  non-degraded decision with `reason="no_roles"`, and no call to the engine. The
+  question is not asked because the engine will not answer it and no role-based
+  policy can grant anything to a principal that carries no roles at all.
+* **Now.** One test in `tests/unit/security/test_cerbos_pdp.py` asserting both the
+  decision and that the transport was never called. Mutation-checked: fails with
+  the guard removed (`if not query.roles:` → `if False:`). One existing test had
+  to be corrected while doing this: `test_request_carries_a_request_id_when_the_query_has_one`
+  built a query with no roles, so it was silently exercising the failure path —
+  a query that can never reach the engine. It now carries a role, which is what
+  that test always meant. `tests/unit -q -W error` → **860 passed** at this
+  revision (859 before).
+* **Found by** the reference application's request path, where a member with no
+  role binding but an active membership reached the enforcement point and got a
+  503 for what is a denial. The application refuses that case itself before
+  asking, but the library was still misreporting it for every other consumer.
