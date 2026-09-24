@@ -21,3 +21,8 @@ security-artifacts/
 # Publication rules for this programme forbid naming it in JDLib documentation,
 # so these live outside the tracked tree entirely.
 .recon/
+
+# Phase 1 hygiene: coverage data and build output are artefacts, not sources.
+.coverage
+.coverage.*
+dist/
