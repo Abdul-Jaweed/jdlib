@@ -54,21 +54,42 @@ metrics backend raises, and the decision still completes. The inverse — a metr
 outage becoming an authorization outage — is the failure this arrangement exists
 to prevent.
 
-## 4. Remaining in this phase
+## 4. Trace context and spans (§7.1, §7.2)
 
-* **§7.1 OpenTelemetry** — traces, spans, W3C Trace Context propagation, with the
-  `trace_id`/`span_id`/`request_id`/`correlation_id` relationships preserved.
-  Intended shape: an optional extra (`opentelemetry-api`) so the core stays
-  import-safe, spans emitted through the same `safe_emit` isolation, and the
-  context ids carried onto the span rather than into a label.
-* **§7.2 Security spans** — authentication, tenant resolution, authorization,
-  Cerbos decision, token validation, gateway validation, audit recording,
-  privileged operations; bounded attributes only, with a test asserting no
-  attribute is high-cardinality and none can carry a token.
-* **§7.5 Docker observability stack** — an OpenTelemetry Collector (plus
-  Prometheus/Grafana where practical) brought up the way `tests/infra/kong` does,
-  with a real test that telemetry emitted by the library is collected, and a
-  skip-clean harness when Docker is unavailable.
-* **§7.6 gate** — the full phase gate with the verification list (no secret
-  leakage, no unexpected high-cardinality metrics, trace propagation works,
-  failure paths observable, telemetry failure does not disable security).
+`parse_traceparent` is strict: lowercase hex only, exactly four fields, non-zero
+ids, and an unsupported version is refused rather than guessed at (the
+recommendation's forward-compatibility rule). A trace id half-understood from a
+malformed header silently breaks the join between a request, its logs and its
+audit rows — the header's only purpose — so refusing is the safer failure.
+`request_ids_from_headers` derives request, correlation and trace ids from
+inbound headers and *generates* the first two when they are absent, because a
+request with no ids cannot be joined to anything after the fact.
+
+Spans carry dimensions, not identifiers. A span is not aggregated, so the
+cardinality argument that governs metrics does not apply — but the identifiers
+that make a trace findable already live in the log record and the audit row,
+joined by `trace_id`. The attribute allow-list is therefore explicit
+(`security.*`, plus operation/decision/principal.kind/auth.method/gateway.name/
+tenant.strategy/outcome/mode/kind/status/reason/result), an identifier or
+credential-shaped attribute is refused with that reason, and a string value still
+passes the shared redaction set.
+
+The layer is duck-typed against the OpenTelemetry API rather than importing it:
+the library is inert without a tracer, an application that has one passes its
+own, and the core never grows an optional import. Failures are swallowed in both
+directions — a collector outage must not disable security, and a failing span
+must not mask the exception the body is raising (the context manager returns
+`None`, never `True`).
+
+## 5. Remaining in this phase
+
+* **§7.5 Docker observability stack** — an OpenTelemetry Collector (with
+  Prometheus/Grafana where practical) brought up the way `tests/infra/kong` does:
+  a `start.sh`, credentials/config under `tests/infra/`, a skip-clean harness
+  when Docker is unavailable, and a test proving telemetry emitted by the library
+  is actually collected — plus the collector itself shown to be *receiving*.
+* **§7.6 gate** — the full phase gate with the directive's verification list: no
+  secret leakage, no unexpected high-cardinality metrics, trace propagation
+  works, failure paths observable, telemetry failure does not disable security.
+  The first four are already test-enforced per layer; the gate consolidates the
+  evidence.
