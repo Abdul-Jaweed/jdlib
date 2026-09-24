@@ -16,6 +16,7 @@ Audit is configuration; it is never a precondition for serving a request or for 
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -44,7 +45,13 @@ from jdlib.query.specification import QuerySpecification
 from jdlib.resources.errors import ResourceHydrationError
 from jdlib.resources.handle import ResourceHandle
 from jdlib.resources.resolver import ResourceResolver
-from jdlib.security.audit.events import AuditOutcome, SecurityAuditEvent, SecurityEventType
+from jdlib.security.audit.emitter import AsyncSinkEmitter, emit_safely
+from jdlib.security.audit.events import (
+    AuditOutcome,
+    AuditSource,
+    SecurityAuditEvent,
+    SecurityEventType,
+)
 from jdlib.security.context import AuthMethod, SecurityContext, security_context_scope
 from tests.support.context_fakes import CallableClock
 
@@ -297,3 +304,46 @@ def test_no_recorded_event_carries_a_credential_or_a_target() -> None:
     assert SECRET not in recorded
     assert TARGET not in recorded
     assert "postgresql" not in recorded
+
+
+# --- the async-sink bridge ---------------------------------------------------------------------
+
+
+class _AsyncSink:
+    def __init__(self) -> None:
+        self.events: list[SecurityAuditEvent] = []
+
+    async def emit(self, event: SecurityAuditEvent) -> None:
+        await asyncio.sleep(0)
+        self.events.append(event)
+
+
+async def test_an_async_sink_receives_events_through_the_bridge() -> None:
+    """The boundaries are synchronous and the library's sinks are coroutines."""
+    sink = _AsyncSink()
+    bridge = AsyncSinkEmitter(sink)
+    event = SecurityAuditEvent(
+        event_type=SecurityEventType.CONNECTOR_ACQUIRED,
+        outcome=AuditOutcome.SUCCESS,
+        action="connector.acquire",
+        source=AuditSource.SYSTEM,
+    )
+
+    assert emit_safely(bridge, event) is True
+    await bridge.drain()
+
+    assert sink.events == [event]
+
+
+def test_the_bridge_reports_failure_when_there_is_no_running_loop() -> None:
+    """Rather than inventing a thread pool: an out-of-order event is not the record it claims."""
+    sink = _AsyncSink()
+    event = SecurityAuditEvent(
+        event_type=SecurityEventType.CONNECTOR_ACQUIRED,
+        outcome=AuditOutcome.SUCCESS,
+        action="connector.acquire",
+        source=AuditSource.SYSTEM,
+    )
+
+    assert emit_safely(AsyncSinkEmitter(sink), event) is False
+    assert sink.events == []

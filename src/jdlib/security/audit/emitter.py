@@ -13,6 +13,7 @@ whether the event actually reached the emitter, so a test can tell the two apart
 
 from __future__ import annotations
 
+import asyncio
 from typing import Protocol
 
 from jdlib.security.audit.events import SecurityAuditEvent
@@ -33,3 +34,36 @@ def emit_safely(emitter: SecurityEventEmitter | None, event: SecurityAuditEvent)
     except Exception:  # noqa: BLE001 - an audit outage is not the caller's failure
         return False
     return True
+
+
+class AsyncSinkEmitter:
+    """Drives an async sink from a synchronous boundary.
+
+    The successor boundaries are synchronous - a compiler, a registry, a rotating provider -
+    and the library's sinks are coroutines, so something has to bridge them. This schedules the
+    emit on the running loop and holds a reference until it completes, because an unreferenced
+    task can be collected mid-flight and the audit record would simply vanish.
+
+    With no running loop there is nothing to schedule on, and inventing a thread pool to hide
+    that would put events out of order and out of the request's lifetime. It raises instead, so
+    `emit_safely` reports the event as not delivered - which is the truth.
+    """
+
+    def __init__(self, sink: object) -> None:
+        self._sink = sink
+        self._pending: set[asyncio.Task[None]] = set()
+
+    def __call__(self, event: SecurityAuditEvent) -> None:
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(self._sink.emit(event))  # type: ignore[attr-defined]
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+
+    async def drain(self) -> None:
+        """Wait for everything scheduled so far. Called on shutdown, never on the hot path."""
+        while self._pending:
+            await asyncio.gather(*tuple(self._pending), return_exceptions=True)
+
+    @property
+    def pending(self) -> int:
+        return len(self._pending)
