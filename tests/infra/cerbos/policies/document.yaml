@@ -1,0 +1,44 @@
+# Document resource policy for the local infrastructure stack.
+#
+# Used by tests/infra/test_cerbos_infra.py to exercise ALLOW, DENY, wrong
+# tenant, wrong principal, wrong action, wrong resource, missing attribute and
+# policy-error paths through the real engine.
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: "default"
+  resource: document
+  importDerivedRoles:
+    - document_roles
+  rules:
+    # view: any reader, but only inside the resource's own tenant
+    - actions: ["view"]
+      effect: EFFECT_ALLOW
+      derivedRoles: ["reader"]
+      condition:
+        match:
+          expr: request.principal.attr.tenantId == request.resource.attr.tenantId
+    # edit: the owner, inside the resource's own tenant
+    - actions: ["edit"]
+      effect: EFFECT_ALLOW
+      derivedRoles: ["owner"]
+      condition:
+        match:
+          expr: request.principal.attr.tenantId == request.resource.attr.tenantId
+    # delete: an admin role, inside the resource's own tenant
+    - actions: ["delete"]
+      effect: EFFECT_ALLOW
+      roles: ["admin"]
+      condition:
+        match:
+          expr: request.principal.attr.tenantId == request.resource.attr.tenantId
+    # publish: requires the department attribute; a resource without it denies,
+    # which is the "missing attribute" case (never a wildcard)
+    - actions: ["publish"]
+      effect: EFFECT_ALLOW
+      derivedRoles: ["publisher"]
+      condition:
+        match:
+          all:
+            of:
+              - expr: request.principal.attr.tenantId == request.resource.attr.tenantId
+              - expr: request.resource.attr.department == "editorial"

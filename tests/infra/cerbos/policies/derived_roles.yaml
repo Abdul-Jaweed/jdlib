@@ -1,0 +1,18 @@
+# Derived roles for the local infrastructure policy pack.
+#
+# Tenant isolation is enforced here as well as in the resource policy: a role
+# only grants anything when the principal's tenant matches the resource's, so a
+# cross-tenant request denies even for an admin.
+apiVersion: api.cerbos.dev/v1
+derivedRoles:
+  name: document_roles
+  definitions:
+    - name: reader
+      parentRoles: ["viewer", "editor", "admin"]
+    - name: owner
+      parentRoles: ["editor", "admin"]
+      condition:
+        match:
+          expr: request.resource.attr.ownerId == request.principal.id
+    - name: publisher
+      parentRoles: ["editor", "admin"]
