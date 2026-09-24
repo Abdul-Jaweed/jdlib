@@ -177,3 +177,34 @@ def test_authz_import_does_not_pull_optional_dependencies() -> None:
         check=True,
     )
     assert json.loads(result.stdout) == []
+
+
+GATEWAY_SURFACE = frozenset(
+    {
+        "GatewayConfig",
+        "GatewayMode",
+        "KongGatewayAdapter",
+        "NoGatewayAdapter",
+        "TykGatewayAdapter",
+    }
+)
+
+
+def test_gateway_surface_is_exactly_the_documented_api() -> None:
+    from jdlib.security import gateway
+
+    assert frozenset(gateway.__all__) == GATEWAY_SURFACE
+    for name in gateway.__all__:
+        assert getattr(gateway, name) is not None
+
+
+def test_gateway_adapters_satisfy_the_core_port() -> None:
+    from jdlib.security.gateway import (
+        KongGatewayAdapter,
+        NoGatewayAdapter,
+        TykGatewayAdapter,
+    )
+    from jdlib.security.interfaces import GatewayAdapter
+
+    for adapter in (NoGatewayAdapter(), KongGatewayAdapter, TykGatewayAdapter):
+        assert isinstance(adapter, GatewayAdapter)
