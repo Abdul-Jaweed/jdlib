@@ -58,7 +58,17 @@ def endpoint() -> str:
         container.with_env("MINIO_ROOT_USER", ACCESS_KEY)
         container.with_env("MINIO_ROOT_PASSWORD", SECRET_KEY)
         container.with_command("server /data")
-        container.start()
+        try:
+            container.start()
+        except Exception as exc:  # noqa: BLE001 - a daemon that refuses the pull is a SKIP
+            # The Docker guard covers "no Docker CLI here". This covers the next thing that goes
+            # wrong on a shared runner: a daemon that refuses the image pull. Failing the build
+            # would say the storage code is broken, and the daemon did not say that - it said the
+            # image was not found. The reason is single-line because pytest prints it inline.
+            first_line = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
+            if "images/create" in str(exc) or "Not Found" in str(exc):
+                pytest.skip(f"the MinIO image could not be pulled here: {first_line}")
+            raise
         url = f"http://{container.get_container_host_ip()}:{container.get_exposed_port(9000)}"
         client = boto3.client(
             "s3",
