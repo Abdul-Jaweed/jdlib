@@ -188,6 +188,32 @@ A row whose vocabulary this build does not know also must not break a read: the
 row is reconstructed with a fallback member and its category renders as
 `unknown`.
 
+**Emission points for the remaining families (§6.5).** The families that had
+vocabulary but no producer are wired through seams the library already calls —
+no second plumbing, and a deployment that wires no sink keeps today's behaviour
+exactly:
+
+| Family | Seam it plugs into | Events |
+|---|---|---|
+| Privilege lifecycle | `PrivilegeAudit.record_privilege` (context factory) | `PRIVILEGE_ISSUED` |
+| Privileged raw SQL | `RawSqlAuditor.record_raw_sql` (persistence) | `RAW_SQL_PRIVILEGED` |
+| Refused privileged raw SQL | the privilege gate in `TenantSession.raw_sql` | `RAW_SQL_REJECTED` |
+
+A refusal is the interesting half: an attempt to run privileged raw SQL without
+a privilege is recorded *before* `AuthorizationError` is raised, with the actor
+and the request/correlation ids taken from the tenant context — a refusal with no
+actor would not be evidence. Two rules hold across the adapters: the statement
+text is never copied into the trail (a statement carries literals, so only its
+kind — `select`, `update` — is recorded), and an emission never replaces the
+failure it accompanies. Free text such as a break-glass justification passes
+through the same redaction rules as any other metadata, so a DSN typed into it
+does not survive.
+
+The refusal hook is consulted opportunistically (`getattr`), so an auditor
+written against the original protocol still satisfies it — additive for every
+existing implementation, proven by a test asserting a session with no sink
+behaves exactly as before.
+
 Integration coverage (real PostgreSQL, 11 tests): tenant isolation, cross-tenant
 refusal, platform read, unauthenticated refusal, write≠read, pagination
 stability, export determinism and bounding, the export event, cross-format

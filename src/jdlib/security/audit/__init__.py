@@ -6,6 +6,7 @@ namespace pulls no optional dependency.
 """
 
 from jdlib.security.audit.access import AuditAccess, AuditCapability
+from jdlib.security.audit.adapters import AuditPrivilegeAudit, AuditRawSqlAuditor
 from jdlib.security.audit.emitters import (
     DecisionObserver,
     NullSecurityEventSink,
@@ -38,6 +39,8 @@ __all__ = [
     "DEFAULT_EXPORT_LIMIT",
     "MAX_EXPORT_LIMIT",
     "AuditAccess",
+    "AuditPrivilegeAudit",
+    "AuditRawSqlAuditor",
     "AuditCapability",
     "AuditOutcome",
     "AuditPage",

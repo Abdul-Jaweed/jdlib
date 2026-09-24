@@ -17,6 +17,15 @@ import re
 
 REDACTED = "[redacted]"
 
+# Credentials embedded in a URL (database connection strings). The first pattern
+# consumes the whole token — host and database name included — because those are
+# internal infrastructure detail too, while leaving the surrounding sentence
+# readable. Plain URLs carrying no credentials are not touched.
+_DSN_WITH_CREDENTIALS = re.compile(
+    r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]{1,64}:[^/\s@]{1,128}@[^\s'\"<>){}\],;]*"
+)
+_URL_CREDENTIALS = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]{1,64}:[^/\s@]{1,128}@")
+
 SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     # PEM blocks (private keys, certificates)
     re.compile(r"-----BEGIN [A-Z ]{1,40}-----.*?-----END [A-Z ]{1,40}-----", re.DOTALL),
@@ -25,7 +34,8 @@ SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     # any bearer credential
     re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"),
     # credentials embedded in a URL (database connection strings)
-    re.compile(r"(?i)[a-z][a-z0-9+.-]*://[^/\s:@]{1,64}:[^/\s@]{1,128}@"),
+    _DSN_WITH_CREDENTIALS,
+    _URL_CREDENTIALS,
     # `password=...`, `secret: ...`, `api_key=...`, `token=...`
     re.compile(
         r"(?i)\b(api[_-]?key|client[_-]?secret|secret|password|passwd|pwd|token)"

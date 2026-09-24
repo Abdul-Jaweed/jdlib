@@ -345,9 +345,21 @@ class TenantSession:
         if mode == RawSqlMode.PRIVILEGED:
             privilege = self.context.privilege
             if privilege is None:
+                await self._deny(
+                    mode=mode,
+                    capability=None,
+                    sql=compiled.sql,
+                    reason="privileged raw SQL requires a privileged context",
+                )
                 raise AuthorizationError("privileged raw SQL requires a privileged context")
             capability = privilege.capability or ""
             if capability not in {"tenant.raw_sql", "platform.raw_sql"}:
+                await self._deny(
+                    mode=mode,
+                    capability=capability,
+                    sql=compiled.sql,
+                    reason="missing raw SQL capability",
+                )
                 raise AuthorizationError("missing raw SQL capability")
             if capability == "tenant.raw_sql":
                 self._validator.validate_tenant_bound(compiled, self.context.tenant_id)
@@ -360,4 +372,33 @@ class TenantSession:
             self._validator.validate_tenant_bound(compiled, self.context.tenant_id)
         return await self._session.execute(
             statement.execution_options(jdlib_raw_sql=True), params
+        )
+
+    async def _deny(
+        self, *, mode: RawSqlMode, capability: str | None, sql: str, reason: str
+    ) -> None:
+        """Record a refused raw-SQL attempt before the refusal is raised.
+
+        The auditor is consulted opportunistically: an auditor written against
+        the original protocol simply has no refusal method and is skipped, so
+        this is additive for every existing implementation. Nothing here may
+        replace the refusal — the ``AuthorizationError`` is raised by the caller
+        either way, and a failure in the sink surfaces alongside it rather than
+        being swallowed.
+        """
+        record_denied = getattr(self._auditor, "record_raw_sql_denied", None)
+        if record_denied is None:
+            return
+        principal = self.context.principal
+        await record_denied(
+            mode=mode,
+            capability=capability,
+            tenant_id=self.context.tenant_id,
+            sql=sql,
+            reason=reason,
+            principal_id=principal.id,
+            principal_kind=str(principal.kind),
+            request_id=self.context.request_id,
+            correlation_id=self.context.correlation_id,
+            trace_id=self.context.trace_id,
         )
