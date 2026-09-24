@@ -146,9 +146,8 @@ async def test_a_retry_restores_the_context_a_boundary_dropped() -> None:
     connector = _AlwaysFails(drop_context=True)
     policy = ConnectionPolicy(max_attempts=2)
 
-    with security_context_scope(context):
-        with pytest.raises(ConnectorError):
-            await policy.run(connector, statement="select 1", sleeper=_no_sleep)
+    with security_context_scope(context), pytest.raises(ConnectorError):
+        await policy.run(connector, statement="select 1", sleeper=_no_sleep)
 
     assert connector.seen == [context, context], (
         "the second attempt ran after the first attempt cleared the ambient context, so it can "
