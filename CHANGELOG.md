@@ -333,7 +333,7 @@ names the commit that fixed it.
   503 for what is a denial. The application refuses that case itself before
   asking, but the library was still misreporting it for every other consumer.
 
-### The transactional audit sink dropped every event written through an async session
+### The transactional audit sink dropped every event written through an async session — 16ed324
 
 * **Symptom.** `TransactionAuditSink` — the sink the documentation tells consumers
   to use so that an audit row is written with the operation it describes —
