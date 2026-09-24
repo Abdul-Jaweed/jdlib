@@ -150,6 +150,9 @@ a non-UUID principal (a federated subject), the raw subject is kept as
 Sink semantics are explicit because audit availability is a security decision:
 
 * `TransactionAuditSink` — writes in the caller's transaction (fail closed);
+  its `emit` is `async` and awaits the recorder's asynchronous entry point, because
+  a session whose `add` is a coroutine must be awaited or the row is lost. The
+  recorder's synchronous methods refuse such a session rather than drop the row.
   this is what the project uses,
 * `NullSecurityEventSink` — drops events; for tests, or a deliberate documented
   gap. Never selected implicitly,

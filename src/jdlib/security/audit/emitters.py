@@ -75,7 +75,11 @@ class TransactionAuditSink:
         # package; a module-level import would close a cycle.
         from jdlib.models.audit_recorder import TenantAuditRecorder
 
-        TenantAuditRecorder(self._session).record_security(event)
+        # The recorder's async entry point, not its synchronous one: this sink runs
+        # in an async transaction, and the sync path cannot stage anything on a
+        # session whose add() is a coroutine - it would drop the event, silently,
+        # which is the one failure an audit trail must never have.
+        await TenantAuditRecorder(self._session).arecord_security(event)
 
 
 def authorization_audit_event(

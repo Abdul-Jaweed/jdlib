@@ -332,3 +332,33 @@ names the commit that fixed it.
   role binding but an active membership reached the enforcement point and got a
   503 for what is a denial. The application refuses that case itself before
   asking, but the library was still misreporting it for every other consumer.
+
+### The transactional audit sink dropped every event written through an async session
+
+* **Symptom.** `TransactionAuditSink` — the sink the documentation tells consumers
+  to use so that an audit row is written with the operation it describes —
+  persisted nothing when the caller's session was JDLib's own async
+  `TenantSession`. The operation succeeded, the trail stayed empty, and the only
+  trace was a `RuntimeWarning: coroutine 'TenantSession.add' was never awaited`
+  that a deployment not running under `-W error` never sees.
+* **Cause.** `TenantAuditRecorder` is synchronous and stages rows with
+  `self._session.add(row)`. On an async session that call returns a coroutine;
+  discarding it means the row is never added. The `# type: ignore[attr-defined]`
+  on that line kept the type checker from reporting the discarded awaitable, and
+  the sync-only signature hid it from callers: `TransactionAuditSink.emit` is
+  `async`, but it reached the recorder through a synchronous method.
+* **Fix.** `models/audit_recorder.py` gains `arecord` and `arecord_security` for
+  awaitable sessions, which await the session's `add`. The synchronous methods now
+  *refuse* an awaitable session (`TypeError`) instead of silently dropping the
+  row — an audit trail with silent holes is worse than an operation that refuses
+  to run — and close the coroutine they abandon, so the refusal is the only signal
+  raised. `security/audit/emitters.py` awaits the async entry point.
+* **Now.** Two tests in `tests/unit/security/test_adversarial_audit_integrity.py`:
+  one asserts the row is staged on an awaitable session, one asserts the sync path
+  refuses rather than drops. Mutation-checked: removing the `await` in
+  `arecord_security` fails the first. `tests/unit/security/test_adversarial_audit_integrity.py`
+  + `tests/integration/test_audit_sinks.py` → 17 passed under `-W error`. Reported
+  by the reference application, whose operator surface emitted a privileged
+  `SECURITY_CONFIGURATION_CHANGED` event through this sink and watched the trail
+  stay empty.
+

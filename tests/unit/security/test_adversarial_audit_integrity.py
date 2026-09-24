@@ -166,3 +166,51 @@ def test_the_model_still_models_history_even_though_writes_refuse_it() -> None:
     """
     old = _event(occurred_at=datetime(2020, 1, 1, tzinfo=UTC))
     assert old.occurred_at == datetime(2020, 1, 1, tzinfo=UTC)
+
+
+# --- an async session must not swallow the row ----------------------------------
+
+
+class _AsyncSession:
+    """A session whose ``add`` is awaitable, like JDLib's own ``TenantSession``.
+
+    The recorder's synchronous path cannot await it, and a discarded coroutine
+    means the row is never staged. A trail that loses events whenever the caller
+    happens to be async is not a trail.
+    """
+
+    def __init__(self) -> None:
+        self.added: list[object] = []
+
+    async def add(self, obj: object) -> None:
+        self.added.append(obj)
+
+
+async def test_the_async_recorder_stages_the_row_on_an_awaitable_session() -> None:
+    session = _AsyncSession()
+    caller = _caller()
+
+    with context_scope(_context(caller)):
+        row = await TenantAuditRecorder(session, clock=Clock()).arecord_security(
+            _event(principal_id=caller.id, principal_kind=caller.kind.value)
+        )
+
+    assert session.added == [row]
+    assert row.actor_id == caller.id
+
+
+def test_the_sync_recorder_refuses_an_awaitable_session() -> None:
+    """A write that cannot happen here is refused, not lost silently."""
+
+    session = _AsyncSession()
+    caller = _caller()
+
+    with (
+        context_scope(_context(caller)),
+        pytest.raises(TypeError, match="awaitable"),
+    ):
+        TenantAuditRecorder(session, clock=Clock()).record_security(
+            _event(principal_id=caller.id, principal_kind=caller.kind.value)
+        )
+
+    assert session.added == []
