@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any, Final
 
-from jdlib.caching.errors import CachePolicyError, CacheSerializationError, CredentialCacheRefusedError
+from jdlib.caching.errors import (
+    CacheSerializationError,
+    CredentialCacheRefusedError,
+)
 from jdlib.caching.keys import ScopedKeyFactory
 from jdlib.caching.local import contains_credential
 from jdlib.caching.policy import CachePolicy
@@ -58,7 +61,10 @@ class RedisCache:
             self._client = None
 
     def _key(self, *, tenant: str, namespace: str, resource: str, identifier: str) -> str:
-        return f"{self.prefix}:{self.keys.build(tenant=tenant, namespace=namespace, resource=resource, identifier=identifier)}"
+        scoped = self.keys.build(
+            tenant=tenant, namespace=namespace, resource=resource, identifier=identifier
+        )
+        return f"{self.prefix}:{scoped}"
 
     async def set(
         self,
@@ -86,11 +92,17 @@ class RedisCache:
                 "would be stored in a form no reader can parse"
             ) from exc
         client = await self._connect()
-        await client.set(self._key(tenant=tenant, namespace=namespace, resource=resource, identifier=identifier), payload, ex=lifetime)
+        await client.set(
+            self._key(tenant=tenant, namespace=namespace, resource=resource, identifier=identifier),
+            payload,
+            ex=lifetime,
+        )
 
     async def get(self, *, tenant: str, namespace: str, resource: str, identifier: str) -> Any:
         client = await self._connect()
-        raw = await client.get(self._key(tenant=tenant, namespace=namespace, resource=resource, identifier=identifier))
+        raw = await client.get(
+            self._key(tenant=tenant, namespace=namespace, resource=resource, identifier=identifier)
+        )
         if raw is None:
             return None
         try:
@@ -105,7 +117,9 @@ class RedisCache:
             ) from exc
 
     async def invalidate_namespace(self, *, tenant: str, namespace: str) -> int:
-        return await self._drop(f"{self.prefix}:{self.keys.namespace_prefix(tenant=tenant, namespace=namespace)}")
+        return await self._drop(
+            f"{self.prefix}:{self.keys.namespace_prefix(tenant=tenant, namespace=namespace)}"
+        )
 
     async def invalidate_tenant(self, tenant: str) -> int:
         return await self._drop(f"{self.prefix}:{self.keys.tenant_prefix(tenant)}")
