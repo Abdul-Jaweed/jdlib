@@ -305,7 +305,7 @@ names the commit that fixed it.
   status code a caller receives rather than the exception the library raises.
   `tests/unit -q -W error` → 859 passed at this revision.
 
-### A principal with no roles was reported as an authorization outage — 6f8120b
+### A principal with no roles was reported as an authorization outage — 1ccdf2c
 
 * **Symptom.** A request whose principal carries no roles in the tenant came back
   as `503 Service Unavailable` — "the policy engine could not answer" — when the
