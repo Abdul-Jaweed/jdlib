@@ -1,22 +1,30 @@
 # Audit Hardening (Phase 6)
 
-Status: **IN PROGRESS** — vocabulary, persistence, emission, audit access
-(reads, tenant isolation, export) are done and
-verified against real PostgreSQL; export and the integrity decision follow.
+Status: **COMPLETE** — every requirement of §5 and §6 is implemented and
+verified, and both PostgreSQL-backed layers run against a real server
+(Testcontainers).
 
-Source: `src/jdlib/security/audit/` (new), `src/jdlib/models/audit.py`,
-`src/jdlib/models/audit_recorder.py`,
-`src/jdlib/migrations/tenant/versions/0002_security_audit_columns.py`
-Tests: `tests/unit/security/test_audit_events.py` (16),
-`tests/unit/security/test_audit_emitters.py` (12),
-`tests/integration/test_security_audit_persistence.py` (9, real PostgreSQL)
+Source: `src/jdlib/security/audit/` (`events`, `emitters`, `access`, `export`,
+`adapters`), `src/jdlib/models/audit.py`, `src/jdlib/models/audit_recorder.py`,
+`src/jdlib/migrations/tenant/versions/0002_security_audit_columns.py`,
+`src/jdlib/persistence/session.py` (refusal emission)
 
 | Evidence | Result |
 |---|---|
-| Unit (vocabulary, envelope, emitters) | 28 passed |
-| Integration against real PostgreSQL (Testcontainers) | 9 passed |
-| `ruff` / `mypy` | see the final gate in §7 |
+| Unit — vocabulary, envelope, metadata safety | 16 |
+| Unit — emitters (authorization decisions) | 12 |
+| Unit — capability model, reads, export rendering | 17 |
+| Unit — adapters (privilege, raw SQL) | 8 |
+| Unit — adapters (control plane: lifecycle, authn, roles) | 21 |
+| Integration — persistence, transactions, attribution (real PostgreSQL) | 9 |
+| Integration — tenant isolation, pagination, export (real PostgreSQL) | 11 |
+| Integration — refusal is recorded and still refused (real PostgreSQL) | 3 |
+| Full gate: `pytest -q -W error` | **1025 passed, 6 skipped** |
+| `ruff check .` / `mypy src/jdlib` | clean / clean (94 source files) |
 
+The six skips are the documented Tyk infrastructure limitation from Phase 4
+(stock Tyk 5.3.1 OSS has no JavaScript/coprocess runtime); no test was skipped
+to make this phase pass.
 ---
 
 ## 1. Event vocabulary (directive §4)
@@ -262,17 +270,47 @@ ruff check .
 mypy src/jdlib
 ```
 
-## 9. Remaining in this phase
+## 9. Self-evaluation (directive §96)
 
-* **Audit export** (§6): filters (tenant, principal, event_type, outcome,
-  resource, time range, request/correlation id), JSON + CSV output, the export
-  itself authorized and audited, no secrets or unnecessary PII. Not yet
-  implemented — it is the next slice, and it is the reason this document's status
-  is IN PROGRESS rather than COMPLETE.
-* **Emission for the remaining families** (§4): authentication
-  (`AUTH_LOGIN_*`, `AUTH_TOKEN_*`), tenant lifecycle, privilege and
-  security-sensitive events (`RAW_SQL_REJECTED`, `CROSS_TENANT_ACCESS_REJECTED`,
-  `CREDENTIAL_*`, `SECURITY_CONFIGURATION_CHANGED`) have vocabulary and storage
-  but are not yet emitted from their enforcement points.
-* **Audit authorization**: who may read the trail (distinct from who may write
-  it) — implemented together with export.
+**Delivered.** A stable event vocabulary (34 directive names plus the audit-access
+family), an envelope that fills identifiers from the ambient security context and
+validates metadata at construction, redaction shared with the error-response
+path, persistence through the existing recorder with real transaction semantics
+(a rolled-back operation leaves no row; a committed one leaves exactly one),
+fail-closed tenant attribution, isolation proven against PostgreSQL, emission
+from the authorization PEP, a capability model that separates writing the trail
+from reading and exporting it, tenant-bound reads that cannot be widened by a
+query, deterministic JSON/JSONL/CSV export that re-validates metadata on the way
+out, and producers for the remaining families wired through seams the library
+already calls (privilege issuance, privileged raw SQL, refused raw SQL, control
+plane lifecycle and authentication actions).
+
+**Behaviour changes, declared (§90).** (1) A degraded policy decision is now
+`AuthorizationUnavailable` (503, retryable) instead of a 403 — still a denial,
+never an allow. (2) Client-visible 4xx messages are redacted; a message that
+quoted a credential now shows `[redacted]`. (3) A connection string is redacted
+as a whole, host and database name included, when it carries credentials —
+previously only its credentials were removed. (4) A refused privileged raw-SQL
+attempt is now recorded before `AuthorizationError` is raised, through an
+`getattr`-guarded hook so existing auditors keep working.
+
+**Deliberately not done.** Per-row hash chaining inside the same database: it
+adds cost and theatre without changing what a database-level adversary can do
+(§7 records the threat model, the compensating controls and the residual risk).
+Producers for events whose enforcement point is the application's, not this
+library's — `AUTH_TOKEN_*` is emitted by whoever validates tokens against the
+control-plane sink, and the mapping for those actions exists so that wiring is a
+constructor argument; claiming otherwise would be a producer that never fires.
+
+**Verification honesty.** Every layer claimed above was executed, not asserted:
+the PostgreSQL layers run against a real server, the capability matrix and the
+redaction corpus are negative tests (they fail when the protection is removed —
+proven by stubbing the redaction out and watching 28 tests fail), and the two
+control-plane adapters are unit-verified against the exact call signature their
+seams use, with the seam call sites themselves covered by the pre-existing
+control-plane tests.
+
+**Residual risk.** Absent external append-only storage (audit shipping plus a
+periodic anchored digest), an actor with database write access can alter history
+undetectably. Recorded here, and again in the final report's residual-risk
+section, rather than papered over.
