@@ -103,6 +103,53 @@ async def test_privilege_audit_adapter_delegates_to_platform_sink():
                 "capability": "platform.tenant.access",
                 "justification": "support case 123",
             },
+            # Recorded entries now carry the identifiers too: the adapter's own
+            # privilege path passes none, so they fall back to the ambient context,
+            # which is absent here - and the recorder reports that honestly rather
+            # than inventing one.
+            "request_id": None,
+            "correlation_id": None,
+            "trace_id": None,
             "actor_type": "platform_operator",
         }
     ]
+
+
+async def test_database_sink_prefers_the_identifiers_the_caller_supplies():
+    """Identifiers travel with the event, not with the task that writes it.
+
+    The reference application's control-plane trail is drained by a worker task
+    created at startup, so no request context is bound when the row is staged: with
+    only the ambient lookup every row carried `NULL` identifiers, and an operator
+    could not join a decision to the request that caused it. A caller that already
+    holds the identifiers -- an adapter forwarding an event that carries them --
+    must be able to pass them.
+    """
+
+    session = _FakeSession()
+    sink = DatabaseAuditSink(lambda: session)
+    await sink.record(
+        action="security.authz_allow",
+        tenant_id=uuid.UUID(int=1),
+        actor_id=uuid.UUID(int=2),
+        request_id="req-9",
+        correlation_id="corr-9",
+        trace_id="trace-9",
+    )
+
+    row = session.added[0]
+    assert row.request_id == "req-9"
+    assert row.correlation_id == "corr-9"
+    assert row.trace_id == "trace-9"
+
+
+async def test_database_sink_still_falls_back_to_the_ambient_context():
+    """The behaviour every existing caller relies on is unchanged."""
+
+    session = _FakeSession()
+    sink = DatabaseAuditSink(lambda: session)
+    with context_scope(_context()):
+        await sink.record(action="security.authz_allow", tenant_id=uuid.UUID(int=1), actor_id=None)
+
+    row = session.added[0]
+    assert (row.request_id, row.correlation_id, row.trace_id) == ("req-1", "corr-1", "trace-1")

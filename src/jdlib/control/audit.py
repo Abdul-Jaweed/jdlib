@@ -34,7 +34,19 @@ class PlatformAudit(Protocol):
         metadata: Mapping[str, object] | None = None,
         session: ControlPlaneSession | None = None,
         actor_type: str | None = None,
-    ) -> None: ...
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> None:
+        """Record one control-plane audit event.
+
+        The identifiers are optional and fall back to the ambient tenant context.
+        Callers that already hold them - an adapter forwarding an event that
+        carries them, a writer running on a task of its own where no request
+        context is bound - should pass them: identifiers belong to the event, not
+        to whichever task happens to flush it.
+        """
+        ...
 
 
 class NullPlatformAudit:
@@ -47,6 +59,9 @@ class NullPlatformAudit:
         metadata: Mapping[str, object] | None = None,
         session: ControlPlaneSession | None = None,
         actor_type: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         raise RuntimeError("no platform audit sink is configured")
 
@@ -64,7 +79,11 @@ class RecordingPlatformAudit:
         metadata: Mapping[str, object] | None = None,
         session: ControlPlaneSession | None = None,
         actor_type: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
+        ambient_request, ambient_correlation, ambient_trace = _trace_ids()
         self.entries.append(
             {
                 "action": action,
@@ -72,6 +91,9 @@ class RecordingPlatformAudit:
                 "actor_id": actor_id,
                 "metadata": dict(metadata or {}),
                 "actor_type": actor_type,
+                "request_id": request_id or ambient_request,
+                "correlation_id": correlation_id or ambient_correlation,
+                "trace_id": trace_id or ambient_trace,
             }
         )
 
@@ -89,12 +111,22 @@ class DatabaseAuditSink:
         metadata: Mapping[str, object] | None = None,
         session: ControlPlaneSession | None = None,
         actor_type: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         from jdlib.control.models import PlatformAuditEvent
 
         owns_session = session is None
         control = session or ControlPlaneSession(self._session_factory())
-        request_id, correlation_id, trace_id = _trace_ids()
+        # Explicit identifiers win over the ambient ones: a writer on its own task
+        # - a queued sink draining in the background, which is how the reference
+        # application writes its control-plane trail - has no request context
+        # bound, and the ambient lookup would fill every column with NULL.
+        ambient_request, ambient_correlation, ambient_trace = _trace_ids()
+        request_id = request_id or ambient_request
+        correlation_id = correlation_id or ambient_correlation
+        trace_id = trace_id or ambient_trace
         try:
             control.add(
                 PlatformAuditEvent(
@@ -129,6 +161,9 @@ class CompositeAuditSink:
         metadata: Mapping[str, object] | None = None,
         session: ControlPlaneSession | None = None,
         actor_type: str | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         for sink in self._sinks:
             if actor_type is None:
@@ -138,6 +173,9 @@ class CompositeAuditSink:
                     actor_id=actor_id,
                     metadata=metadata,
                     session=session,
+                    request_id=request_id,
+                    correlation_id=correlation_id,
+                    trace_id=trace_id,
                 )
             else:
                 await sink.record(
@@ -147,6 +185,9 @@ class CompositeAuditSink:
                     metadata=metadata,
                     session=session,
                     actor_type=actor_type,
+                    request_id=request_id,
+                    correlation_id=correlation_id,
+                    trace_id=trace_id,
                 )
 
 
