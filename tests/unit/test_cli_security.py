@@ -16,9 +16,11 @@ are claims, so this file attacks them:
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
+import typer
 
 testing = pytest.importorskip("typer.testing")
 
@@ -151,6 +153,21 @@ def test_an_unknown_framework_is_refused() -> None:
 
 
 def test_a_live_collection_without_a_schema_is_refused() -> None:
+    # The guard is exercised directly: the rendered usage panel truncates on a
+    # narrow console, which is how this test failed in CI while passing locally.
+    with pytest.raises(typer.BadParameter, match="--schema"):
+        asyncio.run(
+            cli._collect_evidence(
+                cli.SecurityConfig(),
+                database_url="postgresql://user@localhost:5432/jdlib",
+                schema=None,
+                branch="tenant",
+                policy_directory=None,
+                pdp_kind="cerbos",
+                environment=None,
+            )
+        )
+
     result = _invoke(
         "security",
         "posture",
@@ -159,4 +176,3 @@ def test_a_live_collection_without_a_schema_is_refused() -> None:
     )
 
     assert result.exit_code != 0
-    assert "--schema" in result.output
