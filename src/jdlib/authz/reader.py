@@ -151,10 +151,12 @@ class ControlAccessReader:
         chain = set(scope_chain)
         bindings: list[Binding] = []
         for row in rows:
-            # `tup()` rather than unpacking the Row: a fresh install resolves
+            # `tuple(row)` rather than unpacking the Row: a fresh install resolves
             # `sqlalchemy>=2.0.30` to 2.1, where a Row is a sequence of unknown length to the
-            # type checker, and unpacking it is an error it cannot see through.
-            role_id, scope_type, scope_id = row.tup()
+            # type checker. Neither accessor survives both versions - `Row.tuple()` has been
+            # deprecated since 2.0.19 and `Row.tup()` does not exist in 2.1 - while iterating
+            # the row is the plain, undeprecated, same-tuple-in-every-version call.
+            role_id, scope_type, scope_id = tuple(row)
             scope = ScopeType(scope_type)
             if (scope, scope_id) in chain:
                 bindings.append(Binding(role_id, scope, scope_id))
@@ -176,7 +178,7 @@ class ControlAccessReader:
             ).all()
         by_role: dict[uuid.UUID, set[str]] = {}
         for row in rows:
-            role_id, permission_code = row.tup()
+            role_id, permission_code = tuple(row)
             by_role.setdefault(role_id, set()).add(permission_code)
         return {role_id: frozenset(codes) for role_id, codes in by_role.items()}
 
