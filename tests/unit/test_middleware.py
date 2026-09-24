@@ -9,6 +9,7 @@ from jdlib.control.enums import PlacementStrategy, TenantStatus
 from jdlib.errors import (
     AuthenticationError,
     AuthorizationError,
+    AuthorizationUnavailable,
     CrossTenantReferenceError,
     InvalidReference,
     JdlibError,
@@ -16,6 +17,7 @@ from jdlib.errors import (
     TenantNotFound,
     TenantSuspended,
 )
+from jdlib.security.errors import describe_error
 from jdlib.tenancy.middleware import PrincipalProvider, TenantMiddleware, http_status_for
 from jdlib.tenancy.resolution import HeaderResolver, ResolverChain
 from tests.support.context_fakes import (
@@ -41,6 +43,59 @@ def test_http_status_mapping_is_frozen():
     assert http_status_for(CrossTenantReferenceError("r", "a", "b")) == 409
     assert http_status_for(InvalidReference("resource is deleted")) == 409
     assert http_status_for(JdlibError("other")) == 500
+
+
+def test_an_undecidable_decision_is_503_not_403():
+    """What the enforcement point promises must survive the HTTP boundary.
+
+    ``AuthorizationPEP`` fails closed *and* distinctly: a denial is 403, a decision
+    that could not be taken - the engine was down, timed out, or answered
+    unparsably - is 503, so "we are unsure" is never reported to a caller, or to an
+    operator reading dashboards, as "you may not". A caller reaching a route through
+    the tenant middleware must see that same distinction.
+    """
+
+    assert http_status_for(AuthorizationUnavailable("engine unavailable")) == 503
+
+
+def _concrete_error_instances():
+    """One instance per concrete error class, however it wants to be constructed."""
+
+    import inspect
+
+    import jdlib.errors as error_module
+
+    for name, klass in sorted(vars(error_module).items()):
+        if not inspect.isclass(klass) or not issubclass(klass, JdlibError):
+            continue
+        if klass is JdlibError or getattr(klass, "__module__", None) != error_module.__name__:
+            continue
+        try:
+            yield name, klass("probe")
+        except TypeError:
+            try:
+                yield name, klass("probe", "a", "b")
+            except TypeError:  # pragma: no cover - a class needing bespoke arguments
+                continue
+
+
+def test_the_middleware_table_agrees_with_the_declared_error_descriptors():
+    """One error surface, one status per class.
+
+    ``jdlib.tenancy.middleware`` maps a failure to a status for the ASGI boundary
+    and ``jdlib.security.errors`` declares the status an error carries wherever it
+    surfaces. Two tables that both claim to say how an error appears to a caller
+    will drift, and the drift stays invisible until a real caller meets the wrong
+    status code. This asserts they cannot: every concrete error class must map to
+    the status its own descriptor declares.
+    """
+
+    mismatches = [
+        (name, http_status_for(exc), describe_error(exc).http_status)
+        for name, exc in _concrete_error_instances()
+        if http_status_for(exc) != describe_error(exc).http_status
+    ]
+    assert mismatches == [], f"middleware status disagrees with descriptor: {mismatches}"
 
 
 class _Provider:

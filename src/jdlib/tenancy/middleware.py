@@ -11,6 +11,7 @@ from jdlib.context import ContextFactory, Principal, context_scope
 from jdlib.errors import (
     AuthenticationError,
     AuthorizationError,
+    AuthorizationUnavailable,
     CrossTenantReferenceError,
     InvalidReference,
     JdlibError,
@@ -23,8 +24,15 @@ from jdlib.tenancy.resolution import RequestInfo, ResolverChain
 
 ASGIApp = Callable[..., Awaitable[None]]
 
+# The order matters: a more specific class must precede the class it inherits
+# from, or the general entry shadows it. ``AuthorizationUnavailable`` is an
+# ``AuthorizationError`` and is listed first for exactly that reason - a decision
+# that could not be taken is an outage (503), not a refusal (403), and collapsing
+# the two tells a caller with a denied request that they were denied when the
+# engine was simply unreachable.
 _STATUS_MAP: tuple[tuple[type[JdlibError], int], ...] = (
     (AuthenticationError, 401),
+    (AuthorizationUnavailable, 503),
     (AuthorizationError, 403),
     (TenantNotFound, 404),
     (TenantAccessDenied, 404),
