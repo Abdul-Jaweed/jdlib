@@ -181,6 +181,61 @@ def test_descriptor_and_response_agree() -> None:
         assert error_response(exc, request_ids=IDS).status == describe_error(exc).http_status
 
 
+# --- leakage corpus (directive §3) ------------------------------------------
+# Values an operator might accidentally interpolate into an error message. None
+# of them may survive into a response body, for client-visible or server-side
+# failures alike.
+LEAK_CORPUS = {
+    "jwt": (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+        ".eyJzdWIiOiJhZG1pbiIsInRlbmFudCI6ImFjbWUifQ"
+        ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    ),
+    "api_key": "apikey=sk-live-0123456789abcdef0123456789abcdef",
+    "password": "password=hunter2-correct-horse-battery",
+    "client_secret": "client_secret=AbCdEf0123456789SecretValue",
+    "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq\n-----END PRIVATE KEY-----",
+    "sql": "SELECT tenant_id FROM tenant_policy WHERE tenant_id = '11111111'",
+    "stack_trace": 'File "/srv/jdlib/src/jdlib/security/authz/pep.py", line 42, in require',
+    "policy_details": "resource.document.vdefault rule 3 denies when attr.owner != principal.id",
+    "db_credentials": "postgresql+asyncpg://jdlib_user:s3cr3t-pw@postgres.internal:5432/jdlib_prod",
+    "authorization_header": "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.c2lnbmF0dXJlLXZhbHVl",
+}
+
+
+@pytest.mark.parametrize("label", sorted(LEAK_CORPUS))
+@pytest.mark.parametrize(
+    "make_exc",
+    [
+        pytest.param(lambda value: InvalidToken(f"rejected token {value}"), id="4xx"),
+        pytest.param(lambda value: PermissionDenied(f"denied: {value}"), id="4xx-authorization"),
+        pytest.param(lambda value: TenantAccessDenied(f"tenant lookup {value}"), id="4xx-tenant"),
+        pytest.param(lambda value: SecurityConfigurationError(f"invalid {value}"), id="5xx"),
+        pytest.param(lambda value: RuntimeError(f"unexpected {value}"), id="unclassified"),
+    ],
+)
+def test_no_response_leaks_a_sensitive_value(label: str, make_exc: object) -> None:
+    value = LEAK_CORPUS[label]
+    response = error_response(make_exc(value), request_ids=IDS)  # type: ignore[operator]
+    rendered = json.dumps(response.as_dict())
+    assert value not in rendered, f"{label} leaked"
+    # the important fragments too, in case only part of the value matched
+    for fragment in ("BEGIN PRIVATE KEY", "hunter2", "s3cr3t-pw", "sk-live-", "FROM tenant_policy"):
+        assert fragment not in rendered, f"{label} leaked via {fragment}"
+    assert response.payload["message"]
+
+
+def test_redaction_leaves_a_usable_message() -> None:
+    payload = _payload(InvalidToken("token expired: Bearer abcdefghijklmnopqrstuvwxyz123456"))
+    assert "abcdefghijklmnopqrstuvwxyz123456" not in payload["message"]
+    assert "token expired" in payload["message"]
+
+
+def test_redaction_does_not_mangle_ordinary_messages() -> None:
+    payload = _payload(PermissionDenied("principal user-1 may not read document doc-42"))
+    assert payload["message"] == "principal user-1 may not read document doc-42"
+
+
 # --- the 503 path from Phase 3 -----------------------------------------------
 
 

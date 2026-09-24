@@ -23,6 +23,7 @@ Rules, each asserted by ``tests/unit/security/test_error_responses.py``:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -30,6 +31,36 @@ from jdlib.security.context import RequestIds
 from jdlib.security.errors import SecurityClassification, describe_error, www_authenticate
 
 MAX_MESSAGE_LENGTH = 300
+
+# Defence in depth for client-visible messages: an error that quotes a request
+# header, a connection string or a query while explaining itself must not turn
+# into a credential-disclosure channel. Server-side (5xx) messages never echo
+# their own text, so this only ever runs on 4xx text.
+_REDACTED = "[redacted]"
+_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # PEM blocks (private keys, certificates)
+    re.compile(r"-----BEGIN [A-Z ]{1,40}-----.*?-----END [A-Z ]{1,40}-----", re.DOTALL),
+    # JWTs: three base64url segments starting with the standard header prefix
+    re.compile(r"\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}"),
+    # any bearer credential
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"),
+    # credentials embedded in a URL (database connection strings)
+    re.compile(r"(?i)[a-z][a-z0-9+.-]*://[^/\s:@]{1,64}:[^/\s@]{1,128}@"),
+    # `password=...`, `secret: ...`, `api_key=...`, `token=...`
+    re.compile(
+        r"(?i)\b(api[_-]?key|client[_-]?secret|secret|password|passwd|pwd|token)"
+        r"\b\s*[:=]\s*\S{3,}"
+    ),
+    # SQL statements and their bind values
+    re.compile(
+        r"(?i)\b(select|insert\s+into|update|delete\s+from|drop|alter|grant)\b"
+        r".{0,200}?\b(from|into|set|table|where|privileges)\b"
+    ),
+    # stack frames
+    re.compile(r"(?i)\bfile\s+\"[^\"]{1,200}\""),
+    # fully-qualified policy names (internal policy detail)
+    re.compile(r"\bresource\.[a-z_]{2,40}\.[a-z0-9]{2,40}\b"),
+)
 
 _GENERIC_MESSAGES: dict[SecurityClassification, str] = {
     SecurityClassification.AVAILABILITY: "the service is temporarily unavailable",
@@ -58,6 +89,12 @@ class ErrorResponse:
         }
 
 
+def _redact(message: str) -> str:
+    for pattern in _SECRET_PATTERNS:
+        message = pattern.sub(_REDACTED, message)
+    return message
+
+
 def _sanitize(message: str) -> str:
     printable = "".join(char for char in message if char.isprintable())
     collapsed = " ".join(printable.split())
@@ -72,7 +109,7 @@ def error_response(exc: BaseException, *, request_ids: RequestIds) -> ErrorRespo
             descriptor.classification, _GENERIC_MESSAGES[SecurityClassification.INTERNAL]
         )
     else:
-        message = _sanitize(str(exc)) or descriptor.code.value
+        message = _sanitize(_redact(str(exc))) or descriptor.code.value
     headers: dict[str, str] = {}
     challenge = www_authenticate(exc)
     if challenge is not None:
