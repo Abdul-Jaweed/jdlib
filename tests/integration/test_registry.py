@@ -84,7 +84,19 @@ class _FailingAudit(RecordingPlatformAudit):
         super().__init__()
         self._fail_on = fail_on
 
-    async def record(self, *, action, tenant_id, actor_id, metadata=None, session=None) -> None:
+    async def record(
+        self,
+        *,
+        action,
+        tenant_id,
+        actor_id,
+        metadata=None,
+        session=None,
+        actor_type=None,
+        request_id=None,
+        correlation_id=None,
+        trace_id=None,
+    ) -> None:
         if action == self._fail_on:
             raise RuntimeError("audit sink unavailable")
         await super().record(

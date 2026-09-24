@@ -16,7 +16,19 @@ class _CapturingSink:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    async def record(self, *, action, tenant_id, actor_id, metadata=None, session=None) -> None:
+    async def record(
+        self,
+        *,
+        action,
+        tenant_id,
+        actor_id,
+        metadata=None,
+        session=None,
+        actor_type=None,
+        request_id=None,
+        correlation_id=None,
+        trace_id=None,
+    ) -> None:
         self.calls.append(
             {
                 "action": action,
@@ -24,12 +36,27 @@ class _CapturingSink:
                 "actor_id": actor_id,
                 "metadata": dict(metadata or {}),
                 "session": session,
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "trace_id": trace_id,
             }
         )
 
 
 class _FailingSink:
-    async def record(self, *, action, tenant_id, actor_id, metadata=None, session=None) -> None:
+    async def record(
+        self,
+        *,
+        action,
+        tenant_id,
+        actor_id,
+        metadata=None,
+        session=None,
+        actor_type=None,
+        request_id=None,
+        correlation_id=None,
+        trace_id=None,
+    ) -> None:
         raise RuntimeError("sink unavailable")
 
 
@@ -38,7 +65,19 @@ class _SessionCapturingSink(DatabaseAuditSink):
         super().__init__(session_factory)
         self.sessions: list[object | None] = []
 
-    async def record(self, *, action, tenant_id, actor_id, metadata=None, session=None) -> None:
+    async def record(
+        self,
+        *,
+        action,
+        tenant_id,
+        actor_id,
+        metadata=None,
+        session=None,
+        actor_type=None,
+        request_id=None,
+        correlation_id=None,
+        trace_id=None,
+    ) -> None:
         self.sessions.append(session)
         await super().record(
             action=action,
