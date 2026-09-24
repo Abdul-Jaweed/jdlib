@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import uuid
+from datetime import UTC, datetime
 from typing import Protocol
 
 from jdlib.context import PrivilegeKind, TenantContext
@@ -38,8 +39,14 @@ class NullWriteFence:
         return None
 
 
-def privileged_bypass(context: TenantContext) -> bool:
-    privilege = context.privilege
+def privileged_bypass(context: TenantContext, *, now: datetime | None = None) -> bool:
+    """Whether this context may bypass the write fence (relocation only).
+
+    The privilege is read through :meth:`TenantContext.live_privilege`, so an
+    expired (or not-yet-valid) system privilege is not a bypass: the fence runs
+    and refuses the write like any other.
+    """
+    privilege = context.live_privilege(now or datetime.now(UTC))
     return (
         privilege is not None
         and privilege.kind is PrivilegeKind.SYSTEM

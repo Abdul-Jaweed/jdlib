@@ -60,6 +60,17 @@ class PrivilegeContext:
     issued_at: datetime
     expires_at: datetime | None
 
+    def is_live(self, now: datetime) -> bool:
+        """Whether this privilege may still be used at ``now``.
+
+        A privilege is bounded on both sides: using one before it was issued is
+        as wrong as using one after it expired, and both are refused. ``None``
+        means the kind carries no expiry (a system/backfill context).
+        """
+        if now < self.issued_at:
+            return False
+        return self.expires_at is None or now < self.expires_at
+
 
 @dataclass(frozen=True, slots=True)
 class TenantContext:
@@ -71,6 +82,17 @@ class TenantContext:
     correlation_id: str
     trace_id: str | None = None
     privilege: PrivilegeContext | None = None
+
+    def live_privilege(self, now: datetime) -> PrivilegeContext | None:
+        """The context's privilege, but only while it is still valid at ``now``.
+
+        Every enforcement point reads the privilege through this method rather
+        than the field, so "the context carries a privilege" can never be
+        mistaken for "the privilege is still good".
+        """
+        if self.privilege is None or not self.privilege.is_live(now):
+            return None
+        return self.privilege
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import FromStatement, Session
 from sqlalchemy.sql import visitors
 
-from jdlib.context import TenantContext
+from jdlib.context import Clock, SystemClock, TenantContext
 from jdlib.errors import (
     AuthorizationError,
     CrossTenantReferenceError,
@@ -106,7 +106,7 @@ def _entity_tables(statement: Any) -> list[sa.Table]:
     return found
 
 
-def _register_events(session: Session) -> None:
+def _register_events(session: Session, clock: Clock) -> None:
     tables = tenant_table_map()
     models_by_table: dict[sa.Table, type] = {}
     for model in tables.values():
@@ -249,8 +249,32 @@ def _register_events(session: Session) -> None:
                     str(history.added[0] if history.added else history.deleted[0]),
                 )
         for obj in flush_session.deleted:
-            if isinstance(obj, SoftDelete) and context.privilege is None:
-                raise AuthorizationError("hard delete requires a privileged context")
+            if isinstance(obj, SoftDelete):
+                reason = _privilege_refusal(context, action="hard delete", clock=clock)
+                if reason is not None:
+                    raise AuthorizationError(reason)
+
+
+def _privilege_refusal(context: TenantContext, *, action: str, clock: Clock) -> str | None:
+    """Why the context's privilege cannot authorize ``action``, or ``None``.
+
+    A privilege authorizes only while it is live: an expired (or not yet
+    valid) one is refused exactly like a missing one, but the refusal says
+    which, because "you never had it" and "it lapsed" are different findings
+    for an investigator.
+    """
+    privilege = context.privilege
+    if privilege is None:
+        return f"{action} requires a privileged context"
+    now = clock.now()
+    if now < privilege.issued_at:
+        return f"{action} requires a live privilege: it is not valid yet"
+    if privilege.expires_at is not None and now >= privilege.expires_at:
+        return (
+            f"{action} requires a live privilege: it expired at "
+            f"{privilege.expires_at.isoformat()}"
+        )
+    return None
 
 
 class TenantSession:
@@ -261,6 +285,7 @@ class TenantSession:
         *,
         auditor: RawSqlAuditor | None = None,
         validator: RawSqlValidator | None = None,
+        clock: Clock | None = None,
     ) -> None:
         if context is None:
             raise MissingTenantContext("TenantSession requires a TenantContext")
@@ -268,8 +293,9 @@ class TenantSession:
         self.context = context
         self._auditor = auditor or _NoopRawSqlAuditor()
         self._validator = validator or RawSqlValidator()
+        self._clock = clock or SystemClock()
         session.sync_session.info[_CTX_KEY] = context
-        _register_events(session.sync_session)
+        _register_events(session.sync_session, self._clock)
 
     async def __aenter__(self) -> TenantSession:
         return self
@@ -308,8 +334,12 @@ class TenantSession:
     async def update_where(
         self, model: type[Any], values: dict[str, Any], *criteria: sa.ColumnElement[bool]
     ) -> int:
-        if "tenant_id" in values and self.context.privilege is None:
-            raise AuthorizationError("tenant_id update requires a privileged context")
+        if "tenant_id" in values:
+            reason = _privilege_refusal(
+                self.context, action="a tenant_id update", clock=self._clock
+            )
+            if reason is not None:
+                raise AuthorizationError(reason)
         statement = (
             sa.update(model)
             .where(model.tenant_id == self.context.tenant_id, *criteria)
@@ -322,8 +352,10 @@ class TenantSession:
     async def delete_where(
         self, model: type[Any], *criteria: sa.ColumnElement[bool]
     ) -> int:
-        if issubclass(model, SoftDelete) and self.context.privilege is None:
-            raise AuthorizationError("hard delete requires a privileged context")
+        if issubclass(model, SoftDelete):
+            reason = _privilege_refusal(self.context, action="hard delete", clock=self._clock)
+            if reason is not None:
+                raise AuthorizationError(reason)
         statement = (
             sa.delete(model)
             .where(model.tenant_id == self.context.tenant_id, *criteria)
@@ -344,14 +376,22 @@ class TenantSession:
         compiled: CompiledRawSql = self._validator.compile(statement, dialect, params)
         if mode == RawSqlMode.PRIVILEGED:
             privilege = self.context.privilege
-            if privilege is None:
+            refused = _privilege_refusal(
+                self.context, action="privileged raw SQL", clock=self._clock
+            )
+            if refused is not None:
+                # A lapsed privilege is refused like a missing one; the refusal
+                # carries the capability it was minted for, because "it was
+                # granted and then expired" is the finding an investigation asks
+                # about, and it must be recorded before the raise.
                 await self._deny(
                     mode=mode,
-                    capability=None,
+                    capability=privilege.capability if privilege is not None else None,
                     sql=compiled.sql,
-                    reason="privileged raw SQL requires a privileged context",
+                    reason=refused,
                 )
-                raise AuthorizationError("privileged raw SQL requires a privileged context")
+                raise AuthorizationError(refused)
+            assert privilege is not None  # narrowed by _privilege_refusal
             capability = privilege.capability or ""
             if capability not in {"tenant.raw_sql", "platform.raw_sql"}:
                 await self._deny(

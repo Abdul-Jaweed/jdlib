@@ -56,14 +56,20 @@ PRINCIPAL = uuid.UUID("99999999-8888-7777-6666-555555555555")
 
 
 @contextmanager
-def _request(tenant_id: uuid.UUID, *, request_id: str = "req-1") -> Iterator[None]:
+def _request(
+    tenant_id: uuid.UUID,
+    *,
+    request_id: str = "req-1",
+    principal_kind: PrincipalKind = PrincipalKind.USER,
+    principal_id: uuid.UUID | None = PRINCIPAL,
+) -> Iterator[None]:
     """Bind both contexts, as a real request does.
 
     The tenancy context routes the row (and satisfies RLS); the security context
     supplies the principal and the request/correlation/trace identifiers the
     envelope defaults to.
     """
-    principal = Principal(id=PRINCIPAL, kind=PrincipalKind.USER)
+    principal = Principal(id=principal_id, kind=principal_kind)
     request_ids = RequestIds(request_id=request_id, correlation_id="corr-1", trace_id="trace-1")
     tenant = TenantContext(
         tenant_id=tenant_id,
@@ -74,11 +80,18 @@ def _request(tenant_id: uuid.UUID, *, request_id: str = "req-1") -> Iterator[Non
         correlation_id="corr-1",
         trace_id="trace-1",
     )
-    security = SecurityContext(
-        principal=principal,
-        request_ids=request_ids,
-        auth_method=AuthMethod.SERVICE,
-        tenant=tenant,
+    security = (
+        # An anonymous request binds the explicit unauthenticated context; it
+        # carries no tenant, so the row's tenant still comes from the tenancy
+        # context and the event's actor stays anonymous.
+        SecurityContext.anonymous(request_ids=request_ids)
+        if principal_kind is PrincipalKind.ANONYMOUS
+        else SecurityContext(
+            principal=principal,
+            request_ids=request_ids,
+            auth_method=AuthMethod.SERVICE,
+            tenant=tenant,
+        )
     )
     with context_scope(tenant), security_context_scope(security):
         yield
@@ -148,8 +161,11 @@ async def test_a_kind_outside_the_column_vocabulary_is_preserved_in_metadata(
 ) -> None:
     # `anonymous` is a real principal kind but not a valid actor_type for the
     # audit table: the row must still be written, with the real kind preserved
-    # in metadata rather than dropped.
-    with _request(TENANT_A):
+    # in metadata rather than dropped. The actor has to be the one the request is
+    # actually being made as (an event cannot rename its own actor — see phase 8
+    # in docs/security/adversarial-review.md), so this records an event from an
+    # anonymous request.
+    with _request(TENANT_A, principal_kind=PrincipalKind.ANONYMOUS, principal_id=None):
         event = _event(principal_kind="anonymous")
         async with _session(session_factory) as session:
             TenantAuditRecorder(session).record_security(event)

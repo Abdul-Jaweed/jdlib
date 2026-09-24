@@ -51,6 +51,11 @@ pytestmark = pytest.mark.integration
 
 TENANT_A = uuid.UUID("aaaaaaaa-1111-2222-3333-444444444444")
 TENANT_B = uuid.UUID("bbbbbbbb-1111-2222-3333-444444444444")
+#: Pagination gets a tenant of its own. Its claim ("no row is returned twice")
+#: is only decidable over rows this test wrote, and the schemas are shared with
+#: the rest of the integration suite — assert a superset of your own seed and
+#: filter by it, or the test's verdict depends on collection order.
+TENANT_PAGE = uuid.UUID("cccccccc-1111-2222-3333-444444444444")
 PRINCIPAL = uuid.UUID("99999999-8888-7777-6666-555555555555")
 MAX_LIMIT_FOR_TEST = 200
 
@@ -173,7 +178,7 @@ async def test_writing_the_trail_does_not_allow_reading_it(session_factory) -> N
 
 
 async def test_pagination_is_stable_and_complete(session_factory) -> None:
-    await _seed(session_factory, TENANT_A, count=7, prefix="page")
+    await _seed(session_factory, TENANT_PAGE, count=7, prefix="page")
     seen: list[str] = []
     offset: int | None = 0
     async with _session(session_factory) as session:
@@ -181,13 +186,15 @@ async def test_pagination_is_stable_and_complete(session_factory) -> None:
             page = await read_events(
                 session,
                 access=TENANT_READER,
-                tenant_id=TENANT_A,
+                tenant_id=TENANT_PAGE,
                 query=AuditQuery(limit=3, offset=offset),
             )
             seen.extend(event.action for event in page.events)
             offset = page.next_offset
+    # This tenant holds exactly this test's seed, so the whole walk is checkable:
+    # every row exactly once, and the set is complete.
     assert len(seen) == len(set(seen)), "pagination must not repeat rows"
-    assert {"page-0", "page-6"} <= set(seen)
+    assert set(seen) == {f"page-{index}" for index in range(7)}
 
 
 async def test_export_is_deterministic_and_bounded(session_factory) -> None:

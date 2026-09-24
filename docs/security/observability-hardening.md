@@ -1,9 +1,10 @@
 # Observability Hardening (Phase 7)
 
-Status: **IN PROGRESS** — the safety-critical half is implemented and verified
-(§7.3 structured logging, §7.4 bounded metrics, §7.6 failure isolation). The
-OpenTelemetry span layer (§7.1, §7.2) and the Docker collector stack (§7.5) are
-the remaining slices.
+Status: **COMPLETE** — all six slices are implemented and verified. The
+safety-critical half (§7.3 structured logging, §7.4 bounded metrics, §7.6 failure
+isolation) landed first; the OpenTelemetry span layer (§7.1, §7.2) and the Docker
+collector stack (§7.5) followed, and the collector section below records what a
+real collector stored rather than what a mock was told.
 
 Source: `src/jdlib/security/telemetry.py` (new), `src/jdlib/security/redaction.py`
 (extended: header and cookie field names)
