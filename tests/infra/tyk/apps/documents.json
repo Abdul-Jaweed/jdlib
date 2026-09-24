@@ -1,0 +1,53 @@
+{
+  "name": "Documents",
+  "slug": "documents",
+  "api_id": "documents",
+  "org_id": "jdlib",
+  "use_keyless": false,
+  "use_standard_auth": true,
+  "enable_context_vars": true,
+  "auth": {
+    "auth_header_name": "apikey",
+    "use_param": false,
+    "use_cookie": false
+  },
+  "proxy": {
+    "listen_path": "/documents",
+    "target_url": "http://jdlib-echo:8080/documents",
+    "strip_listen_path": false,
+    "preserve_host_header": false
+  },
+  "active": true,
+  "version_data": {
+    "not_versioned": true,
+    "versions": {
+      "Default": {
+        "name": "Default",
+        "use_extended_paths": true
+      }
+    }
+  },
+  "global_headers": {
+    "x-tyk-jdlib-subject": "acme-service",
+    "x-tyk-jdlib-tenant": "acme",
+    "x-tyk-jdlib-scopes": "documents:read documents:write",
+    "x-tyk-jdlib-gateway-secret": "__GATEWAY_SECRET__"
+  },
+  "custom_middleware": {
+    "driver": "javascript",
+    "pre": [
+      {
+        "name": "stamp_window",
+        "path": "/opt/tyk-gateway/middleware/stamp_window.js",
+        "require_session": false
+      }
+    ]
+  },
+  "rate_limit": {
+    "rate": 8,
+    "per": 60
+  },
+  "disable_rate_limit": false,
+  "strip_auth_data": true,
+  "enable_proxy_protocol": false
+}
