@@ -10,6 +10,13 @@ from jdlib.credentials.refs import SecretRef
 from jdlib.resources.connection import ConnectionConfig
 from jdlib.resources.errors import ResourceHydrationError
 from jdlib.resources.handle import ResourceHandle
+from jdlib.security.audit.emitter import SecurityEventEmitter, emit_safely
+from jdlib.security.audit.events import (
+    AuditOutcome,
+    AuditSource,
+    SecurityAuditEvent,
+    SecurityEventType,
+)
 from jdlib.security.context import SecurityContext, current_security_context
 from jdlib.security.tracing import TracerLike, security_span
 
@@ -40,6 +47,7 @@ class ResourceResolver:
         check_resource: ResourceCheck | None = None,
         check_privilege: PrivilegeCheck | None = None,
         tracer: TracerLike | None = None,
+        emitter: SecurityEventEmitter | None = None,
     ) -> None:
         self._secrets = secrets
         self._cache = cache
@@ -47,6 +55,7 @@ class ResourceResolver:
         self._check_resource = check_resource
         self._check_privilege = check_privilege
         self._tracer = tracer
+        self._emitter = emitter
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def hydrate(self, handle: ResourceHandle) -> ConnectionConfig:
@@ -63,10 +72,33 @@ class ResourceResolver:
         ) as span:
             try:
                 config = await self._hydrate_inner(handle)
-            except Exception:
+            except Exception as exc:
                 span.set_attribute("security.result", "refused")
+                emit_safely(
+                    self._emitter,
+                    SecurityAuditEvent(
+                        event_type=SecurityEventType.RESOURCE_HYDRATION_REFUSED,
+                        outcome=AuditOutcome.DENIED,
+                        action="resource.hydrate",
+                        source=AuditSource.SERVICE,
+                        resource_type="resource",
+                        resource_id=handle.value,
+                        metadata={"error": type(exc).__name__},
+                    ),
+                )
                 raise
             span.set_attribute("security.result", "hydrated")
+            emit_safely(
+                self._emitter,
+                SecurityAuditEvent(
+                    event_type=SecurityEventType.RESOURCE_HYDRATED,
+                    outcome=AuditOutcome.SUCCESS,
+                    action="resource.hydrate",
+                    source=AuditSource.SERVICE,
+                    resource_type="resource",
+                    resource_id=handle.value,
+                ),
+            )
             return config
 
     async def _hydrate_inner(self, handle: ResourceHandle) -> ConnectionConfig:

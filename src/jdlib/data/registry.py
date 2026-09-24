@@ -4,6 +4,13 @@ from typing import Any
 
 from jdlib.data.contract import assert_connector_contract
 from jdlib.data.errors import ConnectorError
+from jdlib.security.audit.emitter import SecurityEventEmitter, emit_safely
+from jdlib.security.audit.events import (
+    AuditOutcome,
+    AuditSource,
+    SecurityAuditEvent,
+    SecurityEventType,
+)
 from jdlib.security.tracing import TracerLike, security_span
 
 
@@ -15,9 +22,15 @@ class ConnectorRegistry:
     application up - instead of failing under production load.
     """
 
-    def __init__(self, *, tracer: TracerLike | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        tracer: TracerLike | None = None,
+        emitter: SecurityEventEmitter | None = None,
+    ) -> None:
         self._types: dict[str, type] = {}
         self._tracer = tracer
+        self._emitter = emitter
 
     def register(self, connector: type) -> str:
         problems = assert_connector_contract(connector)
@@ -41,6 +54,17 @@ class ConnectorRegistry:
         if name in self._types:
             raise ConnectorError(f"a connector named {name!r} is already registered")
         self._types[name] = connector
+        emit_safely(
+            self._emitter,
+            SecurityAuditEvent(
+                event_type=SecurityEventType.CONNECTOR_REGISTERED,
+                outcome=AuditOutcome.SUCCESS,
+                action="connector.register",
+                source=AuditSource.SYSTEM,
+                resource_type="connector",
+                resource_id=name,
+            ),
+        )
         return name
 
     def build(self, name: str, **kwargs: Any) -> Any:
@@ -56,7 +80,19 @@ class ConnectorRegistry:
             attributes={"security.operation": "connector.acquire"},
         ) as span:
             span.set_attribute("security.backend", name)
-            return connector(**kwargs)
+            built = connector(**kwargs)
+            emit_safely(
+                self._emitter,
+                SecurityAuditEvent(
+                    event_type=SecurityEventType.CONNECTOR_ACQUIRED,
+                    outcome=AuditOutcome.SUCCESS,
+                    action="connector.acquire",
+                    source=AuditSource.SYSTEM,
+                    resource_type="connector",
+                    resource_id=name,
+                ),
+            )
+            return built
 
     @property
     def names(self) -> list[str]:

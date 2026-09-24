@@ -197,6 +197,14 @@ lifecycle, query rejections, delegation. The platform/tenant audit planes, opera
 metrics, traces and compliance evidence stay separate concepts (the directive says so, and the
 existing implementation already does).
 
+**Status: DELIVERED (2026-09-24).** Producers, mostly - which is the honest finding: the audit vocabulary was already richer than its producers. `CREDENTIAL_ROTATED` existed with nothing to emit it, so rotation now emits it. Delegation reuses the privilege vocabulary rather than growing a parallel one (ADR-3): `PRIVILEGE_USED` on acceptance, `AUTHZ_DENY` on refusal, emitted *before* the refusal is raised so the record exists even though the caller sees only the exception.
+
+Five names are genuinely new - `RESOURCE_HYDRATED`, `RESOURCE_HYDRATION_REFUSED`, `CONNECTOR_REGISTERED`, `CONNECTOR_ACQUIRED`, `QUERY_REJECTED` - and the vocabulary pin in `tests/unit/security/test_audit_events.py` was **extended by name** (`SUCCESSOR_EVENT_TYPES`) rather than loosened to a subset check, so the next addition still has to be deliberate. The category pin gained `connector` for the same reason.
+
+`SecurityEventEmitter` is a callable and `emit_safely` returns whether the event actually reached it, so 'recorded' and 'not recorded' are distinguishable rather than assumed. The rule is asserted as behaviour, not documented: a sink that raises does not soften a refusal and does not break a success, and an absent sink is not an error - audit is configuration, never a precondition for serving a request or for refusing one. No event carries a credential, a resolved target or a bind value; the tests assert their absence from the recorded events.
+
+14 unit tests. Both audit-vocabulary pins fired when the types were added, which is the pins doing their job.
+
 Gate: every new event type has a producer wired to a sink and a test asserting the emitted event;
 a mutation that removes a mandatory event's fail-closed path fails the suite.
 

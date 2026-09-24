@@ -82,6 +82,15 @@ class SecurityEventType(StrEnum):
     CREDENTIAL_REVOKED = "CREDENTIAL_REVOKED"
     CREDENTIAL_ROTATED = "CREDENTIAL_ROTATED"
 
+    # -- successor capabilities: resources, connectors, compiled queries
+    # Credential rotation reuses CREDENTIAL_ROTATED above; delegation reuses the PRIVILEGE_*
+    # vocabulary, because a delegated privilege is a privilege and not a second concept.
+    RESOURCE_HYDRATED = "RESOURCE_HYDRATED"
+    RESOURCE_HYDRATION_REFUSED = "RESOURCE_HYDRATION_REFUSED"
+    CONNECTOR_REGISTERED = "CONNECTOR_REGISTERED"
+    CONNECTOR_ACQUIRED = "CONNECTOR_ACQUIRED"
+    QUERY_REJECTED = "QUERY_REJECTED"
+
     # -- audit trail access (directive §6.5: audit access is itself an event)
     AUDIT_READ_DENIED = "AUDIT_READ_DENIED"
     AUDIT_EXPORTED = "AUDIT_EXPORTED"
@@ -100,6 +109,8 @@ class SecurityEventType(StrEnum):
             return "privilege"
         if prefix == "AUDIT":
             return "audit"
+        if prefix == "CONNECTOR":
+            return "connector"
         return "security"
 
 

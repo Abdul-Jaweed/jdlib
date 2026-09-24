@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from urllib.parse import quote
 
 from jdlib.config import ContextConfig
@@ -129,6 +129,10 @@ _CTX: contextvars.ContextVar[TenantContext | None] = contextvars.ContextVar(
 )
 
 
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from jdlib.security.audit.emitter import SecurityEventEmitter
+
+
 @contextmanager
 def context_scope(context: TenantContext) -> Iterator[TenantContext]:
     token = _CTX.set(context)
@@ -146,6 +150,7 @@ def validate_delegation(
     now: datetime,
     seen: set[str] | None = None,
     is_suspended: Callable[[uuid.UUID], bool] | None = None,
+    emitter: SecurityEventEmitter | None = None,
 ) -> PrivilegeContext:
     """Refuse a delegated privilege unless every condition holds. ADR-3.
 
@@ -158,6 +163,13 @@ def validate_delegation(
     injected for the same reason: this library does not own that state.
     """
     from jdlib.errors import DelegationRefusedError
+    from jdlib.security.audit.emitter import emit_safely
+    from jdlib.security.audit.events import (
+        AuditOutcome,
+        AuditSource,
+        SecurityAuditEvent,
+        SecurityEventType,
+    )
 
     if privilege is None:
         raise DelegationRefusedError("no delegated privilege was supplied")
@@ -166,7 +178,21 @@ def validate_delegation(
 
     identifier = privilege.delegation_id or "<none>"
 
-    def refuse(reason: str) -> None:
+    def refuse(reason: str, code: str = "refused") -> None:
+        # Recorded before the refusal is raised, so the record exists even though the
+        # caller sees only the exception. A refusal is an AUTHZ_DENY - the delegation
+        # vocabulary is the privilege vocabulary (ADR-3), not a parallel one.
+        emit_safely(
+            emitter,
+            SecurityAuditEvent(
+                event_type=SecurityEventType.AUTHZ_DENY,
+                outcome=AuditOutcome.DENIED,
+                action="privilege.delegation",
+                source=AuditSource.SERVICE,
+                tenant_id=target_tenant_id,
+                metadata={"reason": code, "delegation": identifier},
+            ),
+        )
         raise DelegationRefusedError(f"delegation {identifier} refused: {reason}")
 
     if privilege.delegation_id is None or not privilege.delegation_id.strip():
@@ -185,8 +211,19 @@ def validate_delegation(
             f"({privilege.actor.tenant_id} vs {target_tenant_id})"
         )
     if is_suspended is not None and is_suspended(privilege.actor.id):
-        refuse("the actor has been suspended")
+        refuse("the actor has been suspended", "suspended_actor")
 
+    emit_safely(
+        emitter,
+        SecurityAuditEvent(
+            event_type=SecurityEventType.PRIVILEGE_USED,
+            outcome=AuditOutcome.SUCCESS,
+            action="privilege.delegation",
+            source=AuditSource.SERVICE,
+            tenant_id=target_tenant_id,
+            metadata={"capability": capability, "delegation": identifier},
+        ),
+    )
     return privilege
 
 

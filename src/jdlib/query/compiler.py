@@ -8,6 +8,13 @@ from jdlib.query.dialect import PostgresDialect, QueryDialect
 from jdlib.query.errors import CrossTenantQueryError
 from jdlib.query.safety import IdentifierPolicy, parse_specification
 from jdlib.query.specification import QuerySpecification
+from jdlib.security.audit.emitter import SecurityEventEmitter, emit_safely
+from jdlib.security.audit.events import (
+    AuditOutcome,
+    AuditSource,
+    SecurityAuditEvent,
+    SecurityEventType,
+)
 from jdlib.security.context import SecurityContext
 from jdlib.security.tracing import TracerLike, security_span
 
@@ -53,6 +60,7 @@ class QueryCompiler:
     policy: IdentifierPolicy
     dialect: QueryDialect = field(default_factory=PostgresDialect)
     tracer: TracerLike | None = None
+    emitter: SecurityEventEmitter | None = None
 
     def compile(
         self, spec: QuerySpecification, *, context: SecurityContext | None
@@ -64,8 +72,24 @@ class QueryCompiler:
                 tenant_id = self._authorized_tenant(spec, context)
                 node = parse_specification(spec, self.policy)
                 compiled = self.render(node, tenant_id=tenant_id)
-            except Exception:
+            except Exception as exc:
                 span.set_attribute("security.result", "refused")
+                emit_safely(
+                    self.emitter,
+                    SecurityAuditEvent(
+                        event_type=(
+                            SecurityEventType.CROSS_TENANT_ACCESS_REJECTED
+                            if isinstance(exc, CrossTenantQueryError)
+                            else SecurityEventType.QUERY_REJECTED
+                        ),
+                        outcome=AuditOutcome.DENIED,
+                        action="query.compile",
+                        source=AuditSource.SERVICE,
+                        resource_type="query",
+                        resource_id=spec.table,
+                        metadata={"error": type(exc).__name__},
+                    ),
+                )
                 raise
             span.set_attribute("security.result", "compiled")
             span.set_attribute("security.parameters", len(compiled.parameters))

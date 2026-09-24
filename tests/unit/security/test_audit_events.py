@@ -102,6 +102,16 @@ def _event(**overrides: object) -> SecurityAuditEvent:
 
 AUDIT_ACCESS_EVENT_TYPES = {"AUDIT_READ_DENIED", "AUDIT_EXPORTED"}
 
+# Added by the successor programme, by name: the pin is extended with the addition rather than
+# loosened to a subset check, so a further addition still has to be deliberate.
+SUCCESSOR_EVENT_TYPES = {
+    "RESOURCE_HYDRATED",
+    "RESOURCE_HYDRATION_REFUSED",
+    "CONNECTOR_REGISTERED",
+    "CONNECTOR_ACQUIRED",
+    "QUERY_REJECTED",
+}
+
 
 def test_the_vocabulary_covers_the_directive_list() -> None:
     # The directive's names are all present; audit-trail access is its own
@@ -109,7 +119,7 @@ def test_the_vocabulary_covers_the_directive_list() -> None:
     names = {member.name for member in SecurityEventType}
     assert names >= REQUIRED_EVENT_TYPES
     assert names >= AUDIT_ACCESS_EVENT_TYPES
-    assert names == REQUIRED_EVENT_TYPES | AUDIT_ACCESS_EVENT_TYPES
+    assert names == REQUIRED_EVENT_TYPES | AUDIT_ACCESS_EVENT_TYPES | SUCCESSOR_EVENT_TYPES
 
 
 def test_every_event_type_is_grouped_into_a_category() -> None:
@@ -122,6 +132,7 @@ def test_every_event_type_is_grouped_into_a_category() -> None:
             "privilege",
             "security",
             "audit",
+            "connector",
         }
 
 

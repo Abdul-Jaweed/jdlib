@@ -8,6 +8,13 @@ from jdlib.credentials.errors import (
 )
 from jdlib.credentials.refs import ResolvedSecret, SecretRef, SecretVersion
 from jdlib.persistence.secrets import SecretProvider
+from jdlib.security.audit.emitter import SecurityEventEmitter, emit_safely
+from jdlib.security.audit.events import (
+    AuditOutcome,
+    AuditSource,
+    SecurityAuditEvent,
+    SecurityEventType,
+)
 from jdlib.security.tracing import TracerLike, security_span
 
 INITIAL_VERSION: Final = SecretVersion("1")
@@ -25,9 +32,16 @@ class VersionedSecretProvider:
     written against the existing ``SecretProvider`` protocol.
     """
 
-    def __init__(self, inner: SecretProvider, *, tracer: TracerLike | None = None) -> None:
+    def __init__(
+        self,
+        inner: SecretProvider,
+        *,
+        tracer: TracerLike | None = None,
+        emitter: SecurityEventEmitter | None = None,
+    ) -> None:
         self._inner = inner
         self._tracer = tracer
+        self._emitter = emitter
         self._current: dict[str, SecretVersion] = {}
         self._retired: dict[str, set[SecretVersion]] = {}
         self._pin: dict[tuple[str, SecretVersion], str] = {}
@@ -124,6 +138,18 @@ class VersionedSecretProvider:
         self._current[handle] = new
         self._pin[(handle, new)] = new_value
         self._install(handle, new_value)
+        emit_safely(
+            self._emitter,
+            SecurityAuditEvent(
+                event_type=SecurityEventType.CREDENTIAL_ROTATED,
+                outcome=AuditOutcome.SUCCESS,
+                action="credential.rotate",
+                source=AuditSource.SYSTEM,
+                resource_type="credential",
+                resource_id=handle,
+                metadata={"version": version, "previous": str(previous)},
+            ),
+        )
         return new
 
     def _install(self, handle: str, new_value: str) -> None:
