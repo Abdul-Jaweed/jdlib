@@ -53,11 +53,15 @@ def endpoint() -> str:
     import boto3
     from botocore.client import Config
 
-    with DockerContainer("minio/minio:latest") as container:
+    # The server is MinIO; the registry is a mirror that still serves it. `minio/minio` on Docker
+    # Hub answers 404 - MinIO withdrew those images - and the actual effect was that this suite
+    # could not run on a runner that had not already cached it, while passing on a machine that
+    # had. Same software, so nothing about what is under test changes; the entrypoint starts the
+    # server, so no command override is passed.
+    with DockerContainer("bitnamilegacy/minio:latest") as container:
         container.with_exposed_ports(9000)
         container.with_env("MINIO_ROOT_USER", ACCESS_KEY)
         container.with_env("MINIO_ROOT_PASSWORD", SECRET_KEY)
-        container.with_command("server /data")
         try:
             container.start()
         except Exception as exc:  # noqa: BLE001 - a daemon that refuses the pull is a SKIP
