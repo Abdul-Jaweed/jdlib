@@ -63,6 +63,8 @@ SENSITIVE_KEYS = frozenset(
         "connection_string",
         "credential",
         "credentials",
+        "cookie",
+        "cookie_header",
         "database_url",
         "dsn",
         "id_token",
@@ -73,6 +75,8 @@ SENSITIVE_KEYS = frozenset(
         "refresh_token",
         "secret",
         "secret_key",
+        "set_cookie",
+        "signing_key",
         "token",
     }
 )
