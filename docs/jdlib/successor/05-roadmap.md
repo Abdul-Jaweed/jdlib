@@ -228,6 +228,14 @@ resource hydration, query compiler, cryptography, external state. Every discover
 reproduce → failing test → fix → regression test → adversarial re-test. Then the certification
 review with evidence per question, and the final report.
 
+**Status: DELIVERED (2026-09-25), sequenced before §13 on purpose.** §14 attacks what §4–§12 built, as the dependency note at the end of this roadmap says, so it needs only JDLib and can run while the reference-app swap is still outstanding.
+
+`tests/unit/security/test_adversarial_successor.py` - **43 tests, and its honest headline is that it found no new defects.** The attacks that mattered were already refused by construction, and the way to say that without overclaiming is to show the *mechanism*: a caller-supplied filter on `tenant_id` produces a statement with **two** predicates and a bound parameter, not a replaced scope; a homoglyph identifier (Cyrillic `е`, `а`) is refused by an ASCII-only allow-list rather than by luck; a delegation identifier is checked per-identifier and not per-capability, so changing the requested capability does not reset the replay check; a re-encoded payload that keeps its original signature string is still refused. Two tests failed on the first run and both were the suite's own wrong guesses about the credential API (`ResolvedSecret.value`, `SecretRef(version=...)`) - recorded here rather than quietly corrected, because a red-team suite that only ever passes deserves suspicion.
+
+`docs/jdlib/production-readiness.md` carries the certification answers, each with the command that produced it: **1077** unit tests, **358** integration tests, **64%** unit-layer coverage (7110 statements, branch on), 142 source modules, 120 test modules, 18110 source lines, lint and types clean over 142 files. It also carries a *what this does not claim* section: the unimplemented connectors and storage backends, the six reliability gaps still open after §6 closed circuit breaking, and the fact that infra-dependent suites skip where the lab is absent - a skipped suite is not evidence.
+
+**Limit stated plainly:** this is the in-repo red team. Attacks against running infrastructure are exercised by the integration suites against real PostgreSQL, Redis and MinIO; they were not re-run as a discrete adversarial exercise against the lab stack in this phase, and no claim here rests on one.
+
 Gate: `docs/jdlib/production-readiness.md` complete with real numbers; every answer in the
 certification list backed by a command that was run.
 
