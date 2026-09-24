@@ -16,3 +16,8 @@ tests/infra/out/
 
 # artefacts from the CI security job (see docs/security/ci-security.md)
 security-artifacts/
+
+# Phase 0 recon: internal engineering notes on the archived library.
+# Publication rules for this programme forbid naming it in JDLib documentation,
+# so these live outside the tracked tree entirely.
+.recon/
