@@ -11,6 +11,26 @@ required for `pytest -m unit`; the hermetic integration suite
 | `redis` | `redis:7-alpine` | `-m infra` | rate limiting and distributed token caches |
 | `otel-collector` | `otel/opentelemetry-collector-contrib:0.103.0` | `-m infra`, `-m e2e` | trace/metric export verification |
 | `zitadel` | `ghcr.io/zitadel/zitadel:latest` | `-m infra` (local only) | identity provider for real token flows |
+| `kong` + `jdlib-echo` | `kong:3.6`, `mendhak/http-https-echo:31` | `-m infra` (local only) | real gateway behaviour: routing, edge auth, identity propagation, rate limiting |
+
+## Gateway (Kong)
+
+Kong is DB-less (declarative config) and its upstream is a service that reflects
+the request it received, so what the gateway forwarded is directly observable:
+
+```bash
+bash tests/infra/kong/start.sh                  # generates credentials, starts Kong + upstream
+source tests/infra/out/kong-credentials.env     # secret + client key (not tracked by git)
+export JDLIB_INFRA_KONG_PROXY_URL=http://127.0.0.1:8000
+pytest -q -W error -m infra tests/infra/test_kong_infra.py
+```
+
+`tests/infra/kong/kong.yml` is the full declarative configuration: `key-auth` on
+the route, `correlation-id`, `rate-limiting` (8/minute per consumer),
+`request-transformer` that *replaces* the identity headers, and a
+`pre-function` that stamps a fresh validity window. See the header comment in
+that file for why each plugin is security-relevant.
+
 
 ## Usage
 

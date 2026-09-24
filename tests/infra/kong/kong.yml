@@ -1,0 +1,82 @@
+_format_version: "3.0"
+
+# Declarative Kong configuration for the gateway infrastructure tests.
+#
+# __GATEWAY_SECRET__ is substituted by start.sh when the stack is launched; the
+# value never lives in the repository.
+#
+# Security-relevant choices, each asserted by tests/infra/test_kong_infra.py:
+#   * key-auth on the route: the edge authenticates callers; a missing key is a
+#     401 produced by Kong, not by the backend,
+#   * identity headers are removed and then added, so exactly one canonical
+#     value survives: `replace` alone only touches headers that already exist
+#     (a caller could keep them absent), and `add` alone would append to a
+#     caller's value, leaving a smuggled duplicate behind,
+#   * the gateway secret and the validity window are set by the gateway itself
+#     (request-transformer + pre-function), so a caller cannot forge either,
+#   * correlation-id gives every request an id that reaches the upstream.
+
+consumers:
+  - username: acme-service
+    keyauth_credentials:
+      - key: __CLIENT_KEY__
+
+services:
+  - name: echo-upstream
+    url: http://jdlib-echo:8080
+    routes:
+      # identity/routing route: no rate limiting, so gateway behaviour under
+      # test is not perturbed by a stateful counter
+      - name: documents
+        paths:
+          - /documents
+        strip_path: false
+        plugins:
+          - name: key-auth
+            config:
+              key_names:
+                - apikey
+              hide_credentials: true
+          - name: correlation-id
+            config:
+              header_name: x-request-id
+              generator: uuid#counter
+              echo_downstream: true
+          - name: request-transformer
+            config:
+              remove:
+                headers:
+                  - x-jdlib-gateway-secret
+                  - x-jdlib-subject
+                  - x-jdlib-tenant
+                  - x-jdlib-scopes
+              add:
+                headers:
+                  - "x-jdlib-gateway-secret:__GATEWAY_SECRET__"
+                  - "x-jdlib-subject:acme-service"
+                  - "x-jdlib-tenant:acme"
+                  - "x-jdlib-scopes:documents:read documents:write"
+          - name: pre-function
+            config:
+              access:
+                - |
+                  local now = ngx.time()
+                  kong.service.request.set_header("x-jdlib-issued-at", tostring(now - 5))
+                  kong.service.request.set_header("x-jdlib-expires-at", tostring(now + 55))
+      # rate-limited route: the same upstream, so a 429 is unambiguously the
+      # edge's answer and never the backend's
+      - name: limited
+        paths:
+          - /limited
+        strip_path: false
+        plugins:
+          - name: key-auth
+            config:
+              key_names:
+                - apikey
+              hide_credentials: true
+          - name: rate-limiting
+            config:
+              minute: 8
+              policy: local
+              limit_by: consumer
