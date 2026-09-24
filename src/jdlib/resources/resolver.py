@@ -110,7 +110,10 @@ class ResourceResolver:
 
             resolved = await self._resolve(handle)
             config = ConnectionConfig(
-                handle=handle.value, target=resolved, credential_version=version
+                handle=handle.value,
+                target=resolved,
+                credential_version=version,
+                tenant_id=str(tenant.tenant_id),
             )
             self._cache.set(
                 tenant=str(tenant.tenant_id),

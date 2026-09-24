@@ -15,9 +15,10 @@ class ConnectionConfig:
     handle: str
     target: str
     credential_version: str
+    tenant_id: str
 
     def __repr__(self) -> str:
         return (
             f"ConnectionConfig(handle={self.handle!r}, target=[REDACTED], "
-            f"credential_version={self.credential_version!r})"
+            f"credential_version={self.credential_version!r}, tenant_id={self.tenant_id!r})"
         )

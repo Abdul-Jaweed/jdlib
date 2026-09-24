@@ -95,6 +95,12 @@ capability mismatch, replay, cross-tenant target, privilege used after actor sus
 `ConnectorCapabilities`, `ConnectionPolicy` with timeout/retry/circuit-breaking, plus the contract
 test suite and test doubles every implementation must pass (ADR-6).
 
+**Status: DELIVERED (2026-09-24).** `DataConnector` protocol, `ConnectorCapabilities`, `ConnectionPolicy`, `CircuitBreaker`, `ConnectorRegistry` and `assert_connector_contract` in `jdlib.data`. The inventory's constraint is honoured rather than mentioned: the policy **extends** the existing adapter-local idiom (validated frozen config, injected clock and sleeper, fail-closed exhaustion) and adds only what the inventory recorded as genuinely absent - circuit breaking and half-open recovery. Retry classification consults `is_retryable()` first and the error's own `transient` flag second, so the public contract that had no callers now has one.
+
+Async discipline is checked by inspection, not by racing a timer: a synchronous implementation fails `assert_connector_contract`, and the registry refuses it at registration, which is what "startup-validated" has to mean to be worth anything. The authorized-context gate lives in the connector because it is the only party that can see both the target and the context at once, and `ConnectionConfig` now carries `tenant_id` so that check is possible at all.
+
+13 tests, TDD. Two were mine to fix: the policy API is async and one call had been left un-awaited, and capabilities are a class attribute because the registry validates a connector *type* before any configuration exists to instantiate one.
+
 Gate: a connector that cannot verify it received an authorized context refuses to open; a
 blocking-call test proves async discipline (ADR-14).
 
