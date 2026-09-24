@@ -1,12 +1,16 @@
 # Compliance Control + Evidence System (Phase 9)
 
-Status: **IN PROGRESS** — §9.1 (control registry) and §9.2 (control model) are
-implemented and verified. §9.3 (evidence collection), §9.4 (posture) and §9.5
-(CLI) are the remaining slices; nothing below claims them.
+Status: **IN PROGRESS** — §9.1 (control registry), §9.2 (control model) and §9.3
+(evidence collection, the configuration and migration collectors) are implemented
+and verified. §9.4 (posture) and §9.5 (CLI) are the remaining slices, along with
+the session-backed collectors (row-level security policy state, the applied
+revision of a live schema, policy configuration).
 
 Source: `src/jdlib/security/compliance/controls.py` (new),
+`src/jdlib/security/compliance/evidence.py` (new),
 `src/jdlib/security/compliance/__init__.py` (new)
-Tests: `tests/unit/security/test_compliance_controls.py` (9)
+Tests: `tests/unit/security/test_compliance_controls.py` (9),
+`tests/unit/security/test_compliance_evidence.py` (12)
 
 ---
 
@@ -72,18 +76,48 @@ and pointing one `evidence_sources` entry at a file that does not exist — fail
 `test_every_cited_evidence_source_exists`). A register test that cannot fail would
 be decoration.
 
-## 3. Still to come in this phase
+## 3. Evidence collection (§9.3)
 
-* **§9.3 evidence collection** — structured, timestamped, attributable and safe
-  evidence for what the library can technically verify (configuration, isolation,
-  audit, migrations, policy state, test results), never collecting a secret.
+`SecurityEvidence` carries the directive's five properties as structure rather
+than convention: observations are a flat mapping of JSON scalars (*structured*),
+`collected_at` comes from an injected clock (*timestamped*), `collected_by` names
+the collector and cannot be blank (*attributable*), and `reproducible` carries the
+command or procedure that regenerates the observation (*reproducible*).
+
+*Safe* is the one that needed a decision. Observations pass the **same**
+sanitiser the audit trail uses (`audit_metadata` from `jdlib.security.audit`): a
+credential-shaped value is redacted, a value under a credential-named key is
+redacted whole, and a nested structure or an oversized value is refused rather
+than smuggled into a report. There is deliberately no second sanitiser — two
+redaction paths would be two behaviours to keep in step, and the audit path's
+patterns are already the ones the leak corpus tests.
+
+Two collectors run without a database:
+
+| Collector | Subject | Notes |
+|---|---|---|
+| `collect_configuration_evidence` | the deployment's `SecurityConfig` | reports only facts on a fixed allow-list (`CONFIGURATION_EVIDENCE_KEYS`), so a configuration field added later cannot arrive in a report unreviewed; a test asserts the reported key set is exactly that list |
+| `collect_migration_evidence` | the revision history this checkout carries | records one head per branch and refuses a branch with two heads or a file with no revision identifier; what a *live* schema has applied is a database question for the session-backed collector |
+
+Recording the checkout's expected head matters because it is the other half of
+"is the deployment at the expected revision": without it, drift between the
+repository and a running schema would have nothing to compare against.
+
+`repr` prints observation keys, never values — the same rule the audit envelope
+follows, so a stray log line cannot become a second copy of a deployment's
+details.
+
+## 4. Still to come in this phase
+
 * **§9.4 posture** — `PASS`/`WARN`/`FAIL`/`NOT_APPLICABLE` with every finding
   explained, and no hidden failures.
 * **§9.5 CLI** — `jdlib security posture|evidence|compliance` following the
   existing typer conventions in `src/jdlib/integrations/cli.py` (a `security`
   sub-app beside `tenant`, `db`, `rls` and `schema`).
+* **session-backed collectors** — row-level security policy state, the applied
+  revision of a live schema, and the policy configuration a PDP is serving.
 
-## 4. Gate
+## 5. Gate
 
 ```bash
 pytest -q -W error      # see the commit message for the counts on this slice

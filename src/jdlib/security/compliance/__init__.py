@@ -21,15 +21,27 @@ from jdlib.security.compliance.controls import (
     controls_for_framework,
     frameworks_in_use,
 )
+from jdlib.security.compliance.evidence import (
+    CONFIGURATION_EVIDENCE_KEYS,
+    MIGRATION_BRANCHES,
+    SecurityEvidence,
+    collect_configuration_evidence,
+    collect_migration_evidence,
+)
 
 __all__ = [
+    "CONFIGURATION_EVIDENCE_KEYS",
     "CONTROL_REGISTRY",
+    "MIGRATION_BRANCHES",
     "Control",
     "ControlCategory",
     "ControlFramework",
     "ControlMapping",
     "ImplementationStatus",
+    "SecurityEvidence",
     "VerificationMethod",
+    "collect_configuration_evidence",
+    "collect_migration_evidence",
     "control_by_id",
     "controls_for_framework",
     "frameworks_in_use",
