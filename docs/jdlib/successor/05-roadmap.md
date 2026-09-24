@@ -128,6 +128,14 @@ AST, `QueryCompiler` → `CompiledQuery` (text + bound parameters as one value),
 and `query/safety.py` (identifier allowlist enforced **at parse time**, dangerous-construct
 rejection, complexity limits, tenant constraint applied by the compiler).
 
+**Status: DELIVERED (2026-09-24).** `jdlib.query`: `QuerySpecification` (Pydantic), `Filter`/`SortKey`, an immutable `QueryNode` AST, `IdentifierPolicy`, `parse_specification`, `QueryCompiler` → `CompiledQuery`, and dialects for PostgreSQL and MySQL.
+
+Three decisions carry it. The allowlist is enforced **at parse time**, so a hostile or unknown table, column, operator or sort key never reaches a compiler - and there is exactly one place to audit. Dangerous constructs are **unexpressible** rather than forbidden: the specification has no field for raw SQL, a join, a subquery or a function call, and every value is bound, so `(select secret from credentials)` and `'; drop table events; --` are both simply values. And `CompiledQuery` carries its text and its parameters as ONE value, because neither is useful without the other - a caller cannot run the statement with values interpolated or reuse the parameters against different SQL.
+
+The tenant constraint is applied by the compiler from the security context, never from the caller, and a specification naming a different tenant is refused rather than narrowed. A specification naming a **tenant-plane** table is refused outright: ADR-1 puts `TenantRepository` on that path and the compiler does not become a second one - which is the roadmap's own gate item, tested as `test_a_tenant_plane_table_is_out_of_reach`.
+
+37 tests, TDD, adversarial by construction: injection through values and through every identifier position, subquery smuggling, unbounded pagination, query amplification via an oversized `IN` list, cross-tenant AST, and an absent security context.
+
 Gate: fuzz/adversarial suite — SQL injection attempts, identifier injection, dangerous constructs,
 unbounded pagination, cross-tenant AST, query amplification — plus a test asserting
 `TenantRepository` remains the only path to tenant-plane rows.
