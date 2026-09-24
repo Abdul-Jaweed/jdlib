@@ -265,3 +265,42 @@ committed in `6125558` and the console-script and knowledge-base work in
   `test_compliance_posture.py`, `tests/unit/test_cli_security.py`): 67 passed;
   `CONTROL_REGISTRY` holds 19 controls over 7 framework families, 15 of them
   `implemented`, 2 `partial`, 1 `not_implemented`, 1 `not_applicable`.
+
+---
+
+## Consumer-driven fixes
+
+Not hardening phases: defects found by consuming the library from outside it, in
+the private reference application (`jdlib-reference-app`), where the evidence is
+what a real caller observes rather than what JDLib's own tests assert. Each entry
+names the commit that fixed it.
+
+### A degraded authorization decision left the middleware as 403 — `c062a09`
+
+* **Symptom.** A request whose authorization could not be decided — the policy
+  engine unreachable, timing out, or answering unparsably — was answered
+  `403 Forbidden` instead of `503 Service Unavailable`, although
+  `AuthorizationPEP` raises `AuthorizationUnavailable`, that error's own
+  descriptor is `SecurityDescriptor(SecurityCode.POLICY_UNAVAILABLE, 503,
+  retryable=True)` (`security/errors.py`), and the operator-facing documentation
+  said 503 (`docs/operations/README.md`).
+* **Cause.** `tenancy/middleware._STATUS_MAP` resolves a failure by
+  `isinstance` in list order and matched the generic `(AuthorizationError, 403)`
+  first. `AuthorizationUnavailable` is an `AuthorizationError` and had no entry
+  of its own, so its 503 never reached a caller passing through the middleware —
+  the one path a real client takes.
+* **Fix.** `(AuthorizationUnavailable, 503)` now precedes
+  `(AuthorizationError, 403)`, with the ordering rule stated where the table is
+  defined.
+* **Why the library's tests missed it.** They cover the enforcement point (which
+  raises the right error) and the error descriptors (which declare the right
+  status) separately; nothing asserted the status the middleware derives for that
+  class.
+* **Now.** Two tests: the specific mapping, and a class-level test that every
+  concrete error class maps to the status its own descriptor declares — all 28
+  concrete classes agree at this revision, so the middleware's table and the
+  descriptors cannot drift apart again without a failure naming the class that
+  drifted. Mutation-checked: both fail with the entry removed.
+* **Found by** the reference application's request-path suite, which asserts the
+  status code a caller receives rather than the exception the library raises.
+  `tests/unit -q -W error` → 859 passed at this revision.
