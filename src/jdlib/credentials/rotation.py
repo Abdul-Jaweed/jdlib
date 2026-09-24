@@ -8,6 +8,7 @@ from jdlib.credentials.errors import (
 )
 from jdlib.credentials.refs import ResolvedSecret, SecretRef, SecretVersion
 from jdlib.persistence.secrets import SecretProvider
+from jdlib.security.tracing import TracerLike, security_span
 
 INITIAL_VERSION: Final = SecretVersion("1")
 
@@ -24,13 +25,27 @@ class VersionedSecretProvider:
     written against the existing ``SecretProvider`` protocol.
     """
 
-    def __init__(self, inner: SecretProvider) -> None:
+    def __init__(self, inner: SecretProvider, *, tracer: TracerLike | None = None) -> None:
         self._inner = inner
+        self._tracer = tracer
         self._current: dict[str, SecretVersion] = {}
         self._retired: dict[str, set[SecretVersion]] = {}
         self._pin: dict[tuple[str, SecretVersion], str] = {}
 
     def resolve(self, ref: SecretRef | str) -> ResolvedSecret:
+        with security_span(
+            self._tracer, "credentials.resolve",
+            attributes={"security.operation": "credentials.resolve"},
+        ) as span:
+            try:
+                resolved = self._resolve_inner(ref)
+            except Exception:
+                span.set_attribute("security.result", "refused")
+                raise
+            span.set_attribute("security.result", "resolved")
+            return resolved
+
+    def _resolve_inner(self, ref: SecretRef | str) -> ResolvedSecret:
         if isinstance(ref, str):
             ref = SecretRef(handle=ref)
 

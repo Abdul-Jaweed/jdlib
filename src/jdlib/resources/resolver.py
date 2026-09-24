@@ -11,6 +11,7 @@ from jdlib.resources.connection import ConnectionConfig
 from jdlib.resources.errors import ResourceHydrationError
 from jdlib.resources.handle import ResourceHandle
 from jdlib.security.context import SecurityContext, current_security_context
+from jdlib.security.tracing import TracerLike, security_span
 
 CACHE_NAMESPACE = "resource"
 
@@ -38,15 +39,37 @@ class ResourceResolver:
         check_tenant: TenantCheck | None = None,
         check_resource: ResourceCheck | None = None,
         check_privilege: PrivilegeCheck | None = None,
+        tracer: TracerLike | None = None,
     ) -> None:
         self._secrets = secrets
         self._cache = cache
         self._check_tenant = check_tenant
         self._check_resource = check_resource
         self._check_privilege = check_privilege
+        self._tracer = tracer
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def hydrate(self, handle: ResourceHandle) -> ConnectionConfig:
+        """The boundary. One span per hydration, at the entry point only.
+
+        The checks, the cache lookups and the credential resolution inside are helpers; a span
+        per helper would be the per-method instrumentation this programme rejected, so the
+        operation is named once and the outcome is recorded on that one span.
+        """
+        with security_span(
+            self._tracer,
+            "resources.hydrate",
+            attributes={"security.operation": "resources.hydrate"},
+        ) as span:
+            try:
+                config = await self._hydrate_inner(handle)
+            except Exception:
+                span.set_attribute("security.result", "refused")
+                raise
+            span.set_attribute("security.result", "hydrated")
+            return config
+
+    async def _hydrate_inner(self, handle: ResourceHandle) -> ConnectionConfig:
         try:
             context = current_security_context()
         except Exception as exc:  # no context bound at all

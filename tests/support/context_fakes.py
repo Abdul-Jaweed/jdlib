@@ -26,6 +26,26 @@ class FrozenClock(Clock):
         self._now = self._now + delta
 
 
+class CallableClock:
+    """The callable clock shape `LocalCache` expects, with `now()` as well.
+
+    Two shapes exist in the codebase - the `Clock` protocol's `.now()` and a plain callable -
+    so this support class offers both rather than letting each test redefine its own.
+    """
+
+    def __init__(self, now: datetime | None = None) -> None:
+        self._now = now or datetime(2026, 1, 1, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        return self._now
+
+    def now(self) -> datetime:
+        return self._now
+
+    def advance(self, delta: timedelta) -> None:
+        self._now = self._now + delta
+
+
 class StaticPrincipals:
     def __init__(self, active: set[uuid.UUID] | None = None) -> None:
         self._active = active or set()

@@ -4,6 +4,7 @@ from typing import Any
 
 from jdlib.data.contract import assert_connector_contract
 from jdlib.data.errors import ConnectorError
+from jdlib.security.tracing import TracerLike, security_span
 
 
 class ConnectorRegistry:
@@ -14,8 +15,9 @@ class ConnectorRegistry:
     application up - instead of failing under production load.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, tracer: TracerLike | None = None) -> None:
         self._types: dict[str, type] = {}
+        self._tracer = tracer
 
     def register(self, connector: type) -> str:
         problems = assert_connector_contract(connector)
@@ -48,7 +50,13 @@ class ConnectorRegistry:
             raise ConnectorError(
                 f"no connector named {name!r} is registered; known: {sorted(self._types)}"
             ) from exc
-        return connector(**kwargs)
+        with security_span(
+            self._tracer,
+            "connector.acquire",
+            attributes={"security.operation": "connector.acquire"},
+        ) as span:
+            span.set_attribute("security.backend", name)
+            return connector(**kwargs)
 
     @property
     def names(self) -> list[str]:

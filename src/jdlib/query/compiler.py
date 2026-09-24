@@ -9,6 +9,7 @@ from jdlib.query.errors import CrossTenantQueryError
 from jdlib.query.safety import IdentifierPolicy, parse_specification
 from jdlib.query.specification import QuerySpecification
 from jdlib.security.context import SecurityContext
+from jdlib.security.tracing import TracerLike, security_span
 
 TENANT_PARAMETER = "jdlib_scope_tenant"
 
@@ -51,13 +52,24 @@ class QueryCompiler:
 
     policy: IdentifierPolicy
     dialect: QueryDialect = field(default_factory=PostgresDialect)
+    tracer: TracerLike | None = None
 
     def compile(
         self, spec: QuerySpecification, *, context: SecurityContext | None
     ) -> CompiledQuery:
-        tenant_id = self._authorized_tenant(spec, context)
-        node = parse_specification(spec, self.policy)
-        return self.render(node, tenant_id=tenant_id)
+        with security_span(
+            self.tracer, "query.compile", attributes={"security.operation": "query.compile"}
+        ) as span:
+            try:
+                tenant_id = self._authorized_tenant(spec, context)
+                node = parse_specification(spec, self.policy)
+                compiled = self.render(node, tenant_id=tenant_id)
+            except Exception:
+                span.set_attribute("security.result", "refused")
+                raise
+            span.set_attribute("security.result", "compiled")
+            span.set_attribute("security.parameters", len(compiled.parameters))
+            return compiled
 
     @staticmethod
     def _authorized_tenant(spec: QuerySpecification, context: SecurityContext | None) -> str:

@@ -179,6 +179,14 @@ Boundary instrumentation only — hydration, connector acquisition, query compil
 resolution, audit — extending the existing boundary list, never a per-method decorator
 (the archived library's 15–30% overhead is the rejected pattern).
 
+**Status: DELIVERED (2026-09-24).** The four new boundaries emit spans: `resources.hydrate`, `query.compile`, `credentials.resolve` and `connector.acquire`. The machinery is the library's own and unchanged - `security_span` is inert without a tracer, validates every attribute against the bounded allow-list before it reaches an exporter, refuses identifiers and credentials outright, and never lets a telemetry error reach the caller (`security_span` finally has call sites; the reliability inventory had recorded none).
+
+The rejected pattern was per-method instrumentation, so the assertions that carry weight are the negative ones: **one span per operation, named at the entry point, and no spans at all from the helpers beneath it** - the allow-list, the parsing, the cache lookups, the credential resolution and the rendering stay silent, and the refusal path lands on the boundary's own span as `security.result=refused` rather than opening a second one.
+
+Telemetry safety is re-run over the new paths rather than assumed: a bound filter value and a resolved credential are both proven absent from every exported attribute, and every attribute is asserted to be in the `security.` namespace and neither forbidden nor sensitive. A collector that fails is asserted not to fail the operation.
+
+10 unit tests. One support addition rather than a second local fake: the codebase had two clock shapes (the `Clock` protocol's `.now()` and a plain callable that `LocalCache` wants), so `CallableClock` now offers both in one place.
+
 Gate: spans asserted at the listed boundaries and *absent* from helper internals; telemetry-safety
 rules re-run over the new paths (no secrets, no payload text, no bind values).
 
