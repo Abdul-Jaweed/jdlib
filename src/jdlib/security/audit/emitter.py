@@ -59,10 +59,21 @@ class AsyncSinkEmitter:
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)
 
-    async def drain(self) -> None:
-        """Wait for everything scheduled so far. Called on shutdown, never on the hot path."""
-        while self._pending:
-            await asyncio.gather(*tuple(self._pending), return_exceptions=True)
+    async def drain(self, timeout: float = 5.0) -> int:
+        """Wait for what *this* loop can still await; report what it could not.
+
+        Two things this must not do. It must not hang shutdown: a task scheduled on a loop that
+        is no longer running can never complete, and asking this loop to await it waits forever -
+        so only tasks belonging to the running loop are awaited. And it must not hide the gap: the
+        count of events that did not reach the sink is returned, because "the audit writer drained"
+        and "the audit writer was still holding events when we stopped waiting" are different facts
+        and a caller that cannot tell them apart cannot record either honestly.
+        """
+        loop = asyncio.get_running_loop()
+        mine = tuple(task for task in self._pending if task.get_loop() is loop)
+        if mine:
+            await asyncio.wait(mine, timeout=timeout)
+        return len(self._pending)
 
     @property
     def pending(self) -> int:
