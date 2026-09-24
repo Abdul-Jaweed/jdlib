@@ -2,6 +2,16 @@ class JdlibError(Exception):
     pass
 
 
+class DelegationRefusedError(JdlibError):
+    """A delegated privilege was refused, and the caller must not proceed.
+
+    One error for every reason a delegation can fail - expired, unjustified, wrong
+    capability, replayed, cross-tenant, or an actor who has been suspended - so a caller
+    cannot accidentally handle "refused" and miss a case. The message names the reason and
+    the delegation identifier, which is an identifier and not a secret.
+    """
+
+
 class MissingTenantContext(JdlibError):
     pass
 
@@ -170,4 +180,5 @@ __all__ = [
     "SchemaLintError",
     "ProvisioningError",
     "MigrationError",
+    "DelegationRefusedError",
 ]

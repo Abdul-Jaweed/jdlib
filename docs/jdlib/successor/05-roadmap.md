@@ -82,6 +82,10 @@ credential leakage, concurrency — each mapped to a named test.
 `PrivilegeContext(kind="delegation")` with capability, justification, TTL, revalidation and audit
 (ADR-3). No new enforcement point.
 
+**Status: DELIVERED (2026-09-24).** `PrivilegeKind.DELEGATION` joins the existing descriptor rather than spawning a privilege model (ADR-3), `PrivilegeContext` gains an optional `delegation_id`, and `validate_delegation` refuses a delegation that is expired, unidentified, replayed, unjustified, for the wrong capability, aimed at another tenant, or whose actor has been suspended. It decides nothing: a refusal is raised for the caller's existing enforcement point to act on, and anything that is not a delegation passes through untouched, which is why the operator path has a positive control of its own.
+
+Nine tests, one per gate item plus three positive controls. TTL is enforced through the descriptor's own `is_live`, not a parallel rule, so there is one answer to "is this privilege still good". The `seen` set and the suspension check are injected, because this library does not own that state.
+
 Gate: adversarial suite over the *existing* descriptor — TTL expiry, absent justification,
 capability mismatch, replay, cross-tenant target, privilege used after actor suspension.
 

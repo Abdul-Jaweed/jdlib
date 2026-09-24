@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import json
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -38,6 +38,7 @@ class PrivilegeKind(StrEnum):
     OPERATOR = "operator"
     SYSTEM = "system"
     TEST = "test"
+    DELEGATION = "delegation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +60,10 @@ class PrivilegeContext:
     actor: Principal
     issued_at: datetime
     expires_at: datetime | None
+    # Identifies a delegation so a replay can be refused. Optional because operator and
+    # system privileges predate it and have their own semantics; a delegation without one
+    # is refused by validate_delegation rather than being unable to exist.
+    delegation_id: str | None = None
 
     def is_live(self, now: datetime) -> bool:
         """Whether this privilege may still be used at ``now``.
@@ -131,6 +136,58 @@ def context_scope(context: TenantContext) -> Iterator[TenantContext]:
         yield context
     finally:
         _CTX.reset(token)
+
+
+def validate_delegation(
+    privilege: PrivilegeContext | None,
+    *,
+    capability: str,
+    target_tenant_id: uuid.UUID,
+    now: datetime,
+    seen: set[str] | None = None,
+    is_suspended: Callable[[uuid.UUID], bool] | None = None,
+) -> PrivilegeContext:
+    """Refuse a delegated privilege unless every condition holds. ADR-3.
+
+    This decides nothing: there is no third enforcement point, and the caller's existing one
+    is what acts on a refusal. Anything that is not a delegation passes through untouched,
+    because the operator path keeps its own semantics.
+
+    ``seen`` is the caller's record of delegation identifiers already used, and
+    ``is_suspended`` the caller's view of whether the actor is still allowed to act. Both are
+    injected for the same reason: this library does not own that state.
+    """
+    from jdlib.errors import DelegationRefusedError
+
+    if privilege is None:
+        raise DelegationRefusedError("no delegated privilege was supplied")
+    if privilege.kind is not PrivilegeKind.DELEGATION:
+        return privilege
+
+    identifier = privilege.delegation_id or "<none>"
+
+    def refuse(reason: str) -> None:
+        raise DelegationRefusedError(f"delegation {identifier} refused: {reason}")
+
+    if privilege.delegation_id is None or not privilege.delegation_id.strip():
+        refuse("it carries no identifier, so a replay could not be detected")
+    if seen is not None and privilege.delegation_id in seen:
+        refuse("it has already been used")
+    if not privilege.is_live(now):
+        refuse("it is no longer live")
+    if privilege.justification is None or not privilege.justification.strip():
+        refuse("it carries no justification")
+    if privilege.capability != capability:
+        refuse(f"it grants {privilege.capability!r}, not {capability!r}")
+    if privilege.actor.tenant_id != target_tenant_id:
+        refuse(
+            "the actor's tenant is not the target tenant "
+            f"({privilege.actor.tenant_id} vs {target_tenant_id})"
+        )
+    if is_suspended is not None and is_suspended(privilege.actor.id):
+        refuse("the actor has been suspended")
+
+    return privilege
 
 
 def current_tenant() -> TenantContext:
@@ -255,10 +312,7 @@ class ContextFactory:
         if not await self._principals.is_active(principal):
             raise UnknownPrincipal(str(principal.id))
         record = await self._resolve_tenant(tenant_ref)
-        if (
-            principal.kind is PrincipalKind.SERVICE_ACCOUNT
-            and principal.tenant_id != record.id
-        ):
+        if principal.kind is PrincipalKind.SERVICE_ACCOUNT and principal.tenant_id != record.id:
             raise TenantAccessDenied(
                 f"principal {principal.id} is not pinned to tenant {record.id}"
             )
