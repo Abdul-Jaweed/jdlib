@@ -21,6 +21,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The Redis cache provider is optional: importing jdlib does not require the
+# client, but using RedisCache does. Kept out of the base install on purpose.
+redis = [
+    "redis>=5.0",
+]
+
 dev = [
     "fastapi>=0.111",
     "httpx>=0.27",

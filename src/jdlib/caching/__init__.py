@@ -9,21 +9,25 @@ global. Time is injected, so expiry behaviour is testable without sleeping.
 from jdlib.caching.errors import (
     CacheKeyError,
     CachePolicyError,
+    CacheSerializationError,
     CredentialCacheRefusedError,
 )
 from jdlib.caching.keys import SCHEMA_VERSION, ScopedKeyFactory
 from jdlib.caching.local import LocalCache, contains_credential
 from jdlib.caching.policy import CachePolicy
 from jdlib.caching.protocol import CacheProvider
+from jdlib.caching.redis import RedisCache
 
 __all__ = [
     "SCHEMA_VERSION",
     "CacheKeyError",
     "CachePolicy",
     "CachePolicyError",
+    "CacheSerializationError",
     "CacheProvider",
     "CredentialCacheRefusedError",
     "LocalCache",
+    "RedisCache",
     "ScopedKeyFactory",
     "contains_credential",
 ]
