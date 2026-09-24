@@ -320,3 +320,18 @@ control-plane tests.
 periodic anchored digest), an actor with database write access can alter history
 undetectably. Recorded here, and again in the final report's residual-risk
 section, rather than papered over.
+
+## Identifiers travel with the event
+
+The control-plane sink reads request, correlation and trace identifiers from the
+ambient tenant context - which is correct for a writer inside the request and
+useless for one outside it. A queued sink draining in a worker task created at
+startup has no request context bound (contextvars are copied when a task is
+created), so it stored `NULL` for every identifier while holding events that
+carried them.
+
+`PlatformAudit.record` therefore accepts `request_id`, `correlation_id` and
+`trace_id` explicitly: a caller that already knows them passes them, a caller that
+does not still gets the ambient fallback, and neither ever invents one. The
+measured effect on the reference application's lab trail: 5 of 5 rows with `NULL`
+identifiers before, 6 of 6 carrying the request's own correlation id after.

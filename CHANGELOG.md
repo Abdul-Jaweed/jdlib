@@ -398,3 +398,33 @@ names the commit that fixed it.
 * **Found by** the reference application asking what an unreachable identity
   provider should answer. The honest answer — `503` — was unreachable from any
   consumer, which is why the fix is here and not in the application.
+
+### Audit identifiers were dropped when the writer ran on its own task — 790a615
+
+* **Symptom.** A consumer that drains its control-plane trail from a worker task -
+  the shape an audit writer wants, so a slow database cannot back-pressure a
+  request - found every identifier column `NULL`, although the events it was
+  writing carried the identifiers the request had bound. Measured on the reference
+  application's lab: 5 of 5 rows with `NULL` request and correlation ids, no way to
+  join a decision to the request that caused it.
+* **Cause.** `DatabaseAuditSink.record` took the identifiers from the ambient tenant
+  context only (`_trace_ids()`), and `PlatformAudit.record` had no parameter for
+  them. A task created earlier has its own context - contextvars are copied at task
+  creation, not shared - so the ambient lookup found nothing and the columns were
+  written `NULL`. Binding a security context per request, which is what the
+  reference application was doing when it found this, cannot fix a writer that runs
+  outside the request.
+* **Fix.** `PlatformAudit.record` and all of its implementations
+  (`DatabaseAuditSink`, `NullPlatformAudit`, `RecordingPlatformAudit`,
+  `CompositeAuditSink`, which forwards them) accept `request_id`, `correlation_id`
+  and `trace_id`. Explicit values win over the ambient lookup; the ambient fallback
+  is unchanged, so existing callers behave exactly as before and a caller with no
+  context stores `NULL` rather than an invented identifier.
+* **Now.** Two tests in `tests/unit/test_platform_audit_sinks.py`: the caller's
+  identifiers win, and the ambient fallback still works. Mutation-checked: forcing
+  the ambient lookup fails the first. One existing test corrected
+  (`test_privilege_audit_adapter_delegates_to_platform_sink` asserts the whole
+  recorded entry, which now carries the three fields). `tests/unit -q -W error` →
+  **869 passed** at this revision (867 before).
+* **Found by** the reference application wiring the security context, and finding
+  that the binding alone changed nothing: identifiers must travel with the event.
