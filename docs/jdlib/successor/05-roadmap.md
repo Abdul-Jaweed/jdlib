@@ -51,6 +51,8 @@ credential-shaped value written to a cache is caught by a test.
 an extra. Deliverables include the serialisation round-trip the archived implementation lacked,
 per-namespace invalidation, and documented behaviour when Redis is unavailable.
 
+**Status: PARTIAL (2026-09-24).** Delivered and tested: `ScopedKeyFactory` (the only key builder, with scoped invalidation prefixes), `CachePolicy` (bounded TTLs), `LocalCache` (injected clock, namespace- and tenant-scoped invalidation, no global flush), the `CacheProvider` protocol, and the ADR-2 guard - a credential object cannot be stored at all, including inside a container, and the refusal names the namespace rather than the value. Not delivered: the Redis provider named above. It needs the `redis` extra and a live container, so its round-trip and expiry tests belong in the integration layer with real infrastructure, and a mock-shaped test would prove nothing about the serialisation defect this phase exists to avoid. Recorded here rather than quietly counted as done. 19 unit tests; commit `f93207a`.
+
 Gate: the adversarial set from the matrix (cross-tenant poisoning, TTL, version skew, Redis
 failure, local fallback, serialisation safety), plus a load-bearing check that key construction
 refuses a tenant-scoped key with no tenant.
