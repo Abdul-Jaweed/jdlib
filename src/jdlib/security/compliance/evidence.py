@@ -42,10 +42,19 @@ from jdlib.security.config import SecurityConfig
 __all__ = [
     "CONFIGURATION_EVIDENCE_KEYS",
     "MIGRATION_BRANCHES",
+    "MAXIMUM_POLICY_NAMES",
+    "POLICY_SUFFIXES",
     "SecurityEvidence",
     "collect_configuration_evidence",
     "collect_migration_evidence",
+    "collect_policy_evidence",
 ]
+
+#: Policy files a decision point may load, by suffix.
+POLICY_SUFFIXES = (".yaml", ".yml", ".json")
+
+#: Policy names are listed in evidence, but a report is not a file listing.
+MAXIMUM_POLICY_NAMES = 50
 
 #: The configuration facts that may appear in evidence. A collector cannot start
 #: reporting something new without editing this set, which is what keeps a future
@@ -174,6 +183,47 @@ def collect_configuration_evidence(
             "jdlib.security.compliance.collect_configuration_evidence(config)"
         ),
         environment=environment or config.compliance.environment.value,
+    )
+
+
+def collect_policy_evidence(
+    directory: pathlib.Path | str,
+    *,
+    pdp_kind: str,
+    clock: Clock | None = None,
+    environment: str | None = None,
+) -> SecurityEvidence:
+    """Observe the policy files a deployment declares for its decision point.
+
+    Names and counts only: a policy body describes an authorization model and can
+    name internal resources, and evidence does not need it. Only the directory's
+    own name is recorded, so a report does not become a map of somebody's
+    filesystem. Reading files rather than a database is why this collector lives
+    with the other checkout-side ones, and the namespace stays free of the
+    persistence layer.
+    """
+    path = pathlib.Path(directory)
+    names: list[str] = []
+    if path.is_dir():
+        names = sorted(
+            entry.name
+            for entry in path.iterdir()
+            if entry.is_file() and entry.suffix.lower() in POLICY_SUFFIXES
+        )
+    return SecurityEvidence(
+        control_id="JDL-AUTHZ-01",
+        subject=f"policy-configuration:{pdp_kind}",
+        collected_by="jdlib.security.compliance.collect_policy_evidence",
+        collected_at=(clock or SystemClock()).now(),
+        observations={
+            "pdp_kind": pdp_kind,
+            "policy_directory": path.name or str(path),
+            "policy_directory_found": path.is_dir(),
+            "policy_files": len(names),
+            "policy_names": names[:MAXIMUM_POLICY_NAMES],
+        },
+        reproducible=f"count {', '.join(POLICY_SUFFIXES)} files in the policy directory",
+        environment=environment,
     )
 
 

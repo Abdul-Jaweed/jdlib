@@ -27,22 +27,38 @@ from jdlib.security.compliance.evidence import (
     SecurityEvidence,
     collect_configuration_evidence,
     collect_migration_evidence,
+    collect_policy_evidence,
+)
+from jdlib.security.compliance.posture import (
+    POSTURE_RULES,
+    PostureFinding,
+    PostureOutcome,
+    PostureReport,
+    Severity,
+    evaluate_posture,
 )
 
 __all__ = [
     "CONFIGURATION_EVIDENCE_KEYS",
     "CONTROL_REGISTRY",
     "MIGRATION_BRANCHES",
+    "POSTURE_RULES",
     "Control",
     "ControlCategory",
     "ControlFramework",
     "ControlMapping",
     "ImplementationStatus",
+    "PostureFinding",
+    "PostureOutcome",
+    "PostureReport",
     "SecurityEvidence",
+    "Severity",
     "VerificationMethod",
     "collect_configuration_evidence",
     "collect_migration_evidence",
+    "collect_policy_evidence",
     "control_by_id",
     "controls_for_framework",
+    "evaluate_posture",
     "frameworks_in_use",
 ]

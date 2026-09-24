@@ -27,6 +27,25 @@ from jdlib.models.base import TenantBase
 from jdlib.persistence.strategies.rls import install_rls, verify_rls
 from jdlib.persistence.strategies.schema import SchemaPerTenantStrategy
 from jdlib.persistence.strategies.shared import SharedSchemaStrategy
+from jdlib.security.compliance import (
+    CONTROL_REGISTRY,
+    MIGRATION_BRANCHES,
+    ControlFramework,
+    PostureOutcome,
+    PostureReport,
+    SecurityEvidence,
+    collect_configuration_evidence,
+    collect_migration_evidence,
+    collect_policy_evidence,
+    controls_for_framework,
+    evaluate_posture,
+    frameworks_in_use,
+)
+from jdlib.security.compliance.session import (
+    collect_isolation_evidence,
+    collect_schema_revision_evidence,
+)
+from jdlib.security.config import ComplianceConfig, Environment, SecurityConfig
 
 Payload = Mapping[str, object] | list[Mapping[str, object]]
 
@@ -35,14 +54,26 @@ tenant_app = typer.Typer(no_args_is_help=True)
 db_app = typer.Typer(no_args_is_help=True)
 rls_app = typer.Typer(no_args_is_help=True)
 schema_app = typer.Typer(no_args_is_help=True)
+security_app = typer.Typer(no_args_is_help=True)
 app.add_typer(tenant_app, name="tenant")
 app.add_typer(db_app, name="db")
 app.add_typer(rls_app, name="rls")
 app.add_typer(schema_app, name="schema")
+app.add_typer(security_app, name="security")
 
 DatabaseUrl = Annotated[str | None, typer.Option("--database-url", envvar="JDLIB_CONTROL_DSN")]
 SharedSchema = Annotated[str, typer.Option("--shared-schema")]
 JsonOutput = Annotated[bool, typer.Option("--json")]
+DeclaredEnvironment = Annotated[
+    str | None,
+    typer.Option("--environment", help="declared deployment profile"),
+]
+BoundSchema = Annotated[str | None, typer.Option("--schema", help="schema to bind the catalog to")]
+MigrationBranch = Annotated[
+    str, typer.Option("--branch", help="revision branch this schema carries")
+]
+PolicyDirectory = Annotated[str | None, typer.Option("--policy-directory")]
+PdpKind = Annotated[str, typer.Option("--pdp-kind")]
 
 _ASYNC_DRIVERS = {"postgresql", "postgresql+psycopg", "postgresql+psycopg2"}
 
@@ -335,3 +366,256 @@ def schema_lint(
             typer.echo(f"{issue.rule} {issue.table}: {issue.message}", err=True)
         raise typer.Exit(1)
     _emit({"status": "clean", "issues": 0}, json_output)
+
+
+# --- security posture, evidence and compliance (§9.5) ---------------------------
+
+
+def _declared_config(environment: str | None) -> SecurityConfig:
+    """The configuration to assess: the library defaults, or a declared profile.
+
+    The CLI assesses the profile the operator declares. It cannot read a
+    deployment's private settings, and it must not pretend to: every report says
+    which profile it describes, and the configuration evidence records it.
+    """
+    if environment is None:
+        return SecurityConfig()
+    try:
+        profile = Environment(environment)
+    except ValueError as exc:
+        known = ", ".join(item.value for item in Environment)
+        raise typer.BadParameter(
+            f"unknown environment: {environment}; expected one of {known}"
+        ) from exc
+    return SecurityConfig(compliance=ComplianceConfig(environment=profile))
+
+
+def _expected_heads() -> dict[str, str]:
+    """The head each branch should be at, from the checkout itself."""
+    record = collect_migration_evidence()
+    return {
+        branch: str(record.observations[f"{branch}_head"]) for branch in MIGRATION_BRANCHES
+    }
+
+
+async def _live_evidence(
+    url: str, schema: str, branch: str, environment: str | None
+) -> list[SecurityEvidence]:
+    """Observe a schema's catalog and the revision it has applied.
+
+    The operator names the branch the schema carries; the collector records what it
+    finds and whether it matches the head this checkout expects. There is no
+    guessing about which schema is which.
+    """
+    _import_framework_models()
+    heads = _expected_heads()
+    if branch not in heads:
+        raise typer.BadParameter(
+            f"unknown branch: {branch}; expected one of {', '.join(MIGRATION_BRANCHES)}"
+        )
+    engine = _bound_engine(url, schema)
+    try:
+        return [
+            await collect_isolation_evidence(engine, environment=environment),
+            await collect_schema_revision_evidence(
+                engine, branch=branch, expected_head=heads[branch], environment=environment
+            ),
+        ]
+    finally:
+        await engine.dispose()
+
+
+async def _collect_evidence(
+    config: SecurityConfig,
+    *,
+    database_url: str | None,
+    schema: str | None,
+    branch: str,
+    policy_directory: str | None,
+    pdp_kind: str,
+    environment: str | None,
+) -> list[SecurityEvidence]:
+    records = [collect_configuration_evidence(config, environment=environment)]
+    records.append(collect_migration_evidence(environment=environment))
+    if policy_directory is not None:
+        records.append(
+            collect_policy_evidence(policy_directory, pdp_kind=pdp_kind, environment=environment)
+        )
+    if database_url is not None:
+        if not schema:
+            raise typer.BadParameter(
+                "provide --schema with --database-url so the catalog can be bound"
+            )
+        records.extend(await _live_evidence(database_url, schema, branch, environment))
+    return records
+
+
+def _echo_posture(report: PostureReport) -> None:
+    counts = report.counts
+    typer.echo(
+        f"profile={report.environment} outcome={report.worst_outcome.value} "
+        f"ready={str(report.is_ready).lower()}"
+    )
+    typer.echo(
+        " ".join(
+            f"{outcome.value}={counts[outcome]}" for outcome in PostureOutcome if counts[outcome]
+        )
+    )
+    for finding in report.findings:
+        typer.echo(
+            f"{finding.outcome.value.upper():<14} {finding.control_id:<14} "
+            f"{finding.severity.value:<8} {finding.title}"
+        )
+        typer.echo(f"    {finding.reason}")
+
+
+@security_app.command("posture")
+def security_posture(
+    environment: DeclaredEnvironment = None,
+    database_url: DatabaseUrl = None,
+    schema: BoundSchema = None,
+    branch: MigrationBranch = "tenant",
+    policy_directory: PolicyDirectory = None,
+    pdp_kind: PdpKind = "cerbos",
+    json_output: JsonOutput = False,
+) -> None:
+    """Report the posture of every technical control in the register.
+
+    Exits non-zero when a control fails, so it can gate a pipeline. Readiness is
+    what this reports; it is not a certification.
+    """
+    config = _declared_config(environment)
+    records = asyncio.run(
+        _collect_evidence(
+            config,
+            database_url=database_url,
+            schema=schema,
+            branch=branch,
+            policy_directory=policy_directory,
+            pdp_kind=pdp_kind,
+            environment=environment,
+        )
+    )
+    report = evaluate_posture(config, evidence=records, environment=environment)
+    if json_output:
+        _emit(report.as_dict(), json_output)
+    else:
+        _echo_posture(report)
+    if not report.is_ready:
+        raise typer.Exit(1)
+
+
+@security_app.command("evidence")
+def security_evidence(
+    environment: DeclaredEnvironment = None,
+    database_url: DatabaseUrl = None,
+    schema: BoundSchema = None,
+    branch: MigrationBranch = "tenant",
+    policy_directory: PolicyDirectory = None,
+    pdp_kind: PdpKind = "cerbos",
+    json_output: JsonOutput = False,
+) -> None:
+    """Collect the evidence behind the posture report.
+
+    Evidence is sanitized where it is built, so a credential cannot reach this
+    output; policy bodies are never read, only counted and named.
+    """
+    config = _declared_config(environment)
+    records = asyncio.run(
+        _collect_evidence(
+            config,
+            database_url=database_url,
+            schema=schema,
+            branch=branch,
+            policy_directory=policy_directory,
+            pdp_kind=pdp_kind,
+            environment=environment,
+        )
+    )
+    if json_output:
+        _emit([record.as_dict() for record in records], json_output)
+        return
+    for record in records:
+        typer.echo(f"control={record.control_id} subject={record.subject}")
+        typer.echo(f"    collected_at={record.collected_at.isoformat()} by={record.collected_by}")
+        for key, value in record.observations.items():
+            typer.echo(f"    {key}={value}")
+        typer.echo(f"    reproduce: {record.reproducible}")
+
+
+@security_app.command("compliance")
+def security_compliance(
+    framework: Annotated[str | None, typer.Option("--framework")] = None,
+    environment: DeclaredEnvironment = None,
+    json_output: JsonOutput = False,
+) -> None:
+    """List the technical controls this library implements and where they map.
+
+    A mapping describes where a control belongs in a framework. It is not a
+    certification, and JDLib does not make an installation compliant: these are
+    technical controls and the evidence behind them.
+    """
+    if framework is not None:
+        try:
+            selected = ControlFramework(framework)
+        except ValueError as exc:
+            known = ", ".join(item.value for item in ControlFramework)
+            raise typer.BadParameter(
+                f"unknown framework: {framework}; expected one of {known}"
+            ) from exc
+        controls = controls_for_framework(selected)
+    else:
+        selected = None
+        controls = tuple(CONTROL_REGISTRY[control_id] for control_id in sorted(CONTROL_REGISTRY))
+    report = evaluate_posture(_declared_config(environment), environment=environment)
+    counts = report.counts
+    if json_output:
+        _emit(
+            {
+                "controls": [
+                    {
+                        "control_id": control.control_id,
+                        "title": control.title,
+                        "category": control.category.value,
+                        "implementation_status": control.implementation_status.value,
+                        "verification_method": control.verification_method.value,
+                        "mappings": [
+                            {"framework": mapping.framework.value, "reference": mapping.reference}
+                            for mapping in control.mappings
+                        ],
+                    }
+                    for control in controls
+                ],
+                "frameworks": [item.value for item in frameworks_in_use()],
+                "posture": report.as_dict(),
+                "disclaimer": (
+                    "Technical controls and evidence only: JDLib does not make an "
+                    "installation certified or compliant."
+                ),
+            },
+            json_output,
+        )
+        return
+    typer.echo("JDLib technical security controls — readiness view, not a certification")
+    if selected is not None:
+        typer.echo(f"framework={selected.value} controls={len(controls)}")
+    else:
+        typer.echo("frameworks=" + ", ".join(item.value for item in frameworks_in_use()))
+    for control in controls:
+        mappings = ", ".join(
+            f"{mapping.framework.value}:{mapping.reference}" for mapping in control.mappings
+        )
+        typer.echo(
+            f"{control.control_id:<14} {control.implementation_status.value:<16} "
+            f"{control.category.value:<18} {mappings}"
+        )
+    typer.echo(
+        f"posture ({report.environment}): "
+        + " ".join(
+            f"{outcome.value}={counts[outcome]}" for outcome in PostureOutcome if counts[outcome]
+        )
+    )
+    typer.echo(
+        "Technical controls and evidence only: installing this library does not make an "
+        "organisation certified or compliant."
+    )

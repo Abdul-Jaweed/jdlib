@@ -12,13 +12,11 @@ from jdlib.context import TenantRecord
 from jdlib.control.enums import PlacementStrategy, TenantStatus
 from jdlib.errors import StrategyCapabilityError
 from jdlib.models.base import TenantBase
-from jdlib.persistence.strategies.rls import emit_rls_policies, install_rls, verify_rls
+from jdlib.persistence.strategies.rls import install_rls, verify_rls
 from jdlib.persistence.strategies.shared import SharedSchemaStrategy
-from tests.integration.rls_support import run_rls_ddl
+from tests.integration.rls_support import APP_PASSWORD, APP_ROLE, run_rls_ddl
 from tests.support.invoice import Invoice
 
-APP_ROLE = "jdlib_rls_app"
-APP_PASSWORD = "rls-test"
 BYPASS_ROLE = "jdlib_rls_bypass"
 TENANT_SCHEMA = "jt_test"
 MISSING_ROLE = "jdlib_rls_missing"
@@ -71,42 +69,6 @@ async def _scoped_ids(session: AsyncConnection | AsyncSession) -> list[uuid.UUID
         sa.text(f'SELECT tenant_id FROM "{TENANT_SCHEMA}".invoices')
     )
     return list(result.scalars().all())
-
-
-@pytest.fixture()
-async def rls_app_role(async_engine: AsyncEngine) -> str:
-    async with async_engine.begin() as connection:
-        await connection.execute(
-            sa.text(
-                f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{APP_ROLE}') "
-                f"THEN CREATE ROLE {APP_ROLE} LOGIN PASSWORD '{APP_PASSWORD}' NOBYPASSRLS; "
-                "END IF; END $$;"
-            )
-        )
-        await connection.execute(sa.text(f'GRANT USAGE ON SCHEMA "{TENANT_SCHEMA}" TO {APP_ROLE}'))
-        await connection.execute(
-            sa.text(
-                f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA '
-                f'"{TENANT_SCHEMA}" TO {APP_ROLE}'
-            )
-        )
-        await connection.execute(
-            sa.text(
-                f'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA "{TENANT_SCHEMA}" TO {APP_ROLE}'
-            )
-        )
-    return APP_ROLE
-
-
-def _emit_policies(sync: sa.Connection) -> None:
-    sync.execute(sa.text(f'SET search_path TO "{TENANT_SCHEMA}"'))
-    emit_rls_policies(sync, metadata=TenantBase.metadata, app_role=APP_ROLE)
-
-
-@pytest.fixture()
-async def rls_engine(async_engine: AsyncEngine, rls_app_role: str) -> AsyncEngine:
-    await run_rls_ddl(async_engine, _emit_policies)
-    yield async_engine
 
 
 async def test_rls_unset_role_sees_no_rows_and_cannot_insert(

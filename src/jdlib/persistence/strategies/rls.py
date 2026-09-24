@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -105,8 +106,73 @@ async def install_rls(engine: AsyncEngine, *, metadata: sa.MetaData, app_role: s
     await verify_rls(engine, app_role, metadata=metadata)
 
 
-async def verify_rls(engine: AsyncEngine, app_role: str, *, metadata: sa.MetaData) -> None:
+@dataclass(frozen=True, slots=True)
+class RlsInspection:
+    """What the PostgreSQL catalog says about tenant isolation on one schema.
+
+    Reading and judging are separate concerns: :func:`verify_rls` raises on the
+    first problem, while evidence has to report *all* of them, and both must agree
+    on what they saw. They therefore share this inspection rather than each asking
+    the catalog their own question.
+    """
+
+    tables_checked: tuple[str, ...]
+    tables_enforced: tuple[str, ...]
+    tables_missing_rls: tuple[str, ...]
+    tables_missing_force: tuple[str, ...]
+    tables_missing_policy: tuple[str, ...]
+    tables_unprovisioned: tuple[str, ...]
+
+    @property
+    def is_enforced(self) -> bool:
+        """Whether every tenant-routed table is provisioned, forced and policied."""
+        return not (
+            self.tables_missing_rls
+            or self.tables_missing_force
+            or self.tables_missing_policy
+            or self.tables_unprovisioned
+        )
+
+
+async def inspect_rls(engine: AsyncEngine, *, metadata: sa.MetaData) -> RlsInspection:
+    """Inspect row-level security on the schema this engine is bound to.
+
+    Neither role checks nor judgement: a table the engine cannot see is reported as
+    unprovisioned, because for evidence that is an observation, and for a caller
+    who asked for a schema it is a failure it can explain.
+    """
     eligible = rls_eligible_tables(metadata)
+    missing_rls: list[str] = []
+    missing_force: list[str] = []
+    missing_policy: list[str] = []
+    unprovisioned: list[str] = []
+    enforced: list[str] = []
+    async with engine.connect() as connection:
+        for name in eligible:
+            row = (await connection.execute(_TABLE_CHECK, {"name": name})).one_or_none()
+            if row is None:
+                unprovisioned.append(name)
+                continue
+            rowsecurity, force, has_policy = bool(row[0]), bool(row[1]), bool(row[2])
+            if not rowsecurity:
+                missing_rls.append(name)
+            elif not force:
+                missing_force.append(name)
+            if not has_policy:
+                missing_policy.append(name)
+            if rowsecurity and force and has_policy:
+                enforced.append(name)
+    return RlsInspection(
+        tables_checked=eligible,
+        tables_enforced=tuple(enforced),
+        tables_missing_rls=tuple(missing_rls),
+        tables_missing_force=tuple(missing_force),
+        tables_missing_policy=tuple(missing_policy),
+        tables_unprovisioned=tuple(unprovisioned),
+    )
+
+
+async def verify_rls(engine: AsyncEngine, app_role: str, *, metadata: sa.MetaData) -> None:
     async with engine.connect() as connection:
         role = (
             await connection.execute(
@@ -119,18 +185,13 @@ async def verify_rls(engine: AsyncEngine, app_role: str, *, metadata: sa.MetaDat
         bypass, is_super = role
         if bypass or is_super:
             raise StrategyCapabilityError(f"RLS app role {app_role} can bypass row level security")
-        checks: dict[str, tuple[bool, bool, bool] | None] = {}
-        for name in eligible:
-            row = (await connection.execute(_TABLE_CHECK, {"name": name})).one_or_none()
-            checks[name] = None if row is None else (bool(row[0]), bool(row[1]), bool(row[2]))
-    for name, check in checks.items():
-        if check is None:
-            raise StrategyCapabilityError(
-                f"RLS table missing or not visible: {name}; "
-                "the engine must be bound to the target schema (search_path)"
-            )
-        rowsecurity, force, has_policy = check
-        if not rowsecurity or not force:
-            raise StrategyCapabilityError(f"RLS is not forced on table {name}")
-        if not has_policy:
-            raise StrategyCapabilityError(f"RLS table {name} lacks tenant_isolation policy")
+    inspection = await inspect_rls(engine, metadata=metadata)
+    for name in inspection.tables_unprovisioned:
+        raise StrategyCapabilityError(
+            f"RLS table missing or not visible: {name}; "
+            "the engine must be bound to the target schema (search_path)"
+        )
+    for name in (*inspection.tables_missing_rls, *inspection.tables_missing_force):
+        raise StrategyCapabilityError(f"RLS is not forced on table {name}")
+    for name in inspection.tables_missing_policy:
+        raise StrategyCapabilityError(f"RLS table {name} lacks tenant_isolation policy")

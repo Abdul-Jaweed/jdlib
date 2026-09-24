@@ -82,3 +82,25 @@ async def control_session_factory(async_engine, control_engine):
         await connection.execute(sa.text(f'SET search_path TO "{TENANT_SCHEMA}", public'))
         await connection.run_sync(ControlBase.metadata.create_all)
     return async_sessionmaker(async_engine, expire_on_commit=False)
+
+
+# The RLS harness lives here, not in a test module, because two suites need the
+# same schema: the isolation tests and the compliance collectors that observe it.
+# A fixture defined in a test module cannot be imported and used as a parameter
+# without shadowing the import, and a second copy of the harness would be a second
+# schema to keep in step with the first.
+
+
+@pytest.fixture()
+async def rls_app_role(async_engine) -> str:
+    from tests.integration.rls_support import ensure_rls_role
+
+    return await ensure_rls_role(async_engine, TENANT_SCHEMA)
+
+
+@pytest.fixture()
+async def rls_engine(async_engine, rls_app_role: str):
+    from tests.integration.rls_support import emit_tenant_policies, run_rls_ddl
+
+    await run_rls_ddl(async_engine, lambda sync: emit_tenant_policies(sync, TENANT_SCHEMA))
+    yield async_engine

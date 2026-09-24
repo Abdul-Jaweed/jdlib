@@ -6,16 +6,24 @@ from collections.abc import Callable
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from jdlib.models.base import TenantBase
 from jdlib.persistence.strategies.rls import (
     _DDL_ATTEMPTS,
     _DDL_LOCK_TIMEOUT,
     _DDL_RETRY_DELAY,
     _retryable_ddl_error,
+    emit_rls_policies,
 )
 
 LOCK_TIMEOUT = _DDL_LOCK_TIMEOUT
 ATTEMPTS = _DDL_ATTEMPTS
 RETRY_DELAY = _DDL_RETRY_DELAY
+
+#: The unprivileged role RLS is verified against, and its throwaway password.
+#: Shared here so the RLS suite and the compliance collectors describe the same
+#: schema instead of each building their own.
+APP_ROLE = "jdlib_rls_app"
+APP_PASSWORD = "rls-test"
 
 _TERMINATE_IDLE = sa.text(
     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
@@ -23,6 +31,37 @@ _TERMINATE_IDLE = sa.text(
     "AND pid <> pg_backend_pid() "
     "AND state = 'idle in transaction'"
 )
+
+
+async def ensure_rls_role(engine: AsyncEngine, schema: str, app_role: str = APP_ROLE) -> str:
+    """Create the unprivileged application role and grant it the tenant schema."""
+    async with engine.begin() as connection:
+        await connection.execute(
+            sa.text(
+                f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{app_role}') "
+                f"THEN CREATE ROLE {app_role} LOGIN PASSWORD '{APP_PASSWORD}' NOBYPASSRLS; "
+                "END IF; END $$;"
+            )
+        )
+        await connection.execute(sa.text(f'GRANT USAGE ON SCHEMA "{schema}" TO {app_role}'))
+        await connection.execute(
+            sa.text(
+                f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "
+                f'"{schema}" TO {app_role}'
+            )
+        )
+        await connection.execute(
+            sa.text(
+                f'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA "{schema}" TO {app_role}'
+            )
+        )
+    return app_role
+
+
+def emit_tenant_policies(sync: sa.Connection, schema: str, app_role: str = APP_ROLE) -> None:
+    """Emit the tenant isolation policies onto the schema a connection is bound to."""
+    sync.execute(sa.text(f'SET search_path TO "{schema}"'))
+    emit_rls_policies(sync, metadata=TenantBase.metadata, app_role=app_role)
 
 
 async def run_rls_ddl(engine: AsyncEngine, callback: Callable[[sa.Connection], object]) -> None:
