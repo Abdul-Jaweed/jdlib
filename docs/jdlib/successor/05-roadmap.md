@@ -221,6 +221,31 @@ Gate: the walkthrough runs from an empty machine on the documented path — the 
 hardening programme established, which is what makes the demonstration evidence rather than a
 screenshot.
 
+**Status: DELIVERED (2026-09-25).** The swap is on the data path: the app's report surface is built
+from the successor capabilities — hydration → credential resolution → connector → compilation →
+tenant-scoped query → audit — in `src/jdlib_reference_app/dataplane.py`, with the request models
+beside the plane they belong to and the route in `main.py` behind `Depends(permission(...))`.
+
+`tests/integration/test_reports_query.py` — **9 tests, run against a real database** — is the part
+that makes this evidence rather than wiring: two tenants are provisioned and seeded, and the live
+assertions are that the caller's tenant sees exactly its own row, that a caller-supplied filter on
+the *other* tenant's id returns zero rows (the compiler's scope predicate is ANDed, not replaced),
+that the tenant plane is refused at parse time and a hostile identifier refused before any
+connection, and that the two boundary events were emitted. The earlier scenario list is carried by
+the app's own suites from the phases that built those flows; this phase's new coverage is the data
+plane.
+
+One library change came *out* of this phase rather than being designed into it:
+`ConnectionConfig.server_settings`. The live test failed first with `relation "memberships" does
+not exist` while the compiled SQL was exactly right — asyncpg takes a `search_path` only as a
+connection setting, and neither `?options=` nor `?server_settings=` in the DSN is honoured. That is
+a property of a hydrated target, so the target now carries it and the connector passes it, with a
+live test asserting `current_schema()`.
+
+**Not claimed:** the walkthrough is run on this machine's documented path, not on a freshly
+provisioned one; the empty-machine standard was demonstrated in the hardening programme (see the
+app's `docs/final-report.md`), and repeating it was not part of this phase.
+
 ## §14 — Adversarial review and certification (M) — directive Phases 14 and 35
 
 The red-team list from the directive, in its areas: identity, tenant isolation, authorization,
@@ -244,6 +269,36 @@ certification list backed by a command that was run.
 The directive names seventeen `docs/jdlib/*.md` pages plus API reference. Existing pages are
 updated, not duplicated; each is written after the phase it documents, and every claim is
 machine-checked where checkable (counts, paths, line anchors).
+
+**Status: DELIVERED (2026-09-25).** The pages the directive names exist, and the ones that
+describe a capability do not duplicate it — they index it:
+
+| Page | Content |
+|---|---|
+| `architecture.md` | The layering, the two planes, where each refusal comes from |
+| `security-model.md` | Trust boundaries, the fail-closed table, audit vs telemetry vs logs |
+| `tenancy.md` | Resolution, placement, isolation, lifecycle, background work |
+| `authentication.md` | Authenticators, machine identities, failure semantics, what authn does *not* do |
+| `authorization.md` | The single enforcement point, the decision→outcome table, resources and their tenant |
+| `privileged-access.md` | `PrivilegeContext`, the delegation conditions, replay keying, audit-before-raise |
+| `resource-management.md`, `credentials.md`, `connectors.md`, `query-system.md` | Index the canonical capability pages |
+| `production-readiness.md` | The certification answers (§14) |
+| `capabilities/` | Seven capability pages plus an index: credentials, caching, resources, connectors, query, storage, jobs |
+
+**Every claim is checked, not trusted.** Each capability page carries front-matter naming its
+modules, exports, refusals, test files and test-function count, and
+`tests/unit/test_successor_docs.py` verifies all of it — named modules and test files exist, exports
+resolve in the namespace, each refusal is a real attribute of the module declared to define it, and
+the stated count matches the files. The same module asserts the directive's page set exists and is
+not a stub, and that no page cites a source path that has moved. Counts are test **functions**, not
+parametrized cases, and the pages say so, because a case count depends on how the suite was invoked
+while a function count is a property of the file.
+
+**One correction worth recording:** the first version of that checker failed on its own parser — a
+bare `sources:` key stored `""` where the following `  - item` lines expected a list — and the
+capability pages were initially written one directory too deep (the generator joined the same
+relative path twice). Both were caught by the checker and the directory listing rather than by
+reading, which is the argument for having it.
 
 ---
 
