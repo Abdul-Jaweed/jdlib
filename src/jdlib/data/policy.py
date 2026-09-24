@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from jdlib.data.errors import CircuitOpenError, ConnectorError, ConnectorTimeoutError
+from jdlib.reliability import RetryBudget, RetryBudgetExhaustedError
+from jdlib.security.context import current_security_context_or_none, security_context_scope
 from jdlib.security.errors import is_retryable
 
 
@@ -40,6 +43,9 @@ class ConnectionPolicy:
     retry_backoff: timedelta = timedelta(milliseconds=200)
     failure_threshold: int = 5
     reset_after: timedelta = timedelta(seconds=60)
+    #: Shared across every call this policy serves. ``max_attempts`` bounds one call; this bounds
+    #: the retries across all of them, which is the amplification a failing dependency suffers.
+    retry_budget: RetryBudget | None = None
 
     def __post_init__(self) -> None:
         if self.connect_timeout <= 0:
@@ -61,16 +67,35 @@ class ConnectionPolicy:
         sleeper: Callable[[float], Awaitable[None]] | None = None,
         jitter: Callable[[float, float], float] | None = None,
         params: tuple[Any, ...] = (),
+        clock: Callable[[], datetime] | None = None,
     ) -> list[dict[str, Any]]:
-        """Attempt an operation within the budget, then raise. Never return nothing."""
+        """Attempt an operation within the budget, then raise. Never return nothing.
+
+        Every attempt runs inside the security context the call started with, and every retry
+        costs a token from the shared budget - both were recorded absent before this.
+        """
         wait = sleeper or asyncio.sleep
         choose = jitter or (lambda low, high: (low + high) / 2)
+        now = clock or (lambda: datetime.now(tz=UTC))
+        # Captured once, re-established around every attempt: a retry that ran without the context
+        # the original call had would be a retry that can reach another tenant's rows. Capturing it
+        # here rather than relying on the ambient value is what makes that true across a boundary
+        # that drops context - a thread, a spawned task, a queue hop.
+        context = current_security_context_or_none()
         for attempt in range(1, self.max_attempts + 1):
             try:
-                return await connector.execute(statement=statement, params=params)
+                with (
+                    security_context_scope(context) if context is not None else nullcontext()
+                ):
+                    return await connector.execute(statement=statement, params=params)
             except ConnectorError as exc:
                 if attempt == self.max_attempts or not self._retryable(exc):
                     raise
+                if self.retry_budget is not None and not self.retry_budget.take(now=now()):
+                    raise RetryBudgetExhaustedError(
+                        f"the retry budget is spent after {attempt} attempt(s); the failure is "
+                        f"{type(exc).__name__}"
+                    ) from exc
                 await wait(_sleep_seconds(self.retry_backoff, attempt, choose))
         raise ConnectorError("the attempt budget was exhausted")  # pragma: no cover - defensive
 
