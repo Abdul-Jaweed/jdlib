@@ -70,7 +70,23 @@ class VersionedSecretProvider:
             ) from exc
 
     def current_version(self, handle: str) -> SecretVersion | None:
-        return self._current.get(handle)
+        """The version currently served for a handle, establishing it on first ask.
+
+        Laziness here would be wrong for the consumer this exists for: a caller deciding
+        whether a cached connection target is still valid must be able to ask the version
+        *before* resolving. Reading the inner provider is the cheap half of that decision -
+        it is connecting that is expensive. A handle nobody holds still reports None, and
+        callers fail closed on that.
+        """
+        known = self._current.get(handle)
+        if known is not None:
+            return known
+        try:
+            self._read(handle)
+        except CredentialUnavailableError:
+            return None
+        self._current.setdefault(handle, INITIAL_VERSION)
+        return self._current[handle]
 
     def rotate(self, handle: str, *, new_value: str, version: str) -> SecretVersion:
         """Declare a new generation. The previous one stops being served."""
