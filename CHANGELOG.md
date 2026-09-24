@@ -249,16 +249,18 @@ Commit: `6125558` (`docs(security): documentation and knowledge base in line wit
 Verified on the development host (Windows, Docker), at commit `6125558` plus
 the uncommitted phase-11 changes:
 
-* `pytest -q -W error` → **1215 passed, 6 skipped** (71.87 s), with the local
+* `pytest -q -W error` → **1,217 passed, 6 skipped** (71.48 s), with the local
   Kong/Cerbos/ZITADEL stack up and its `JDLIB_INFRA_*` variables exported; the
-  six skips are the documented Tyk ones (§ Phase 4 above).
-* The same suite without those variables reports 1190 passed, 31 skipped — the
+  six skips are the documented Tyk ones (§ Phase 4 above). The phase-9
+  certification gate recorded 1,215 counted before the two console-script tests
+  landed in the working tree.
+* The same suite without those variables reports 1,192 passed, 31 skipped — the
   31 skips are Kong (9), Cerbos (12), ZITADEL (4) and Tyk (6), each naming the
   variable it wants.
 * `tests/infra` selected on its own against the running stack: 29 passed,
   6 skipped (Tyk).
 * The four security-compliance modules together
   (`test_compliance_controls.py`, `test_compliance_evidence.py`,
-  `test_compliance_posture.py`, `tests/unit/test_cli_security.py`): 65 passed;
+  `test_compliance_posture.py`, `tests/unit/test_cli_security.py`): 67 passed;
   `CONTROL_REGISTRY` holds 19 controls over 7 framework families, 15 of them
   `implemented`, 2 `partial`, 1 `not_implemented`, 1 `not_applicable`.

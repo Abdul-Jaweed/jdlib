@@ -92,7 +92,7 @@ models, HTTP routing, and business logic to the consumer.
 | Async model | `AsyncSession` / `create_async_engine` | `src/jdlib/persistence/session.py:256` |
 | Build backend | `hatchling` | `pyproject.toml:1-3` |
 | Public exports | 13 names | `src/jdlib/__init__.py:11-25` |
-| Test suite | 568 passing at `a30601d`; **1,215 passing / 6 skipped** at `4d113e5` | verified by execution (§19.1, §26.6) |
+| Test suite | 568 passing at `a30601d`; **1,217 passing / 6 skipped** at the latest verified run in this revision | verified by execution (§19.1, §26.6) |
 
 ### 1.2 The problem it solves
 
@@ -2795,14 +2795,14 @@ credential-shaped value is redacted, a credential-named key is redacted whole,
 and a nested or oversized value is refused rather than smuggled into a report),
 `collected_at` (from an injected clock), `collected_by` (cannot be blank),
 `reproducible` (the command or procedure that regenerates the observation) and
-`control_id`/`subject`; `repr` prints observation *keys*, never values. Four
+`control_id`/`subject`; `repr` prints observation *keys*, never values. Three
 collectors ship in `evidence.py`: `collect_configuration_evidence` (reads the
 fixed allow-list `CONFIGURATION_EVIDENCE_KEYS`, 16 keys, so a future field
 cannot arrive in a report unreviewed), `collect_migration_evidence` (one head per
 branch of `MIGRATION_BRANCHES = ("control", "tenant")`, refusing a branch with
 two heads or a revision file with no identifier), `collect_policy_evidence`
 (names and counts of policy files only — a policy body is a deployment's
-business and is never read) — and two session-backed collectors in
+business and is never read) — plus two session-backed collectors in
 `evidence`'s sibling `session.py`: `collect_isolation_evidence` (the
 PostgreSQL catalog, through `inspect_rls`, §8.12) and
 `collect_schema_revision_evidence` (the revision a live schema has applied,
@@ -2838,8 +2838,8 @@ that imports it (`jdlib.persistence.strategies.rls`, `jdlib.models.base`), and
 the CLI imports that module explicitly (§8.20). A posture report over a
 configuration therefore needs no database.
 
-**Tests.** 65 unit tests — 9 (`test_compliance_controls.py`), 12
-(`test_compliance_evidence.py`), 31 (`test_compliance_posture.py`), 13
+**Tests.** 67 unit tests — 9 (`test_compliance_controls.py`), 12
+(`test_compliance_evidence.py`), 31 (`test_compliance_posture.py`), 15
 (`tests/unit/test_cli_security.py`) — plus 6 live-collector tests on real
 PostgreSQL (`tests/integration/test_compliance_live_collectors.py`). The phase
 document also records a bug the phase found in itself: the audit-posture rule
@@ -4017,9 +4017,9 @@ graph LR
 
 | Metric | Value |
 |---|---|
-| Total passing tests | **1,215** (`pytest -q -W error`, real PostgreSQL 16 via testcontainers, 71.87 s) |
+| Total passing tests | **1,217** (`pytest -q -W error`, real PostgreSQL 16 via testcontainers, 71.48 s) |
 | Skipped | **6**, all in `tests/infra/test_tyk_infra.py` (§19.7) |
-| Test-function definitions | 1,019 (677 unit + 307 integration + 35 infra) |
+| Test-function definitions | 1,021 (679 unit + 307 integration + 35 infra) |
 | Unit | 66 modules (37 top-level + 29 under `unit/security/`), 11,650 lines |
 | Integration | 33 test modules + `conftest.py` + `rls_support.py` + `strategy_support.py`, 9,824 lines |
 | Infra | 5 modules, 1,589 lines — live Kong, Cerbos, ZITADEL and OpenTelemetry harnesses |
@@ -4027,15 +4027,17 @@ graph LR
 | Warnings policy | `-W error` in the verification run; any warning is a failure |
 
 Without the `JDLIB_INFRA_*` settings the infrastructure classes skip themselves
-and the same suite reports 1,190 passed, 31 skipped — the difference is exactly
-those classes (Kong 9, Cerbos 12, ZITADEL 4, Tyk 6), each skip naming the
-variable it wants.
+and the same suite reports 1,192 passed, 31 skipped — the 31 skips are Kong (9),
+Cerbos (12), ZITADEL (4) and Tyk (6), each naming the variable it wants. The
+phase-9 certification gate recorded 1,215 passed / 6 skipped; the two tests for
+the console script (§18.2) landed in the working tree afterwards, which is the
+difference to the 1,217 above.
 
 ### 19.2 Architecture of the suite
 
 ```mermaid
 graph TB
-    TS["tests/"] --> U["unit/ (677 defs)"]
+    TS["tests/"] --> U["unit/ (679 defs)"]
     TS --> I["integration/ (307 defs)"]
     TS --> N["infra/ (35 defs)"]
     TS --> S["support/ (fakes + consumer Invoice model)"]
@@ -4088,7 +4090,7 @@ partial unique index, ownership constraints) used as a schema fixture.
 | Gateway | `unit/security/test_gateway_adapters.py`; `tests/infra/test_kong_infra.py` (9 defs) |
 | Security audit | `unit/security/test_audit_events.py`, `test_audit_emitters.py`, `test_audit_access_export.py`, `test_audit_adapters.py`, `test_audit_control_adapters.py`; `integration/test_security_audit_persistence.py`, `test_audit_isolation_export.py`, `test_audit_raw_sql_refusal.py` |
 | Telemetry and tracing | `unit/security/test_telemetry.py`, `test_tracing.py`; `tests/infra/test_otel_infra.py` (4 defs) |
-| Compliance and the security CLI | `unit/security/test_compliance_controls.py` (9), `test_compliance_evidence.py` (12), `test_compliance_posture.py` (31); `unit/test_cli_security.py` (13); `integration/test_compliance_live_collectors.py` (6, real PostgreSQL) |
+| Compliance and the security CLI | `unit/security/test_compliance_controls.py` (9), `test_compliance_evidence.py` (12), `test_compliance_posture.py` (31); `unit/test_cli_security.py` (15); `integration/test_compliance_live_collectors.py` (6, real PostgreSQL) |
 | Adversarial regressions | `unit/security/test_adversarial.py`, `test_adversarial_privilege.py`, `test_adversarial_service_identity.py`, `test_adversarial_audit_integrity.py` |
 | Live infrastructure | `tests/infra/` — Kong 3.6 (9), Cerbos (12), ZITADEL (4), OpenTelemetry collector (4), Tyk (6; skipped without a JavaScript/coprocess runtime) |
 
@@ -5031,12 +5033,13 @@ See [§18.7](#187-packaging-flow).
 
 **Re-verified by execution for the phase 11 synchronisation (§26.6):**
 
-* `pytest -q -W error` → **1,215 passed, 6 skipped** in 71.87 s, with the local
+* `pytest -q -W error` → **1,217 passed, 6 skipped** in 71.48 s, with the local
   Kong/Cerbos/ZITADEL stack up and its `JDLIB_INFRA_*` variables exported. With
-  those variables removed the same suite reports 1,190 passed, 31 skipped — the
-  infrastructure classes skip themselves by design.
+  those variables removed the same suite reports 1,192 passed, 31 skipped — the
+  infrastructure classes skip themselves by design. (The phase-9 certification
+  gate recorded 1,215 counted before the two console-script tests landed.)
 * `pytest tests/infra -q` alone → 29 passed, 6 skipped; the four compliance
-  and CLI-security modules together → 65 passed.
+  and CLI-security modules together → 67 passed.
 * `CONTROL_REGISTRY` → 19 controls across 7 framework families (15
   `implemented`, 2 `partial`, 1 `not_implemented`, 1 `not_applicable`), with
   `POSTURE_RULES` covering the registry exactly; `SecurityEventType` → 36

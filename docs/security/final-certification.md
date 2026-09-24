@@ -22,7 +22,7 @@ set -a; . tests/infra/out/kong-credentials.env; set +a
 ```
 
 The six skips are the documented Tyk coprocess limitation (§ Tyk below). With the
-infrastructure variables unset the same suite reports `1190 passed, 31 skipped` —
+infrastructure variables unset the same suite reports `1192 passed, 31 skipped` —
 the difference is exactly the infrastructure layer (Kong 9, Cerbos 12, ZITADEL 4,
 Tyk 6), each skip naming the variable it wants. Nothing is skipped silently.
 
