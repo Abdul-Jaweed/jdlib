@@ -67,6 +67,12 @@ Implements the contract already specified in `docs/jdlib/05-tenant-lifecycle.md`
 resolver, handles, connector factory seam, lifecycle. Lazy initialisation, deterministic identity,
 credential-version-aware caching.
 
+**Status: DELIVERED (2026-09-24).** `ResourceHandle` (validated opaque name), `ConnectionConfig` (renders without its target), `ResourceResolver` and `ResourceHydrationError`. Lazy resolution keyed by tenant, handle **and credential version**, so a rotation rebuilds rather than serving a stale target; a cached value is type-checked before it is handed out, so a poisoned entry fails closed; one lock per scope, so concurrent hydration of the same handle resolves exactly once. The resolver enforces nothing - the checks are injected by the caller, because this library has no third enforcement point - and every refusal raises rather than falling back to a shared target.
+
+All eleven gate items have a named test: right tenant, wrong tenant, missing context, suspended tenant, unauthorized resource, rotated credential, expired privilege, cache isolation, cache poisoning, credential leakage, concurrency.
+
+Two corrections were made against the plan while building it. First, `VersionedSecretProvider.current_version` now establishes the version on demand: a caller deciding whether a cached target is still valid must be able to ask *before* resolving, and reading the inner provider is the cheap half of that decision. Second, the wrong-tenant test asserts isolation (one tenant's entry cannot satisfy another, and corrupting A's entry cannot make B fail) rather than a refusal, because refusing would mean the resolver deciding authorisation - exactly the third enforcement point the design forbids. Authorisation belongs to the injected check, which has its own test.
+
 Gate: the directive's test list — right tenant, wrong tenant, missing context, suspended tenant,
 unauthorized resource, revoked credential, expired privilege, cache isolation, cache poisoning,
 credential leakage, concurrency — each mapped to a named test.
