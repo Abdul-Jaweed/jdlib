@@ -74,10 +74,39 @@ id was supplied, so a client always has something to quote in a support request.
 
 | Rule | Why it matters | Test |
 |---|---|---|
-| 4xx messages are the error's own text, made printable and capped at 300 chars | control characters cannot be used to forge log lines or UI output; unbounded text cannot be used to bloat responses | `test_client_messages_are_sanitized_and_capped` |
+| 4xx messages are the error's own text, **redacted** and made printable and capped at 300 chars | control characters cannot be used to forge log lines or UI output; unbounded text cannot be used to bloat responses; and an error that quotes a header, a connection string or a query while explaining itself cannot become a credential-disclosure channel | `test_client_messages_are_sanitized_and_capped`, `test_no_response_leaks_a_sensitive_value` |
 | 5xx messages are a fixed, classification-derived description | an internal message can legitimately contain key material, an internal host or a query fragment; it belongs in the logs, not in a response body | `test_server_side_failures_never_echo_their_own_message` |
 | unclassified exceptions become a generic 500 | exception type names, module paths and stack shapes are implementation detail | `test_unclassified_exceptions_become_a_generic_500` |
 | no `Traceback`, `File "`, `/src/`, `jdlib.`, `site-packages` and no known secret value in any response | the whole point of the phase | `test_responses_never_leak_internals` |
+
+### Leak corpus (directive §3)
+
+A 50-case matrix — ten categories × five failure shapes (4xx authentication,
+4xx authorization, 4xx tenancy, 5xx, unclassified) — asserts that none of these
+survives into a response body, in whole or as the fragments that identify them:
+
+| Category | Example shape |
+|---|---|
+| JWT | a three-segment `eyJ…` token |
+| API key | `apikey=sk-live-…` |
+| password | `password=…` |
+| client secret | `client_secret=…` |
+| private key | a `-----BEGIN PRIVATE KEY-----` block |
+| SQL | `SELECT … FROM tenant_policy WHERE …` |
+| stack trace | `File "/srv/jdlib/src/…/pep.py", line 42` |
+| internal policy details | `resource.document.vdefault rule 3 …` |
+| database credentials | `postgresql+asyncpg://user:pass@host:5432/db` |
+| authorization header | `Bearer …` |
+
+Because client-visible messages are echoed by design, this is enforced by a
+redaction pass (`_SECRET_PATTERNS` in `responses.py`): PEM blocks, JWTs, bearer
+credentials, URL-embedded credentials, `key=value` secret assignments, SQL
+statements, stack frames and fully-qualified policy names are replaced with
+`[redacted]` before the message leaves the process. Two tests keep it honest —
+redaction must not empty a message, and it must not mangle an ordinary one
+(`principal user-1 may not read document doc-42` passes through unchanged).
+Disabling the redaction pass makes 28 of the 75 tests fail, so the guard is
+load-bearing rather than decorative.
 
 ## 3. `WWW-Authenticate` (RFC 6750)
 
