@@ -150,7 +150,11 @@ class ControlAccessReader:
             ).all()
         chain = set(scope_chain)
         bindings: list[Binding] = []
-        for role_id, scope_type, scope_id in rows:
+        for row in rows:
+            # `tup()` rather than unpacking the Row: a fresh install resolves
+            # `sqlalchemy>=2.0.30` to 2.1, where a Row is a sequence of unknown length to the
+            # type checker, and unpacking it is an error it cannot see through.
+            role_id, scope_type, scope_id = row.tup()
             scope = ScopeType(scope_type)
             if (scope, scope_id) in chain:
                 bindings.append(Binding(role_id, scope, scope_id))
@@ -171,7 +175,8 @@ class ControlAccessReader:
                 )
             ).all()
         by_role: dict[uuid.UUID, set[str]] = {}
-        for role_id, permission_code in rows:
+        for row in rows:
+            role_id, permission_code = row.tup()
             by_role.setdefault(role_id, set()).add(permission_code)
         return {role_id: frozenset(codes) for role_id, codes in by_role.items()}
 

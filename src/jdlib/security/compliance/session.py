@@ -16,6 +16,8 @@ with it.
 
 from __future__ import annotations
 
+from typing import Any
+
 import sqlalchemy as sa
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -83,9 +85,14 @@ async def collect_schema_revision_evidence(
     present = True
     async with engine.connect() as connection:
         try:
-            rows = (
-                await connection.execute(sa.text("SELECT version_num FROM alembic_version"))
-            ).scalars().all()
+            # A `sa.text` select is untyped, so the scalar type is `Never` and mypy wants the
+            # annotation here rather than on the comprehension variable.
+            versions: list[Any] = list(
+                (
+                    await connection.execute(sa.text("SELECT version_num FROM alembic_version"))
+                ).scalars()
+            )
+            rows = [str(version) for version in versions]
         except ProgrammingError:
             present = False
             rows = []

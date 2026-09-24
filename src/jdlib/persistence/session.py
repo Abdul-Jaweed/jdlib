@@ -12,6 +12,7 @@ from jdlib.context import Clock, SystemClock, TenantContext
 from jdlib.errors import (
     AuthorizationError,
     CrossTenantReferenceError,
+    JdlibError,
     MissingTenantContext,
     UnscopedBulkOperation,
     UnscopedRawSql,
@@ -372,7 +373,15 @@ class TenantSession:
         mode: RawSqlMode = RawSqlMode.TENANT_BOUND,
     ) -> sa.Result[Any]:
         params = params or {}
-        dialect = self._session.bind.dialect
+        # Narrowed rather than asserted: SQLAlchemy 2.1 types `bind` as
+        # `AsyncEngine | AsyncConnection | None`, and an unbound session cannot have its raw SQL
+        # validated, so it is refused rather than compiled against nothing.
+        bind = self._session.bind
+        if bind is None:
+            raise JdlibError(
+                "the session is not bound to an engine, so raw SQL cannot be validated"
+            )
+        dialect = bind.dialect
         compiled: CompiledRawSql = self._validator.compile(statement, dialect, params)
         if mode == RawSqlMode.PRIVILEGED:
             privilege = self.context.privilege

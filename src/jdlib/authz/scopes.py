@@ -61,7 +61,7 @@ class ScopeResolver:
         ).first()
         if row is None:
             return (tenant,)
-        organization_id, team_id = row
+        organization_id, team_id = row.tup()
         chain: list[ScopeRef] = [tenant]
         if organization_id is not None:
             chain.extend(await self._org_chain(session, organization_id))
