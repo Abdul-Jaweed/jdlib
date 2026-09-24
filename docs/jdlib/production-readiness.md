@@ -95,10 +95,12 @@ the boundary's span and, where the boundary can name a tenant, as an audit event
 - **Snowflake, MongoDB, StarRocks, BigQuery, GCS and Azure Blob are not implemented and are not
   exported.** A provider or connector class in the public surface is a claim that it works, and
   a test asserts their absence rather than a comment promising future work.
-- **Six of the seven reliability gaps the inventory recorded remain open**: retry budgets,
-  worker/background retry, dead-letter handling, security-context preservation during retries,
-  shutdown drain and half-open recovery beyond the connector policy. Circuit breaking landed in
-  §6; the rest are named in `06-reliability-inventory.md` rather than quietly dropped.
+- **One of the seven reliability gaps the inventory recorded remains open**: half-open recovery
+  outside the connector policy. Circuit breaking landed in §6; the other five closed in
+  `src/jdlib/reliability/` and `src/jdlib/tenancy/` - a shared retry budget, job retries, dead
+  letters, the per-attempt revalidation that preserves a job's authority, and the shutdown path.
+  The inventory's ABSENT verdicts are left as they were written, because they are a measurement
+  at a revision, not a status board; what has been built since is stated below it.
 - **Infrastructure-dependent layers are not all exercised on every machine.** The infra suite
   needs the lab stack; where it cannot run, it skips, and a skipped suite is not evidence.
 - **The coverage figure is 64%, not higher.** The new namespaces are above that line; several

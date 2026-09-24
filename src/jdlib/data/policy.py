@@ -9,8 +9,8 @@ from typing import Any, Protocol
 
 from jdlib.data.errors import CircuitOpenError, ConnectorError, ConnectorTimeoutError
 from jdlib.reliability import RetryBudget, RetryBudgetExhaustedError
+from jdlib.reliability.policy import backoff_seconds, is_retryable_failure
 from jdlib.security.context import current_security_context_or_none, security_context_scope
-from jdlib.security.errors import is_retryable
 
 
 class _Attemptable(Protocol):
@@ -19,12 +19,6 @@ class _Attemptable(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
-def _sleep_seconds(
-    backoff: timedelta, attempt: int, jitter: Callable[[float, float], float]
-) -> float:
-    """Exponential backoff with full jitter, the same shape the authn provider already uses."""
-    ceiling = backoff.total_seconds() * (2 ** (attempt - 1))
-    return jitter(0.0, ceiling)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,22 +83,17 @@ class ConnectionPolicy:
                 ):
                     return await connector.execute(statement=statement, params=params)
             except ConnectorError as exc:
-                if attempt == self.max_attempts or not self._retryable(exc):
+                if attempt == self.max_attempts or not self.retryable(exc):
                     raise
                 if self.retry_budget is not None and not self.retry_budget.take(now=now()):
                     raise RetryBudgetExhaustedError(
                         f"the retry budget is spent after {attempt} attempt(s); the failure is "
                         f"{type(exc).__name__}"
                     ) from exc
-                await wait(_sleep_seconds(self.retry_backoff, attempt, choose))
+                await wait(backoff_seconds(self.retry_backoff, attempt, choose))
         raise ConnectorError("the attempt budget was exhausted")  # pragma: no cover - defensive
 
-    @staticmethod
-    def _retryable(exc: ConnectorError) -> bool:
-        """The taxonomy first, the error's own flag second: one classification, not two."""
-        if is_retryable(exc):
-            return True
-        return bool(getattr(exc, "transient", False))
+    retryable = staticmethod(is_retryable_failure)
 
     def raise_for_timeout(self, *, elapsed: float, operation: str) -> None:
         if elapsed > self.statement_timeout:

@@ -13,9 +13,12 @@ from jdlib.reliability.lifecycle import (
     ShutdownInProgressError,
     ShutdownReport,
 )
+from jdlib.reliability.policy import backoff_seconds, is_retryable_failure
 
 __all__ = [
     "DrainHook",
+    "backoff_seconds",
+    "is_retryable_failure",
     "RetryBudget",
     "RetryBudgetExhaustedError",
     "ShutdownCoordinator",

@@ -153,3 +153,26 @@ The brief's checklist enumerates 23 named areas (each has a row in §1.1; there 
 3. **Two adapters over the same JWKS cache disagree on outage semantics.** `docs/security/authentication-hardening.md:77-85` records that a key-source failure raises `AuthenticationUnavailable` (503) and "never `InvalidToken`" — true of the application authenticator (`src/jdlib/authn/oidc.py:325-332`), but the security-programme validator converts the same failure into `InvalidToken` (401): `src/jdlib/security/authn/jwt.py:123-126`; no test covers that path (`tests/unit/security/test_jwt_validator.py` has no outage case).
 4. **The successor matrix reads as though timeouts and retries do not exist.** `docs/jdlib/successor/01-capability-matrix.md:98` records "Timeouts, retries, circuit breaking | source: ABSENT … | **ADOPT**", but the "Today" column describes the comparison source, not JDLib: JDLib implements timeouts and retries (§1.1 rows 1-5). For JDLib the correct dispositions are **EXTEND** (timeouts, retries, classification) and adoption only for circuit breaking. `docs/jdlib/successor/01-capability-matrix.md:142` similarly claims tracing "on security decisions" while `security_span` has no call site in `src/` (`src/jdlib/security/tracing.py:235`) — emission is consumer-side today.
 5. **The validated authorization timeout is not the enforced one.** `SecurityConfig.authorization.timeout` is bounded (`src/jdlib/security/config.py:63,143-147`) and reported as evidence (`src/jdlib/security/compliance/evidence.py:164`), but nothing in `src/` constructs `CerbosPDP` from it: the adapter takes its own `CerbosConfig.timeout` (`src/jdlib/security/authz/cerbos.py:51`), which only checks positivity and has **no maximum** (`cerbos.py:63-64`). A deployment can therefore satisfy the production bound on one object while the enforced timeout lives on another.
+
+## Status since this measurement
+
+This section is added, not substituted: the verdicts above were made by reading the tree at the
+revision named in the method note, and rewriting them would turn a measurement into a claim about
+a revision nobody checked.
+
+Of the seven areas the inventory called **ABSENT**, six have since been built and one remains
+open. Where each decision came from:
+
+| Area | Now | Where |
+| --- | --- | --- |
+| Circuit breaking | built (§6) | `src/jdlib/data/policy.py` - open/closed/half-open, per-policy |
+| Retry budgets | built | `src/jdlib/reliability/budget.py` - tokens shared across calls, spent only on retries |
+| Worker/background retry | built | `src/jdlib/tenancy/job_envelope.py` - `JobRetry`, off by default |
+| Dead-letter handling | built | `src/jdlib/tenancy/dead_letter.py` - reason, attempts, error type; never the message |
+| Security-context preservation during retries | built | connector policy re-establishes the context per attempt; the job dispatcher revalidates lifetime and authority per attempt |
+| Shutdown behaviour | built | `src/jdlib/reliability/lifecycle.py` - admission gate, one shared drain deadline, three outcomes reported apart |
+| Half-open recovery outside the connector policy | **open** | no second remote-call surface in the library needs it today; the authn path's refresh floor and stale-if-available are its own recovery shape, not a state machine |
+
+The one open item is a boundary rather than a backlog entry: adding a breaker to a call path that
+does not exist would be inventing scope. It is recorded here so the next reader meets it as a
+known edge instead of a surprise.

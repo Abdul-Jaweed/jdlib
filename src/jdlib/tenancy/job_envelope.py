@@ -13,17 +13,22 @@ rewritten expiry fails the same way a rewritten tenant would.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import json
+import uuid
 from collections.abc import Awaitable, Callable, MutableSet
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from jdlib.context import Clock, EnvelopeCodec, TenantContext
+from jdlib.context import Clock, EnvelopeCodec, TenantContext, context_scope
 from jdlib.errors import JdlibError
+from jdlib.reliability import RetryBudget
+from jdlib.reliability.policy import backoff_seconds, is_retryable_failure
+from jdlib.tenancy.dead_letter import DeadLetter, DeadLetterStore
 from jdlib.tenancy.jobs import ContextPropagator
 
 
@@ -45,6 +50,32 @@ class EnvelopeReplayError(JobEnvelopeError):
 
 class JobRevokedError(JobEnvelopeError):
     """The job was revoked after it was enqueued."""
+
+
+class JobAttemptsExhaustedError(JobEnvelopeError):
+    """The handler failed and the dispatcher will not run this job again.
+
+    Raised with the last failure as ``__cause__``: the caller needs the reason as much as it
+    needed the error, and the error is still there.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class JobRetry:
+    """How many attempts a job gets, and how long to wait between them.
+
+    ``max_attempts`` defaults to one, which is the behaviour this dispatcher had before retries
+    existed: no retry, no dead letter, and the handler's own error raised unchanged.
+    """
+
+    max_attempts: int = 1
+    backoff: timedelta = timedelta(seconds=1)
+
+    def __post_init__(self) -> None:
+        if self.max_attempts < 1:
+            raise JobEnvelopeError("a job must be attempted at least once")
+        if self.backoff < timedelta(0):
+            raise JobEnvelopeError("a backoff cannot be negative")
 
 
 def _sign(key: str, *, job_id: str, issued_at: datetime, expires_at: datetime, token: str) -> str:
@@ -157,14 +188,38 @@ class JobDispatcher:
         clock: Clock,
         is_revoked: Callable[[str], bool] | None = None,
         seen: MutableSet[str] | None = None,
+        retry: JobRetry | None = None,
+        dead_letters: DeadLetterStore | None = None,
+        retry_budget: RetryBudget | None = None,
+        sleeper: Callable[[float], Awaitable[None]] | None = None,
+        jitter: Callable[[float, float], float] | None = None,
     ) -> None:
         self._propagator = propagator
         self._key = key
         self._clock = clock
         self._is_revoked = is_revoked
         self._seen: MutableSet[str] = seen if seen is not None else set()
+        self._retry = retry if retry is not None else JobRetry()
+        self._dead_letters = dead_letters
+        self._retry_budget = retry_budget
+        self._sleeper = sleeper
+        self._jitter = jitter
 
-    async def execute(self, wire: str, handler: JobHandler, *args: object, **kwargs: object) -> Any:
+    async def execute(
+        self, wire: str, handler: JobHandler, *args: object, **kwargs: object
+    ) -> Any:
+        """Run the job, retrying it while that is a decision this dispatcher can defend.
+
+        The preflight is unchanged and runs once - authenticity, lifetime, identity, revocation -
+        because those are properties of the *delivery*, not of an attempt. A retry must not look
+        like a replay, so the job id is marked when the first attempt starts, and a second
+        delivery of the same wire is still refused. What is re-checked per attempt is the part
+        that time can change: the envelope's lifetime, and the authority behind it.
+
+        Retries are off unless ``JobRetry`` asks for them, and then only a failure the taxonomy
+        calls retryable is repeated; the rest are recorded and re-raised. Every give-up is a
+        decision, and every decision the dispatcher made is written down.
+        """
         envelope = JobEnvelope.parse(wire, key=self._key)
         if envelope.expires_at <= self._clock.now():
             raise EnvelopeExpiredError(
@@ -175,10 +230,80 @@ class JobDispatcher:
         if self._is_revoked is not None and self._is_revoked(envelope.job_id):
             raise JobRevokedError(f"job {envelope.job_id} was revoked after it was enqueued")
 
-        context = await self._propagator.reconstruct(envelope.token)
-
-        from jdlib.context import context_scope
-
+        # From here the delivery is authentic and unspent, so everything that happens is a
+        # decision this dispatcher made - and only these are worth recording anywhere.
         self._seen.add(envelope.job_id)
-        with context_scope(context):
-            return await handler(*args, **kwargs)
+        wait = self._sleeper or asyncio.sleep
+        choose = self._jitter or (lambda low, high: (low + high) / 2)
+        known_tenant: uuid.UUID | None = None
+
+        for attempt in range(1, self._retry.max_attempts + 1):
+            try:
+                context = await self._revalidate(envelope)
+            except Exception as exc:
+                # The lifetime ran out or the authority was withdrawn while the job was failing:
+                # not something a second attempt of *this* execution changes, so it stops - and
+                # the job is recorded, because it was already half-run when it stopped.
+                if attempt > 1:
+                    await self._record(envelope, known_tenant, attempt, "refused", exc)
+                raise
+            known_tenant = context.tenant_id
+
+            try:
+                with context_scope(context):
+                    return await handler(*args, **kwargs)
+            except Exception as exc:
+                if self._retry.max_attempts == 1:
+                    # Retries were never configured: nothing was decided here, so nothing is
+                    # recorded and the handler's own error is raised unchanged.
+                    raise
+                if not is_retryable_failure(exc):
+                    await self._record(envelope, known_tenant, attempt, "permanent", exc)
+                    raise
+                if attempt == self._retry.max_attempts:
+                    await self._record(envelope, known_tenant, attempt, "exhausted", exc)
+                    raise JobAttemptsExhaustedError(
+                        f"job {envelope.job_id} failed {attempt} time(s) and will not be retried"
+                    ) from exc
+                if self._retry_budget is not None and not self._retry_budget.take(
+                    now=self._clock.now()
+                ):
+                    await self._record(envelope, known_tenant, attempt, "budget", exc)
+                    raise JobAttemptsExhaustedError(
+                        f"job {envelope.job_id} was not retried: the shared retry budget is spent"
+                    ) from exc
+                await wait(backoff_seconds(self._retry.backoff, attempt, choose))
+
+        raise JobAttemptsExhaustedError(  # pragma: no cover - the loop always returns or raises
+            f"job {envelope.job_id} ran out of attempts"
+        )
+
+    async def _revalidate(self, envelope: JobEnvelope) -> TenantContext:
+        """Lifetime and authority for the attempt about to run - the attempt, not the delivery."""
+        if envelope.expires_at <= self._clock.now():
+            raise EnvelopeExpiredError(
+                f"job {envelope.job_id} expired at {envelope.expires_at.isoformat()}"
+            )
+        return await self._propagator.reconstruct(envelope.token)
+
+    async def _record(
+        self,
+        envelope: JobEnvelope,
+        tenant_id: uuid.UUID | None,
+        attempts: int,
+        reason: str,
+        exc: BaseException,
+    ) -> None:
+        """Write down a give-up. The error's *type* is recorded; its message never is."""
+        if self._dead_letters is None:
+            return
+        await self._dead_letters.record(
+            DeadLetter(
+                job_id=envelope.job_id,
+                tenant_id=tenant_id,
+                attempts=attempts,
+                reason=reason,
+                error_type=type(exc).__name__,
+                recorded_at=self._clock.now(),
+            )
+        )
