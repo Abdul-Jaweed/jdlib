@@ -1,6 +1,7 @@
 # Audit Hardening (Phase 6)
 
-Status: **IN PROGRESS** — vocabulary, persistence and emission are done and
+Status: **IN PROGRESS** — vocabulary, persistence, emission, audit access
+(reads, tenant isolation, export) are done and
 verified against real PostgreSQL; export and the integrity decision follow.
 
 Source: `src/jdlib/security/audit/` (new), `src/jdlib/models/audit.py`,
@@ -144,7 +145,55 @@ Sink semantics are explicit because audit availability is a security decision:
 * a sink that raises propagates to the caller. Nothing swallows an audit
   failure: silent audit loss is worse than a visible failure.
 
-## 6. Integrity evaluation (directive §7)
+## 6. Audit access, scoped reads and export (directive §6)
+
+**Capability model.** Reading the trail is not implied by writing it. Six
+capabilities — `audit.write`, `audit.read`, `audit.read.tenant`,
+`audit.read.platform`, `audit.export`, `audit.verify` — are evaluated against the
+scopes the security context already carries (`AuditAccess`), so there is no
+second authorization system. A principal carrying no scopes at all is refused as
+*unauthenticated* (401); a scoped principal that lacks the capability gets a 403.
+Both are test-pinned, including the pair that matters most: a holder of
+`audit.write` cannot read the trail, and a reader of the trail cannot export it.
+
+**Tenant binding is not a filter the caller supplies.**
+`read_events(session, access=…, tenant_id=…)` always scopes to that tenant (the
+application derives it from the ambient tenant context). A
+`AuditQuery(tenant_id=…)` naming a different tenant is refused outright unless
+the caller holds `audit.read.platform` — a missing `WHERE` cannot become a
+cross-tenant disclosure, and the platform path stays a deliberate,
+capability-gated act rather than a query tweak.
+
+**Reads are bounded and stable.** `limit` is capped at `MAX_EXPORT_LIMIT` (1000)
+and validated at construction: a limit of 0, a negative offset, or `since` after
+`until` raise `ValueError`. One row beyond the page decides `has_more` without a
+`count(*)`; ordering is `(occurred_at, id)`, proven stable by walking a page
+sequence and asserting no row repeats and none is skipped.
+
+**Export.** `export_events()` renders JSON, JSONL or CSV with fixed field order,
+ISO-8601 UTC timestamps and JSON-encoded metadata in CSV, so the same query
+renders byte-identically — verified by rendering twice and comparing, and by
+asserting the three formats agree on event identities. An unsupported format is
+refused *before* any SQL runs. Export requires its own capability on top of read
+authority, and the export itself becomes an `AUDIT_EXPORTED` event (format,
+count, `has_more`, non-secret filter summary) through the caller's sink.
+
+**Export cannot launder a secret.** Stored metadata is re-validated on the way
+out rather than trusted: entries with an invalid key, a non-scalar value or a
+credential-shaped string are dropped or redacted at render time. The test writes
+a row *around* the model (as an older version or a manual insert would) carrying
+a DSN, an invalid key and a nested object, and asserts none of it survives.
+
+A row whose vocabulary this build does not know also must not break a read: the
+row is reconstructed with a fallback member and its category renders as
+`unknown`.
+
+Integration coverage (real PostgreSQL, 11 tests): tenant isolation, cross-tenant
+refusal, platform read, unauthenticated refusal, write≠read, pagination
+stability, export determinism and bounding, the export event, cross-format
+agreement, the legacy-row case, export-capability enforcement, format refusal.
+
+## 7. Integrity evaluation (directive §7)
 
 Directive §7 asks for an evaluation rather than an implementation, and warns
 against cryptography for its own sake. The evaluation, honestly stated:
@@ -177,7 +226,7 @@ database-level actor can alter history undetectably. This is recorded here, in
 the compliance evidence (Phase 9) and in the final report's residual-risk
 section, rather than papered over.
 
-## 7. Gate
+## 8. Gate
 
 Run on the slice as committed:
 
@@ -187,7 +236,7 @@ ruff check .
 mypy src/jdlib
 ```
 
-## 8. Remaining in this phase
+## 9. Remaining in this phase
 
 * **Audit export** (§6): filters (tenant, principal, event_type, outcome,
   resource, time range, request/correlation id), JSON + CSV output, the export

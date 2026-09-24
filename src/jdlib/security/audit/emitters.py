@@ -29,7 +29,6 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
 
-from jdlib.models.audit_recorder import TenantAuditRecorder
 from jdlib.security.audit.events import (
     AuditOutcome,
     AuditSource,
@@ -72,6 +71,10 @@ class TransactionAuditSink:
         self._session = session
 
     async def emit(self, event: SecurityAuditEvent) -> None:
+        # Imported here because `jdlib.models.audit_recorder` imports this
+        # package; a module-level import would close a cycle.
+        from jdlib.models.audit_recorder import TenantAuditRecorder
+
         TenantAuditRecorder(self._session).record_security(event)
 
 

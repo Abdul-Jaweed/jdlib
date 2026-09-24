@@ -82,6 +82,10 @@ class SecurityEventType(StrEnum):
     CREDENTIAL_REVOKED = "CREDENTIAL_REVOKED"
     CREDENTIAL_ROTATED = "CREDENTIAL_ROTATED"
 
+    # -- audit trail access (directive §6.5: audit access is itself an event)
+    AUDIT_READ_DENIED = "AUDIT_READ_DENIED"
+    AUDIT_EXPORTED = "AUDIT_EXPORTED"
+
     @property
     def category(self) -> str:
         """Domain the event belongs to, so consumers can route without parsing."""
@@ -94,6 +98,8 @@ class SecurityEventType(StrEnum):
             return "tenancy"
         if prefix == "PRIVILEGE":
             return "privilege"
+        if prefix == "AUDIT":
+            return "audit"
         return "security"
 
 

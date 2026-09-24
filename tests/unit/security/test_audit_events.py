@@ -100,8 +100,16 @@ def _event(**overrides: object) -> SecurityAuditEvent:
 # --- vocabulary ---------------------------------------------------------------
 
 
-def test_the_vocabulary_is_exactly_the_directive_list() -> None:
-    assert {member.name for member in SecurityEventType} == REQUIRED_EVENT_TYPES
+AUDIT_ACCESS_EVENT_TYPES = {"AUDIT_READ_DENIED", "AUDIT_EXPORTED"}
+
+
+def test_the_vocabulary_covers_the_directive_list() -> None:
+    # The directive's names are all present; audit-trail access is its own
+    # family on top (directive §6.5).
+    names = {member.name for member in SecurityEventType}
+    assert names >= REQUIRED_EVENT_TYPES
+    assert names >= AUDIT_ACCESS_EVENT_TYPES
+    assert names == REQUIRED_EVENT_TYPES | AUDIT_ACCESS_EVENT_TYPES
 
 
 def test_every_event_type_is_grouped_into_a_category() -> None:
@@ -113,6 +121,7 @@ def test_every_event_type_is_grouped_into_a_category() -> None:
             "tenancy",
             "privilege",
             "security",
+            "audit",
         }
 
 

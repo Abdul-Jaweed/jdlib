@@ -69,6 +69,12 @@ SENSITIVE_KEYS = frozenset(
 
 _SENSITIVE_SUFFIXES = ("_secret", "_password", "_token", "_key")
 
+# A value that *is* a connection string: the host and database name are internal
+# infrastructure detail too, so the whole value is redacted rather than only the
+# credentials inside it. Inside a longer message the URL pattern above applies,
+# which keeps the sentence useful while still removing the credential.
+_WHOLE_VALUE_URL = re.compile(r"(?i)^[a-z][a-z0-9+.-]*://\S+$")
+
 
 def is_sensitive_key(key: str) -> bool:
     """Whether a metadata key names a secret by itself."""
@@ -78,6 +84,8 @@ def is_sensitive_key(key: str) -> bool:
 
 def redact_text(text: str) -> str:
     """Replace every secret-shaped fragment in ``text``."""
+    if _WHOLE_VALUE_URL.match(text.strip()):
+        return REDACTED
     for pattern in SECRET_PATTERNS:
         text = pattern.sub(REDACTED, text)
     return text
