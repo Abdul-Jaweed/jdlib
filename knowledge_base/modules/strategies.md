@@ -1,5 +1,13 @@
 # Module: Isolation Strategies (`src/jdlib/persistence/strategies/`)
 
+> **Status (refreshed in phase 11).** This document was written at commit
+> `a30601d`, before the security-hardening programme (phases 1-11). Its
+> structure and design explanations still hold, but the security-relevant
+> truth lives in the current documents: `docs/security/`, `SECURITY.md`,
+> `docs/threat-model/`, `docs/compliance/`, `docs/operations/` and
+> `JDLib-Architecture.md`. Where this document and those disagree, they win.
+> The front door (`knowledge_base/README.md`) carries the current snapshot.
+
 Placement is data (`tenant_placements.strategy` + `target_handle`); this package
 turns that data into a session, a provisioning action, a migration target and a
 teardown. All three strategies expose the identical `TenantSession` surface, which

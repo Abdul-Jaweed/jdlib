@@ -38,6 +38,9 @@ http = ["httpx>=0.27"]
 [project.entry-points.pytest11]
 jdlib = "jdlib.testing.pytest_plugin"
 
+[project.scripts]
+jdlib = "jdlib.integrations.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/jdlib"]
 

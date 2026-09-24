@@ -1,5 +1,13 @@
 # Module: Testing Kit (`src/jdlib/testing/`)
 
+> **Status (refreshed in phase 11).** This document was written at commit
+> `a30601d`, before the security-hardening programme (phases 1-11). Its
+> structure and design explanations still hold, but the security-relevant
+> truth lives in the current documents: `docs/security/`, `SECURITY.md`,
+> `docs/threat-model/`, `docs/compliance/`, `docs/operations/` and
+> `JDLib-Architecture.md`. Where this document and those disagree, they win.
+> The front door (`knowledge_base/README.md`) carries the current snapshot.
+
 jdlib ships two things for consumers: assertions that encode the isolation
 contract, and a pytest plugin (registered through the `pytest11` entry point, so
 it loads automatically once `jdlib` is installed — no `conftest.py` needed).

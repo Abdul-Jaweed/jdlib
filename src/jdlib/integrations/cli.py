@@ -619,3 +619,9 @@ def security_compliance(
         "Technical controls and evidence only: installing this library does not make an "
         "organisation certified or compliant."
     )
+
+
+def main() -> None:
+    """Console-script entry point (``jdlib``; requires the ``cli`` extra)."""
+
+    app()

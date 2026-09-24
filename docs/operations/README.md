@@ -31,11 +31,12 @@ Common options (`src/jdlib/integrations/cli.py`, `security` sub-app):
 | `--pdp-kind` | Names the decision point for the policy evidence (default `cerbos`). |
 | `--json` | Machine-readable output for every command. |
 
-The `jdlib` console script comes from a consumer's own `[project.scripts]` entry
-(`jdlib = "jdlib.integrations.cli:app"`, as `README.md` shows); the checkout in
-this repository installs no console script, so run the app directly:
+Installing the package declares a `jdlib` console script
+(`[project.scripts] jdlib = "jdlib.integrations.cli:main"`; requires the `cli`
+extra, which is typer). From a checkout without an install:
 
 ```bash
+pip install -e ".[cli]"     # then: jdlib security posture
 .venv/Scripts/python.exe -c "from jdlib.integrations.cli import app; app()" security posture
 .venv/Scripts/python.exe -c "from jdlib.integrations.cli import app; app()" security posture --json --environment production
 .venv/Scripts/python.exe -c "from jdlib.integrations.cli import app; app()" security evidence --database-url "$JDLIB_CONTROL_DSN" --schema public

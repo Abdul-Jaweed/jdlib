@@ -2,10 +2,10 @@
 
 > **Single source of truth for the `jdlib` library.**
 > Derived from the repository at commit `a30601d` (`main`) and synchronised with
-> the security-hardening programme at commit `4d113e5` (`main`, plus the
-> uncommitted phase 11 documentation sweep). §26.6 records exactly what that
-> synchronisation revised, what was verified by execution, and what remains as
-> inspected at `a30601d`.
+> the security-hardening programme at commit `6125558` (`main`); the phase 11
+> documentation commit. §26.6 records exactly what that synchronisation
+> revised, what was verified by execution, and what remains as inspected at
+> `a30601d`; this revision's own edits are uncommitted at the time of writing.
 > Every architectural claim below is grounded in source code, tests, packaging
 > metadata, or the frozen design documents under `docs/`.
 > All file references use repository-relative paths with line numbers, e.g.
@@ -92,7 +92,7 @@ models, HTTP routing, and business logic to the consumer.
 | Async model | `AsyncSession` / `create_async_engine` | `src/jdlib/persistence/session.py:256` |
 | Build backend | `hatchling` | `pyproject.toml:1-3` |
 | Public exports | 13 names | `src/jdlib/__init__.py:11-25` |
-| Test suite | 568 tests passing (`-W error`) | verified on `a30601d` |
+| Test suite | 568 passing at `a30601d`; **1,215 passing / 6 skipped** at `4d113e5` | verified by execution (§19.1, §26.6) |
 
 ### 1.2 The problem it solves
 
@@ -348,7 +348,9 @@ jdlib/
 │   └── superpowers/
 │       ├── specs/2026-09-21-jdlib-multitenancy-foundation-design.md
 │       └── plans/2026-09-21-jdlib-*.md   # 9 phase plans, all marked complete
-├── knowledge_base/                    # 36 documents describing the library at a30601d
+├── knowledge_base/                    # 36 documents written at a30601d; refreshed in the
+│                                      #   working tree for the security programme (uncommitted
+│                                      #   at the time of writing — each page carries a banner)
 ├── src/
 │   └── jdlib/                         # 104 tracked files, 15,202 lines (shipped package)
 └── tests/                             # 125 tracked files, 23,269 lines
@@ -360,16 +362,17 @@ jdlib/
     └── support/                       # test-only fakes and a consumer model fixture
 ```
 
-**Absent by design or by omission:** `examples/`, `LICENSE`, `CONTRIBUTING.md`,
-`Dockerfile`, root compose files, `Makefile`, `tox.ini`, `noxfile.py`, lock files
-(`uv.lock`, `poetry.lock`), `setup.py`, `setup.cfg`, `requirements*.txt`,
+**Absent by design or by omission:** `examples/`, `LICENSE`, `Dockerfile`, root
+compose files, `Makefile`, `tox.ini`, `noxfile.py`, lock files (`uv.lock`,
+`poetry.lock`), `setup.py`, `setup.cfg`, `requirements*.txt`,
 `.pre-commit-config.yaml`, `AGENTS.md`. `pyproject.toml` declares no `readme`,
 `license`, `authors`, `classifiers`, `keywords`, or `urls` metadata.
 
-**Added by the phase 11 documentation sweep (working tree, uncommitted at
-`4d113e5`; the tree above lists tracked files):** `CHANGELOG.md`, `SECURITY.md`,
-`docs/security/README.md`, `docs/compliance/README.md`,
-`docs/operations/README.md`, and a modified `README.md`.
+**Added by the phase 11 documentation commit (`6125558`, "documentation and
+knowledge base in line with the code"):** `CHANGELOG.md`, `CONTRIBUTING.md`,
+`SECURITY.md`, `docs/security/README.md`, `docs/compliance/README.md`,
+`docs/operations/README.md`, `docs/threat-model/README.md`, a modified
+`README.md`, and the first synchronisation of this document.
 
 ### 3.2 Shipped package tree
 
@@ -380,7 +383,7 @@ src/jdlib/
 ├── config.py                      # pydantic-settings configuration models
 ├── context.py                     # Principal/PrivilegeContext/TenantContext,
 │                                  #   ContextFactory, EnvelopeCodec, context_scope
-├── errors.py                      # JdlibError hierarchy (27 subclasses)
+├── errors.py                      # JdlibError hierarchy (28 classes; 27 exported)
 ├── lint.py                        # metadata invariant linter (12 implemented rules)
 ├── py.typed                       # PEP 561 marker
 ├── authn/
@@ -1308,7 +1311,7 @@ async def authorize(
 | `get_context` | `jdlib.integrations.fastapi` | `async def get_context() -> TenantContext` |
 | `get_uow` | `jdlib.integrations.fastapi` | `async def get_uow(request: Request) -> AsyncIterator[UnitOfWork]` |
 | `require` (FastAPI) | `jdlib.integrations.fastapi` | `require(permission: str, target_factory: Callable[..., Target] | None = None) -> Callable[[Request], Awaitable[None]]` |
-| `app` (Typer) | `jdlib.integrations.cli` | `app = typer.Typer(no_args_is_help=True)` |
+| `app` (Typer) | `jdlib.integrations.cli` | `app = typer.Typer(no_args_is_help=True)`, registering the `tenant`, `db`, `rls`, `schema` and `security` sub-apps |
 | `TenantSession` | `jdlib.persistence.session` | `TenantSession(session: AsyncSession, context: TenantContext | None, *, auditor: RawSqlAuditor | None = None, validator: RawSqlValidator | None = None)` |
 | `SessionRouter` | `jdlib.persistence.router` | `SessionRouter(strategies: Mapping[PlacementStrategy, IsolationStrategy])` |
 | `MigrationRunner` | `jdlib.migrations.runner` | `MigrationRunner(database_url: str)` |
@@ -2682,8 +2685,11 @@ operator declares (`--environment`) rather than a deployment's private settings,
 `--database-url` without `--schema` is refused, and an unknown environment,
 branch or framework is a `BadParameter`. `JdlibError` and SQLAlchemy errors
 print `error: …` to stderr with exit code 1; unexpected exceptions are not
-normalized. There is no `[project.scripts]` entry — consumers expose `app`
-themselves (`README.md:69-72`).
+normalized. At `6125558` there is no `[project.scripts]` entry — consumers
+expose `app` themselves (`README.md:69-72`) — but the working tree (uncommitted
+at the time of writing) adds `def main()` (`integrations/cli.py:624-627`) and
+`[project.scripts] jdlib = "jdlib.integrations.cli:main"` (`pyproject.toml:41-42`),
+so a future install ships a `jdlib` console script.
 
 ---
 
@@ -2850,6 +2856,10 @@ the section name and uses `getattr`, with the regression test
 
 * `import jdlib` executes **eager** imports of exactly eight modules'
   symbols (`src/jdlib/__init__.py:1-9`) plus `__all__` and `__version__`.
+* The security namespace stays out of that set: `import jdlib` leaves
+  `jdlib.security` and every subpackage under it out of `sys.modules`, so
+  nothing under it is loaded unless a consumer imports it explicitly (verified
+  by execution, §26.6).
 * No lazy-import machinery (`__getattr__`, import maps) exists.
 * `fastapi`, `typer`, and `pytest` are **not** imported as a result of
   `import jdlib` — asserted in a subprocess by
@@ -3340,8 +3350,10 @@ pieces they need (`SharedSchemaStrategy(rls=…)`, `MigrationRunner(url)`,
   `config.signing_key.get_secret_value().encode()` (`context.py:389-390`).
 * API key and invitation secrets are stored as Argon2id hashes; the plaintext
   API key secret and invitation secret are never persisted.
-* Envelope HMAC key, JWKS, and DSNs are never logged (there is no logging in the
-  library at all — §14).
+* Envelope HMAC key, JWKS, and DSNs are never logged: the library emits no log
+  lines of its own, and the one structured record it builds
+  (`security_log_record`) puts every value through the shared redaction path
+  (§14.1).
 * **Consumer responsibility:** production secret storage/rotation, `SecretProvider`
   implementations, and key management for the envelope signing key.
 
@@ -3908,11 +3920,14 @@ http    = ["httpx>=0.27"]
 [project.entry-points.pytest11]
 jdlib = "jdlib.testing.pytest_plugin"
 
+[project.scripts]                  # working tree, uncommitted at 6125558
+jdlib = "jdlib.integrations.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/jdlib"]
 ```
 
-Source: `pyproject.toml:1-42` (64 lines total).
+Source: `pyproject.toml:1-42` (64 lines at `6125558`; 67 in the working tree).
 
 ### 18.2 Packaging facts and gaps
 
@@ -3922,7 +3937,7 @@ Source: `pyproject.toml:1-42` (64 lines total).
 | Wheel contents | `src/jdlib` only | `tests/`, `docs/`, `.github/` are **not** packaged |
 | `py.typed` | present (`src/jdlib/py.typed`, empty) | PEP 561; no explicit package-data rule (hatchling includes package files) |
 | sdist target | not configured | hatchling's default applies |
-| Entry points | `pytest11` only | **no console script**; consumers expose `jdlib.integrations.cli:app` themselves |
+| Entry points | `pytest11` at `6125558`; the working tree adds `[project.scripts] jdlib = "jdlib.integrations.cli:main"` | **no console script at `6125558`** — consumers expose `jdlib.integrations.cli:app` themselves; the in-flight change adds one (`integrations/cli.py:624-627`, `pyproject.toml:41-42`) |
 | Version source | hard-coded in `pyproject.toml:7` and `__init__.py:27` | duplicated, not dynamic |
 | Optional extras | `fastapi`, `cli`, `http` | `http` (`httpx>=0.27`) was added by phase 2; `httpx` is also a core dependency |
 | `readme`, `license`, `authors`, `classifiers`, `keywords`, `urls` | **absent** | a `LICENSE` file does not exist either |
@@ -3970,7 +3985,7 @@ contract
 
 ```mermaid
 graph LR
-    SRC["src/jdlib (104 .py + 2 .mako + py.typed)"] --> HATCH["hatchling build backend"]
+    SRC["src/jdlib (101 .py + 2 .mako + py.typed)"] --> HATCH["hatchling build backend"]
     PYPROJ["pyproject.toml<br/>metadata + deps + extras"] --> HATCH
     HATCH --> WHEEL["wheel: jdlib/… (py.typed included)"]
     HATCH --> SDIST["sdist (hatchling default)"]
@@ -4103,8 +4118,12 @@ both build-failing:
   environment; `gitleaks` over the **full history**, so an old leak is still a
   finding; `bandit -ll` over `src/jdlib`; a CycloneDX SBOM of the installed
   environment written as a build artefact; and a build + clean-install smoke
-  test (wheel built, installed into a fresh environment, `import jdlib` and the
-  CLI help checked, so a packaging mistake cannot ship silently).
+  test (wheel built, installed into a fresh environment, then `import jdlib`,
+  `jdlib.security` and `jdlib.security.compliance` with the register size
+  printed, so a packaging mistake cannot ship silently). In the working tree
+  (uncommitted at the time of writing) the smoke test also runs the `jdlib`
+  console script — `jdlib security posture --json` — once the console script in
+  §18.2 exists.
 
 The gates are deterministic and deliberately shallow: they are a floor under
 review, not a substitute for it, and the phase document records what each one
@@ -4119,6 +4138,24 @@ does and does not catch.
 * Relocation phases have schema support and lint/servability integration but no
   executed relocation workflow, because relocation is not implemented (§23).
 * `examples/` is absent, so no example-driven smoke test exists.
+* **The Tyk plugin path is not infrastructure-verified.** All six tests in
+  `tests/infra/test_tyk_infra.py` skip: the stock Tyk 5.3.1 OSS image ships no
+  JavaScript/coprocess runtime, so the adapter's plugin path cannot be exercised
+  against a live gateway here. The adapter itself is unit-tested (27 tests) and
+  the harness ships (`tests/infra/tyk/`, `tests/infra/docker-compose.yml`), but
+  a Tyk deployment runs on code no infrastructure test has touched; Kong 3.6 is
+  the verified gateway (§15.4). `docs/security/gateway-hardening.md` §6 records
+  the blocker and the secondary route-matching observation.
+* **`tests/infra` is environment-gated.** The infrastructure classes skip unless
+  their endpoints are supplied — `JDLIB_INFRA_KONG_PROXY_URL`/`_SECRET`/
+  `_CLIENT_KEY`, `JDLIB_INFRA_CERBOS_URL`, `JDLIB_INFRA_ZITADEL_ISSUER`, and
+  `JDLIB_INFRA_TYK_URL`/`_SECRET`/`_API_KEY` for Tyk — and each skip names the
+  variable it wants. The suite's totals therefore depend on what is running
+  (§19.1, §26.6).
+* **The CI `security` job's gates do not execute the library.** They are supply
+  chain and packaging checks (§19.6); a green security job says nothing about
+  runtime behaviour, and the first run on a real GitHub runner is still
+  outstanding (`docs/security/ci-security.md` §9).
 
 ---
 
@@ -4178,6 +4215,15 @@ graph TB
    `tenant_job(propagator)`.
 10. **Test** with `jdlib.testing` assertions and the `jdlib_*` fixtures.
 11. **Shut down** by disposing engines and calling `strategy.dispose()`.
+
+For consumers that need the security surfaces, the programme adds a wiring step
+between (4) and (7): build a `SecurityConfig`, install an `Authenticator` (OIDC
+or API key), a `PolicyDecisionPoint`, and — if an edge gateway asserts identity —
+a gateway adapter, then start emitting security audit events and telemetry.
+`docs/security/README.md` indexes the phase documents (each with its own status,
+tests and gaps), `SECURITY.md` states what the library owns versus what a
+deployment owes, and `jdlib security posture` reports readiness against the
+control register (§8.22, §21.8).
 
 ### 20.3 Recommended patterns (from README/design docs)
 
@@ -4766,7 +4812,11 @@ is marked as not evident.
   (§8.15); `docs/jdlib/03-isolation-invariants.md` also mentions an `L5` rule
   that is not emitted.
 * No operator runbook (backup/rotation/incident) accompanies the audit and RLS
-  features; no logging/metrics guidance because none exists (§14).
+  features. Logging/metrics guidance existed nowhere before phase 7;
+  `docs/security/observability-hardening.md` now documents the exported
+  telemetry surface and its gaps, and each phase document records its own — but
+  there is still no runbook for gateways, the PDP, secret rotation or incident
+  response.
 
 ### 23.7 Extensibility limitations
 
@@ -4794,7 +4844,7 @@ recorded in the repository's design documents; each is labeled accordingly.
 | `tests/isolation/` dedicated suite layout | `docs/jdlib/03-isolation-invariants.md:263-293` | suite distributed elsewhere |
 | Rules L5, L7, L8, L10, L14, L16, L18 | `docs/jdlib/03-isolation-invariants.md` | not emitted by `lint.py` |
 | Hybrid placement helper abstractions | `docs/jdlib/06-strategy-matrix.md:163-173` | expressible today with `SessionRouter` in consumer code; no helper ships |
-| 503 semantics for mandatory-audit failure paths | `docs/jdlib/03-isolation-invariants.md:247-261` | no mapping exists (all unlisted errors are 500) |
+| 503 semantics for mandatory-audit failure paths | `docs/jdlib/03-isolation-invariants.md:247-261` | no mapping for audit failure; phase 5's 503 covers a policy decision that could not be taken (`AuthorizationUnavailable`, §8.20), which is a different path |
 
 ### 24.2 Reasonable next steps implied by the code (suggestions, not requirements)
 
@@ -4807,19 +4857,22 @@ would close the limitations in §23.
    and `dispose()` — closes the unprotected windows in §16.3.
 3. Add a `pool` configuration block to `TenancyConfig` and pass it to
    `create_async_engine` / consumer engine helpers.
-4. Re-check `privilege.expires_at` inside `TenantSession` event hooks.
-5. Populate `RequestInfo.claims` in the middleware from the authenticated
+4. Populate `RequestInfo.claims` in the middleware from the authenticated
    principal/identity link so the default JWT-claim resolver works.
-6. Pass `actor_type` from `AccessControl` (it already receives
+5. Pass `actor_type` from `AccessControl` (it already receives
    `actor_principal`) so audit records distinguish service accounts.
-7. Add coverage tooling, a CI matrix (3.12/3.13), and a PostgreSQL service
+6. Add coverage tooling, a CI matrix (3.12/3.13), and a PostgreSQL service
    container in CI.
-8. Publish metadata (`readme`, `license`, `classifiers`) and a build/publish
+7. Publish metadata (`readme`, `license`, `classifiers`) and a build/publish
    workflow; add a lock file.
-9. Ship an `examples/` application (FastAPI + CLI + tests) as an executable
+8. Ship an `examples/` application (FastAPI + CLI + tests) as an executable
    contract.
-10. Implement relocation as registry methods with phase transitions, audit
-    events, and servability integration.
+9. Implement relocation as registry methods with phase transitions, audit
+   events, and servability integration.
+
+The original revision of this list also included re-checking
+`privilege.expires_at` inside the `TenantSession` hooks; the security programme's
+phase 8 delivered that (§8.1), so it is no longer a suggestion.
 
 ---
 
@@ -4924,6 +4977,8 @@ See [§18.7](#187-packaging-flow).
 
 ### 26.1 What was inspected
 
+**For the original pass at `a30601d`:**
+
 * All 64 Python modules under `src/jdlib` (plus 2 Mako templates and
   `py.typed`), including complete import graphs (module-level and
   function-local).
@@ -4938,6 +4993,28 @@ See [§18.7](#187-packaging-flow).
   files, `setup.py`/`setup.cfg`, `requirements*.txt`, `LICENSE`, `CHANGELOG`,
   `CONTRIBUTING.md`, `SECURITY.md`, pre-commit, and agent-instruction files.
 
+**Added by the phase 11 synchronisation (§26.6):**
+
+* All 101 Python modules under `src/jdlib` — the 64 above, plus the 36 modules
+  of `jdlib.security.*` and one new tenant migration
+  (`migrations/tenant/versions/0002_security_audit_columns.py`) — with their
+  docstrings, module-level imports and `__all__` surfaces. The inventory in
+  §5.3 was generated from a static walk of the package, not from prose.
+* All 125 tracked test files, enumerated with their definitions and counts
+  (`pytest`, `-W error`); the security, compliance, CLI and `tests/infra`
+  modules were read directly, and every count quoted in §19 was produced by a
+  run or a collection.
+* The ten phase documents in `docs/security/` — status lines, evidence tables,
+  certification gates, self-evaluations and recorded gaps — plus
+  `docs/security/README.md`, `docs/compliance/README.md`,
+  `docs/operations/README.md` and `SECURITY.md`.
+* `.github/workflows/ci.yml` (both jobs, in full), `.gitleaks.toml`,
+  `tests/infra/docker-compose.yml`, `pyproject.toml` (64 lines at `6125558`),
+  `CHANGELOG.md` (written here) and the programme's commit map from
+  `git log --oneline`.
+* The knowledge base (36 files) where its pages carry the phase-11 refresh
+  banners and point at `docs/security/` for current security truth.
+
 ### 26.2 What was verified by execution
 
 * `pytest -q -W error` → **568 passed** on a fresh `postgres:16` testcontainer
@@ -4951,6 +5028,25 @@ See [§18.7](#187-packaging-flow).
   `__init__.py`; other subpackage initializers are empty.
 * `.github` contains exactly one workflow; remote and local `main` were
   identical at the time of writing.
+
+**Re-verified by execution for the phase 11 synchronisation (§26.6):**
+
+* `pytest -q -W error` → **1,215 passed, 6 skipped** in 71.87 s, with the local
+  Kong/Cerbos/ZITADEL stack up and its `JDLIB_INFRA_*` variables exported. With
+  those variables removed the same suite reports 1,190 passed, 31 skipped — the
+  infrastructure classes skip themselves by design.
+* `pytest tests/infra -q` alone → 29 passed, 6 skipped; the four compliance
+  and CLI-security modules together → 65 passed.
+* `CONTROL_REGISTRY` → 19 controls across 7 framework families (15
+  `implemented`, 2 `partial`, 1 `not_implemented`, 1 `not_applicable`), with
+  `POSTURE_RULES` covering the registry exactly; `SecurityEventType` → 36
+  members, including `AUDIT_READ_DENIED` and `AUDIT_EXPORTED`.
+* `import jdlib` → `jdlib.security` is **not** imported (§9.1), and nothing
+  under `jdlib.security` imports a web framework.
+* `git log`/`git status`: `main` at `6125558` (the phase-11 documentation
+  commit), with this synchronisation's own edits uncommitted;
+  `.github/workflows/` holds one workflow file with two jobs. A sibling change
+  in the working tree adds a `jdlib` console script (§8.20).
 
 ### 26.3 Known documentation-vs-source drift (resolved in favor of source)
 
@@ -4986,8 +5082,64 @@ See [§18.7](#187-packaging-flow).
   deployed anywhere.
 * No claim is made about performance characteristics beyond what the code
   structure implies (no benchmarks exist in the repository).
-* No claim is made about SemVer or backward-compatibility policy (no CHANGELOG
-  or policy document exists).
+* No claim is made about SemVer or backward-compatibility policy: `CHANGELOG.md`
+  now exists (phase 11) and records the unreleased development line, but there
+  are no releases, no tags, and no stated policy.
+
+### 26.6 Phase 11 synchronisation (this revision)
+
+This revision of the document was synchronised with the security-hardening
+programme at commit `6125558` (`main`), whose phase 11 documentation commit
+first landed the synchronisation; this revision completes and re-verifies it and
+its own edits are uncommitted at the time of writing. Added or amended — each
+after reading the source it describes:
+
+* **Added:** §5.3 (the `jdlib.security.*` module inventory), §8.22 (compliance
+  evidence and posture), §15.4 (the programme's phase map), §21.8 (the security
+  posture workflow) and this §26.6.
+* **Amended:** §3.1/§3.2 (tree, counts, absent files), §6.2 (public API
+  additions), §8.1 and §8.12–§8.13 (phase 8 enforcement), §8.20 (the `security`
+  CLI group), §9.1 (import purity), §11.2, §13.1, §14.1–§14.3, §15.1–§15.3,
+  §18.1–§18.7, §19.1–§19.2 and §19.4–§19.7, §20.2, §22.15, §23.2, §23.4–§23.6,
+  §26.1–§26.2 and §26.5, §27.2–§27.9, and the closing note.
+* The table of contents is unchanged: every addition is a subsection of a
+  section it already lists.
+
+Every claim about the new compliance package, the `security` CLI group,
+`RlsInspection`/`inspect_rls`, the CI `security` job and the phase-8 fixes was
+checked against the files cited inline; §5.3 was produced from a static
+inventory of `jdlib.security.*` (docstrings, module-level imports, `__all__`
+lengths), and the counts in §19 and §26.2 come from runs (`§26.2`).
+
+**Drift found while synchronising — recorded, not silently fixed, unless the
+source was unambiguous:**
+
+* §23.4's pre-hardening claim that the JWKS fetch has "no explicit timeout" and
+  that `JwksCache` "has no refresh lock" is no longer true (phase 2 introduced
+  both). The bullets were updated, with the code cited.
+* §23.2's claim that an expired privilege "remains effective" was superseded by
+  phase 8 and was updated in place (§8.1).
+* The phase documents describe the audit vocabulary as "34 directive names plus
+  the audit-access names"; the shipped enum holds 36 members. Consistent if the
+  directive lists 34 and the audit-access names are the other two, but
+  `docs/security/audit-hardening.md` §1's wording ("exactly the 34 names") reads
+  as if the total were 34.
+* `docs/security/ci-security.md` quotes "157 commits scanned" in one evidence
+  table and "155 commits" in its summary table — same scan, two counts.
+* §26.3's older row about a "503 audit-failure status" predates the phase 5 work,
+  which introduced a 503 for `AuthorizationUnavailable`
+  (`SecurityCode.POLICY_UNAVAILABLE`) — a different path from audit failure. The
+  row was left as originally written.
+* `docs/security/` and `docs/compliance/`, `docs/operations/`,
+  `docs/threat-model/` are new in the working tree; §3.1 lists which files are
+  tracked at this revision.
+* The working tree at the time of this read also contains **concurrent sibling
+  work this synchronisation observes but does not own**: the knowledge-base
+  refresh (36 files), the `jdlib` console script (`pyproject.toml:41-42`,
+  `integrations/cli.py:624-627`, its test in `tests/unit/test_cli_security.py`
+  and the CI smoke-test extension), and small edits to `README.md` and
+  `docs/operations/README.md`. Where those touch this document's scope
+  (packaging, CI, the CLI), they are described as in-flight, not as landed.
 
 ---
 
@@ -5027,14 +5179,17 @@ External dependencies: PostgreSQL 15+ (control `jd_control` schema + tenant
 
 ### 27.2 Core modules
 
-`context.py` (identity/authority/envelopes), `errors.py` (27-error hierarchy),
-`config.py` (pydantic-settings), `lint.py` (12 metadata invariants),
-`control/registry.py` (lifecycle authority), `persistence/session.py`
-(tenant-scoped session), `persistence/rawsql.py` (raw-SQL proof),
-`persistence/uow.py` (write admission + transaction), `authz/pdp.py`
-(decisions), `authz/access.py` (mutations), `authn/*` (identity),
+`context.py` (identity/authority/envelopes), `errors.py` (28 error classes;
+27 exported), `config.py` (pydantic-settings), `lint.py` (12 metadata
+invariants), `control/registry.py` (lifecycle authority),
+`persistence/session.py` (tenant-scoped session), `persistence/rawsql.py`
+(raw-SQL proof), `persistence/uow.py` (write admission + transaction),
+`authz/pdp.py` (decisions), `authz/access.py` (mutations), `authn/*` (identity),
 `persistence/strategies/*` (placement), `migrations/runner.py` (schema
-evolution), `control/audit.py` + `models/audit_recorder.py` (audit).
+evolution), `control/audit.py` + `models/audit_recorder.py` (audit), and
+`security/*` (context, config, errors, interfaces, identity, redaction,
+responses, telemetry, tracing, and the `authn`/`authz`/`gateway`/`audit`/
+`compliance` subpackages — §5.3).
 
 ### 27.3 Core abstractions
 
@@ -5044,7 +5199,10 @@ evolution), `control/audit.py` + `models/audit_recorder.py` (audit).
 `RawSqlValidator` · `Decision`/`MatchedRule` · `AuthzCache` ·
 `AccessReader`/`ControlAccessReader` · `AccessControl` · `EnvelopeCodec` ·
 `ContextPropagator` · `PermissionCatalog` · `ResourceTypeRegistry` ·
-`ScopeResolver` · `MigrationRunner` · `PlatformAudit` · `TenantAuditRecorder`.
+`ScopeResolver` · `MigrationRunner` · `PlatformAudit` · `TenantAuditRecorder` ·
+`SecurityContext` · `SecurityAuditEvent` · `RlsInspection` · `SecurityEvidence` ·
+`PostureReport` · `Control`/`CONTROL_REGISTRY` · `TokenValidator` ·
+`PolicyDecisionPoint` · `GatewayAdapter`.
 
 ### 27.4 Main public APIs (13)
 
@@ -5056,6 +5214,12 @@ strategies, `MigrationRunner`, `DefaultPDP`, `ControlAccessReader`,
 `DatabaseAuditSink`, resolvers, `tenant_job`, `jdlib.testing` assertions and
 fixtures).
 
+The security programme adds a second, **additive** surface (§5.3):
+`jdlib.security` (context, config, errors, interfaces), the
+`jdlib.security.authn` / `authz` / `gateway` / `audit` subpackages, and
+`jdlib.security.compliance` with the `security` CLI group (§8.20, §8.22). None
+of it is pulled in by `import jdlib`.
+
 ### 27.5 Major features
 
 Request-scoped tenant context; five resolver strategies; signed envelopes with
@@ -5066,14 +5230,20 @@ tenant lifecycle (create/provision/migrate/suspend/resume/archive/deprovision)
 with advisory locking and a single servability predicate; programmatic Alembic
 for two planes; platform and tenant audit with caller-transaction participation;
 tenant-plane purge; schema lint; consumer testing kit; FastAPI and Typer
-integrations.
+integrations; and — from the security programme — the request security context,
+algorithm-pinned JWT validation and outbound service tokens, fail-closed policy
+decisions, gateway identity trust, the security audit vocabulary and envelope,
+structured telemetry (logs, bounded metrics, spans), and compliance readiness
+reporting through the `security` CLI (§5.3, §8.22, §15.4).
 
 ### 27.6 Important dependencies
 
 `sqlalchemy[asyncio]` (core), `pydantic`/`pydantic-settings` (config),
 `alembic` (migrations), `pglast` (SQL proof), `pyjwt[crypto]` + `httpx`
 (OIDC), `argon2-cffi` (secret hashing), `asyncpg` (async driver) and
-`psycopg` (sync driver), optional `fastapi` and `typer`.
+`psycopg` (sync driver), optional `fastapi` and `typer`, and the `http` extra
+(`httpx`) for the security transports. No telemetry SDK is required — the span
+layer is duck-typed.
 
 ### 27.7 Extension points
 
@@ -5084,7 +5254,9 @@ integrations.
 `ServabilityChecker`/`OperatorAuthorizer` · `RawSqlAuditor` · injectable
 `RawSqlValidator` · model mixins + `ownership_constraints()` ·
 `PermissionCatalog.register` · `ResourceTypeRegistry.register` ·
-`CompositeAuthenticator`/`CompositeAuditSink` · `tenant_job`.
+`CompositeAuthenticator`/`CompositeAuditSink` · `tenant_job` ·
+`TokenValidator`/`TokenProvider`/`GatewayAdapter`/`RateLimiter` (the security
+core ports) · `SecurityEventSink` · `evaluate_posture(rules=…)`.
 
 ### 27.8 Main runtime flows
 
@@ -5105,19 +5277,22 @@ Relocation is not an implemented API (§23.1.1); the database-placement
 registry version check reads the base database (§23.1.2); `migrate()` has no
 status gate (§23.1.3); no engine/pool configuration exists (§23.1.4);
 migrations are synchronous inside async flows (§23.1.5); cache invalidation is
-one-way (§23.1.6); privilege expiry is not re-checked per statement (§23.2);
-`fastapi.require` has a TOCTOU window (§23.2); audit actor typing collapses
-non-null actors to `"user"` (§23.2); the built-in middleware does not populate
-JWT claims for the default resolver (§23.2); `IsolationStrategy` lacks
-`health_check`/`invalidate`/`dispose` (§23.7); no logging/metrics/tracing
-exists (§14.2); packaging lacks readme/license/classifiers, a console script, a
-publish workflow, and a lock file (§18.2).
+one-way (§23.1.6); `fastapi.require` has a TOCTOU window (§23.2); audit actor
+typing collapses non-null actors to `"user"` (§23.2); the built-in middleware
+does not populate JWT claims for the default resolver (§23.2); privilege
+liveness is enforced at every gate since phase 8, but liveness itself is judged
+by the process clock (§23.2); `IsolationStrategy` lacks
+`health_check`/`invalidate`/`dispose` (§23.7); the Tyk plugin path is not
+infrastructure-verified (§19.7); the compliance surface reports readiness and is
+not a certification (§15.4); packaging lacks readme/license/classifiers, a
+console script, a publish workflow, and a lock file (§18.2).
 
 ---
 
-*End of document. Derived from `jdlib` at commit `a30601d`; every claim is
-traceable to the file references given inline. For anything not determinable
-from the repository, this document says so explicitly.*
+*End of document. Derived from `jdlib` at commit `a30601d`, synchronised with
+the security-hardening programme at `4d113e5` (§26.6); every claim is traceable
+to the file references given inline. For anything not determinable from the
+repository, this document says so explicitly.*
 
 
 

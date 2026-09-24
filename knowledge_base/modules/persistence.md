@@ -1,5 +1,13 @@
 # Module: Persistence Core (`src/jdlib/persistence/`)
 
+> **Status (refreshed in phase 11).** This document was written at commit
+> `a30601d`, before the security-hardening programme (phases 1-11). Its
+> structure and design explanations still hold, but the security-relevant
+> truth lives in the current documents: `docs/security/`, `SECURITY.md`,
+> `docs/threat-model/`, `docs/compliance/`, `docs/operations/` and
+> `JDLib-Architecture.md`. Where this document and those disagree, they win.
+> The front door (`knowledge_base/README.md`) carries the current snapshot.
+
 The heart of the library: one data-access API that behaves identically for every
 placement, with tenant scoping enforced by SQLAlchemy session events rather than
 by developer discipline.

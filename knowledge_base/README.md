@@ -29,6 +29,43 @@ first place to look before trusting any *Documented* claim.
 | Types | `.venv/Scripts/python.exe -m mypy src/jdlib` | `Success: no issues found in 64 source files` |
 | Size | `wc -l` over `src/` / `tests/` | 7,447 / 13,023 lines |
 
+That snapshot is the one taken at `a30601d`. **Current** (phase 11, with the
+local Kong/Cerbos/ZITADEL stack up and its `JDLIB_INFRA_*` variables exported):
+
+| Check | Command | Result (Verified) |
+|---|---|---|
+| Test suite | `.venv/Scripts/python.exe -m pytest -q -W error` | `1215 passed, 6 skipped in 69.22s` — the six skips are the documented Tyk coprocess limitation |
+| Lint | `.venv/Scripts/python.exe -m ruff check .` | `All checks passed!` |
+| Types | `.venv/Scripts/python.exe -m mypy src/jdlib` | `Success: no issues found in 101 source files` |
+| Infrastructure layer | `.venv/Scripts/python.exe -m pytest -q tests/infra -rs` | `29 passed, 6 skipped` against real Cerbos 0.37.0, Kong 3.6, ZITADEL, PostgreSQL 16 and an OpenTelemetry collector |
+| Security gates | `.github/workflows/ci.yml` job `security` | dependency scan, full-history secret scan, SAST, SBOM and a clean-install smoke test — `docs/security/ci-security.md` |
+
+## What changed after `a30601d` (the security-hardening programme)
+
+The documents below still describe the library's structure, but the programme
+added a security layer on top and changed behaviour in places. A reader who
+needs the current state should use, in this order:
+
+- `docs/security/` — one document per hardening phase (authentication,
+  authorization, gateway, audit, observability, adversarial review, compliance,
+  CI), each carrying its own `Status:` line.
+- `SECURITY.md` — responsibilities, what is deliberately left to a deployment,
+  known limitations, how to report a vulnerability.
+- `docs/threat-model/README.md` — assets, trust boundaries and twenty threats
+  with the control, the test and the residual-risk owner.
+- `docs/compliance/README.md` and `docs/operations/README.md` — the
+  assessor-facing and operator-facing views.
+- `JDLib-Architecture.md` — the module inventory, public interfaces and flows,
+  synchronised with the programme.
+- `CHANGELOG.md` — the programme phase by phase with commit SHAs.
+
+Named in one place: `jdlib.security` gained `compliance`
+(`CONTROL_REGISTRY` with 19 controls over 7 frameworks, evidence collectors,
+posture evaluation) and a `security` CLI group; `jdlib.persistence.strategies.rls`
+gained `RlsInspection`/`inspect_rls` with `verify_rls` built on them; the package
+now installs a `jdlib` console script; and the audit trail's attribution and
+timestamp rules became fail-closed.
+
 The integration suite starts a real PostgreSQL (`postgres:16`) via
 testcontainers, so the 568 passes include live isolation-strategy behaviour, not
 just mocks.

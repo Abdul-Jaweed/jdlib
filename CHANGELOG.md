@@ -72,7 +72,7 @@ Commits: `b6c97cd`, `067b6a3`, `cbbd855`, `32c818b`, `c9ff598`, `7fa1da6`, `4fcf
 * Gate recorded at certification: 744 passed
   (`docs/security/authentication-hardening.md`).
 * Also landed in this window, belonging to no security phase: `f0f8747` added
-  `knowledge_base/` (36 documents) and `JDLib-Architecture.md`.
+  `knowledge_base/` (36 tracked files) and `JDLib-Architecture.md`.
 
 ### Phase 3 — Authorization hardening
 
@@ -221,38 +221,44 @@ Commit: `4d113e5` (`feat(ci): security gates - dependencies, secrets, SAST, SBOM
 
 ### Phase 11 — Documentation sweep
 
-No commit yet: this phase's work is in the working tree at the time of writing
-and is not part of `4d113e5`.
+Commit: `6125558` (`docs(security): documentation and knowledge base in line with the code (phase 11)`)
 
 * Added `SECURITY.md` (what the library is responsible for, what it leaves to a
-  deployment, known limitations, how to report a vulnerability).
-* Added `CHANGELOG.md` (this file).
+  deployment, known limitations, how to report a vulnerability),
+  `CONTRIBUTING.md`, and `CHANGELOG.md` (this file).
 * Added the documentation set around the phase documents: an index at
   `docs/security/README.md`, an assessor-facing view at
-  `docs/compliance/README.md` and an operator-facing view at
-  `docs/operations/README.md`.
+  `docs/compliance/README.md`, an operator-facing view at
+  `docs/operations/README.md`, and `docs/threat-model/README.md`.
 * `README.md` gained a security-and-compliance section naming the `security`
-  CLI group and pointing at the documents above (working-tree change).
+  CLI group and pointing at the documents above.
 * `JDLib-Architecture.md` was synchronised with the programme: the compliance
   package, the `security` CLI group, `RlsInspection`/`inspect_rls`, the phase 8
   enforcement fixes, the CI security job and the `docs/security/` set.
-* Not yet refreshed: `knowledge_base/` (36 documents written at `a30601d`,
-  describing the pre-hardening library; `docs/security/security-core.md` §6
-  records the refresh as belonging to this sweep).
+* **Uncommitted at the time of writing**, and therefore not part of `6125558`:
+  the completion of the architecture synchronisation (§19 test totals, §26–§27
+  and the §26.6 notes), the knowledge-base refresh (all 36 files carry a
+  "refreshed in phase 11" banner pointing at `docs/security/`), a `jdlib`
+  console script (`integrations/cli.py:main`, `[project.scripts]` in
+  `pyproject.toml`, the test in `tests/unit/test_cli_security.py`, and the CI
+  smoke test now running `jdlib security posture --json`), and small edits to
+  `README.md` and `docs/operations/README.md`.
 
 ### Suite status at this revision
 
-Verified on the development host (Windows, Docker), at commit `4d113e5` plus
-the uncommitted phase-11 documentation changes:
+Verified on the development host (Windows, Docker), at commit `6125558` plus
+the uncommitted phase-11 changes:
 
-* `pytest -q -W error` → **1215 passed, 6 skipped** (67.87 s), with the local
+* `pytest -q -W error` → **1215 passed, 6 skipped** (71.87 s), with the local
   Kong/Cerbos/ZITADEL stack up and its `JDLIB_INFRA_*` variables exported; the
   six skips are the documented Tyk ones (§ Phase 4 above).
-* The same suite without those variables reports 1190 passed, 31 skipped —
-  the difference is exactly the infrastructure suites (Kong 9, Cerbos 12,
-  ZITADEL 4), each skip naming the variable it wants.
+* The same suite without those variables reports 1190 passed, 31 skipped — the
+  31 skips are Kong (9), Cerbos (12), ZITADEL (4) and Tyk (6), each naming the
+  variable it wants.
 * `tests/infra` selected on its own against the running stack: 29 passed,
   6 skipped (Tyk).
-* `tests/unit/security/test_compliance_controls.py`: 9 passed;
+* The four security-compliance modules together
+  (`test_compliance_controls.py`, `test_compliance_evidence.py`,
+  `test_compliance_posture.py`, `tests/unit/test_cli_security.py`): 65 passed;
   `CONTROL_REGISTRY` holds 19 controls over 7 framework families, 15 of them
   `implemented`, 2 `partial`, 1 `not_implemented`, 1 `not_applicable`.

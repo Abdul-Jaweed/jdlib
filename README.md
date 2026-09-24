@@ -374,7 +374,8 @@ security gates and the compliance surface. [SECURITY.md](SECURITY.md) states wha
 the library is responsible for, what it deliberately leaves to a deployment, and
 how to report a vulnerability.
 
-The `security` CLI group reports readiness against the control register:
+The `security` CLI group reports readiness against the control register
+(`pip install "jdlib[cli]"` — typer is an extra):
 
 ```bash
 jdlib security posture                 # every technical control, with reasons; exit 1 on a failure

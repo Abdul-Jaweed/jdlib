@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+import tomllib
+from pathlib import Path
 
 import pytest
 import typer
@@ -30,6 +33,39 @@ from jdlib.integrations.cli import app  # noqa: E402
 
 def _invoke(*args: str):
     return testing.CliRunner().invoke(app, list(args))
+
+
+def test_the_package_installs_a_jdlib_console_script() -> None:
+    """Every document tells the reader to run `jdlib …`; that command must exist.
+
+    Found in the phase 11/12 review: the CLI was reachable only as
+    `python -c "from jdlib.integrations.cli import app; app()"` — there was no
+    `[project.scripts]` entry and no `__main__.py`, so the documented command did
+    not exist for anyone who installed the package.
+    """
+
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    declared = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    scripts = declared.get("project", {}).get("scripts", {})
+
+    assert scripts.get("jdlib") == "jdlib.integrations.cli:main"
+
+    module, _, attribute = scripts["jdlib"].partition(":")
+    assert module == cli.__name__
+    assert attribute == "main"
+    assert callable(cli.main)
+
+
+def test_the_entry_point_runs_the_app(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(sys, "argv", ["jdlib", "security", "compliance", "--framework", "soc2"])
+
+    # Click's standalone mode exits through SystemExit even on success.
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main()
+
+    assert exit_info.value.code in (0, None)
+    out = capsys.readouterr().out
+    assert "framework=soc2" in out
 
 
 def test_the_security_group_sits_beside_the_existing_groups() -> None:

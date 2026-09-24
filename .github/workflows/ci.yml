@@ -113,11 +113,14 @@ jobs:
         run: |
           "$RUNNER_TEMP/scanners/bin/python" -m build --outdir security-artifacts/dist
 
-      - name: "Install smoke test (fresh venv, import jdlib / jdlib.security / jdlib.security.compliance)"
+      - name: "Install smoke test (fresh venv, import jdlib / jdlib.security / jdlib.security.compliance, run the console script)"
         run: |
           python -m venv "$RUNNER_TEMP/smoke"
-          "$RUNNER_TEMP/smoke/bin/python" -m pip install security-artifacts/dist/*.whl
+          # The `cli` extra is typer; installing it by name keeps the glob simple.
+          "$RUNNER_TEMP/smoke/bin/python" -m pip install security-artifacts/dist/*.whl typer
           "$RUNNER_TEMP/smoke/bin/python" -c "import jdlib, jdlib.security, jdlib.security.compliance; from jdlib.security.compliance import CONTROL_REGISTRY; print('smoke test ok:', jdlib.__file__, '| controls:', len(CONTROL_REGISTRY))"
+          "$RUNNER_TEMP/smoke/bin/jdlib" security posture --json > "$RUNNER_TEMP/posture.json"
+          "$RUNNER_TEMP/smoke/bin/python" -c "import json,os; data=json.load(open(os.environ['RUNNER_TEMP'] + '/posture.json')); print('console script ok | controls assessed:', len(data['findings']), '| outcome:', data['outcome'])"
 
       - name: Upload security artifacts (SBOM, gitleaks report, distributions)
         if: always()

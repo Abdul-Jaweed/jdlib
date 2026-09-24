@@ -1,5 +1,13 @@
 # API: Public Surface (`jdlib.__all__`)
 
+> **Status (refreshed in phase 11).** This document was written at commit
+> `a30601d`, before the security-hardening programme (phases 1-11). Its
+> structure and design explanations still hold, but the security-relevant
+> truth lives in the current documents: `docs/security/`, `SECURITY.md`,
+> `docs/threat-model/`, `docs/compliance/`, `docs/operations/` and
+> `JDLib-Architecture.md`. Where this document and those disagree, they win.
+> The front door (`knowledge_base/README.md`) carries the current snapshot.
+
 Exactly these 13 names are exported from `jdlib/__init__.py` (plus
 `__version__ = "0.1.0"`); the set is frozen by
 `tests/unit/test_public_api.py::test_all_is_exactly_the_public_surface`.
