@@ -26,6 +26,8 @@ from jdlib.context import Principal, PrincipalKind, TenantContext
 from jdlib.control.enums import PlacementStrategy
 from jdlib.errors import (
     AuthenticationError,
+    AuthorizationError,
+    AuthorizationUnavailable,
     MissingTenantContext,
     PermissionDenied,
     TenantAccessDenied,
@@ -135,10 +137,13 @@ async def test_deny_raises_403_with_a_safe_message() -> None:
 async def test_degraded_engine_still_denies() -> None:
     # The critical directive §16 property, enforced at the enforcement point.
     pep = AuthorizationPEP(pdp=StubPDP(_degraded()))
-    with pytest.raises(PermissionDenied) as excinfo:
+    with pytest.raises(AuthorizationUnavailable) as excinfo:
         await pep.require(_query())
     assert "engine_unavailable" in str(excinfo.value)
-    assert describe_error(PermissionDenied).http_status == 403
+    # Denied either way; reported as 503 so an outage is not read as "you may not".
+    assert describe_error(AuthorizationUnavailable).http_status == 503
+    assert describe_error(AuthorizationUnavailable).retryable is True
+    assert isinstance(excinfo.value, AuthorizationError)
 
 
 async def test_anonymous_context_raises_401() -> None:
@@ -187,7 +192,7 @@ async def test_decisions_are_observable_for_audit() -> None:
 
     for decision in (_allowed(), _denied(), _degraded()):
         pep = AuthorizationPEP(pdp=StubPDP(decision), on_decision=observe)
-        with contextlib.suppress(PermissionDenied):
+        with contextlib.suppress(PermissionDenied, AuthorizationUnavailable):
             await pep.require(_query())
     assert seen == [(True, "ALLOW"), (False, "DENY"), (False, "DENY")]
 

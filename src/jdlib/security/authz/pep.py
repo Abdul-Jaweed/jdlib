@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable
 
 from jdlib.errors import (
     AuthenticationError,
+    AuthorizationUnavailable,
     MissingTenantContext,
     PermissionDenied,
     TenantAccessDenied,
@@ -63,6 +64,11 @@ class AuthorizationPEP:
         if self._on_decision is not None:
             await self._on_decision(query, decision)
         if not decision.allowed:
+            if decision.degraded:
+                # A decision that could not be taken is still a denial, but it is
+                # reported as 503 so "we're unsure" is not confused with "you may
+                # not", and so the outage is visible to operators (directive §20).
+                raise AuthorizationUnavailable(self._denial_message(query, decision))
             raise PermissionDenied(self._denial_message(query, decision))
         return decision
 

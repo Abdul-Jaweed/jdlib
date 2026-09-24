@@ -210,7 +210,14 @@ _DESCRIPTORS: dict[type[BaseException], SecurityDescriptor] = {
     errors.MigrationError: SecurityDescriptor(
         SecurityCode.MIGRATION_ERROR, 500, False, SecurityClassification.INTERNAL
     ),
+    errors.AuthorizationUnavailable: SecurityDescriptor(
+        SecurityCode.POLICY_UNAVAILABLE, 503, True, SecurityClassification.AUTHORIZATION
+    ),
 }
+
+# Re-exported so the security surface is importable from one place; the class
+# itself lives with the other errors in :mod:`jdlib.errors`.
+AuthorizationUnavailable = errors.AuthorizationUnavailable
 
 # RFC 6750 challenge parameters for 401 responses, keyed by stable code.
 _CHALLENGES: dict[SecurityCode, str] = {
@@ -260,6 +267,7 @@ def www_authenticate(target: BaseException | type[BaseException]) -> str | None:
 
 
 __all__ = [
+    "AuthorizationUnavailable",
     "SecurityClassification",
     "SecurityCode",
     "SecurityDescriptor",

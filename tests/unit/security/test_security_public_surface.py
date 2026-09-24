@@ -37,6 +37,7 @@ EXPECTED_SURFACE = frozenset(
         "assert_strong_signing_key",
         "validate_security_config",
         # errors
+        "AuthorizationUnavailable",
         "SecurityClassification",
         "SecurityCode",
         "SecurityConfigurationError",
@@ -45,6 +46,9 @@ EXPECTED_SURFACE = frozenset(
         "is_retryable",
         "security_code",
         "www_authenticate",
+        # responses
+        "ErrorResponse",
+        "error_response",
         # interfaces
         "GatewayAdapter",
         "GatewayIdentity",

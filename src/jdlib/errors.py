@@ -78,6 +78,18 @@ class PermissionDenied(AuthorizationError):
     pass
 
 
+class AuthorizationUnavailable(AuthorizationError):
+    """A policy decision could not be taken because the engine was unavailable.
+
+    Raised instead of :class:`PermissionDenied` when a decision point reports
+    that it could not reach a verdict. It is still a **denial** — nothing is
+    ever allowed because an engine was down — but it is reported as ``503`` and
+    marked retryable, so a client can tell "you may not" from "we could not
+    decide yet" and operators can alert on the difference. Messages never name
+    the engine or its endpoint.
+    """
+
+
 class RoleEscalationBlocked(AuthorizationError):
     pass
 

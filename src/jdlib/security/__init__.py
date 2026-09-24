@@ -39,6 +39,7 @@ from jdlib.security.context import (
     security_context_scope,
 )
 from jdlib.security.errors import (
+    AuthorizationUnavailable,
     SecurityClassification,
     SecurityCode,
     SecurityConfigurationError,
@@ -58,6 +59,7 @@ from jdlib.security.interfaces import (
     TokenValidator,
     ValidatedToken,
 )
+from jdlib.security.responses import ErrorResponse, error_response
 
 __all__ = [
     # context
@@ -82,6 +84,7 @@ __all__ = [
     "assert_strong_signing_key",
     "validate_security_config",
     # errors
+    "AuthorizationUnavailable",
     "SecurityClassification",
     "SecurityCode",
     "SecurityConfigurationError",
@@ -90,6 +93,9 @@ __all__ = [
     "is_retryable",
     "security_code",
     "www_authenticate",
+    # responses
+    "ErrorResponse",
+    "error_response",
     # interfaces
     "GatewayAdapter",
     "GatewayIdentity",
