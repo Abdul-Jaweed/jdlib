@@ -29,11 +29,14 @@ to make this phase pass.
 
 ## 1. Event vocabulary (directive §4)
 
-`SecurityEventType` carries exactly the 34 names the directive lists, grouped by
+`SecurityEventType` carries the 34 names the directive lists plus the two the
+audit trail needs to describe access to itself (`AUDIT_READ_DENIED`,
+`AUDIT_EXPORTED`, directive §6.5) — 36 members in total, grouped by
 category (`authentication`, `authorization`, `tenancy`, `privilege`, `security`)
 so a consumer can route without string surgery. A test asserts the enum is
-*exactly* the directive's list — adding or renaming an event is a deliberate,
-reviewed act, because evidence mappings and dashboards key off these strings.
+*exactly* that set — the directive's list plus those two — so adding or renaming
+an event is a deliberate, reviewed act, because evidence mappings and dashboards
+key off these strings.
 
 Outcomes: `SUCCESS`, `FAILURE`, `DENIED`, `ERROR`.
 Sources: `API`, `GATEWAY`, `SERVICE`, `SYSTEM`, `BACKGROUND_JOB`, `CLI`.

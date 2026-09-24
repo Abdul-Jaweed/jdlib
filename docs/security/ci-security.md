@@ -42,7 +42,7 @@ pinned versions above:
 
 ```text
 pip-audit 2.10.1     No known vulnerabilities found        (57 packages, --no-deps, frozen set)
-gitleaks v8.30.1     no leaks found                        (157 commits scanned, full history)
+gitleaks v8.30.1     no leaks found                        (full history; 157 commits at that run)
 bandit 1.9.4         exit 0, 0 MEDIUM / 0 HIGH             (19 LOW, 1 reviewed #nosec B608)
 cyclonedx-bom 7.4.0  CycloneDX 1.6, root jdlib 0.1.0       (58 components, no credential-shaped keys)
 build 1.6.1          jdlib-0.1.0.tar.gz + jdlib-0.1.0-py3-none-any.whl
@@ -397,7 +397,7 @@ Verified locally on the development host (Windows, Docker 29.8.0, Python
 | Workflow audit (job names, test job unchanged, no soft-fail constructs, every invoked module present) | PASS |
 | pip-audit (57 pinned requirements) | `No known vulnerabilities found`, exit 0 |
 | pip-audit negative test (`requests==2.19.0`, `pyyaml==5.3.1`) | advisories listed, exit 1 |
-| gitleaks v8.30.1 history scan with `.gitleaks.toml` | `no leaks found`, exit 0 (155 commits) |
+| gitleaks v8.30.1 history scan with `.gitleaks.toml` | `no leaks found`, exit 0 (155 commits at that run; the count grows with every commit, and a later run of the same gate scanned 157) |
 | gitleaks probe (reviewed fixture + unreviewed PAT) | 1 finding, exit 1; allowlisted fixture suppressed |
 | Post-commit simulation (`.gitleaks.toml`, this document and the workflow committed in a scratch repo, plus one planted unreviewed secret) | exactly 1 finding — the planted secret, exit 1; none in the new/changed files |
 | bandit 1.9.4 `-ll` | exit 0; Low 19 / Medium 0 / High 0; `#nosec` skipped 1 |

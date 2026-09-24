@@ -747,10 +747,13 @@ _CONTROLS: tuple[Control, ...] = (
         technical_owner="release-engineering",
         verification_method=VerificationMethod.INSPECTION,
         status_note=(
-            "Partial: the test/lint/type gate runs in CI today, and the dedicated "
-            "pipeline-security work (dependency scanning, pinned actions, artefact "
-            "provenance) is the next phase's scope. Recorded as partial so the gap is "
-            "visible until that lands."
+            "Partial: the test/lint/type gate runs in CI, and the dedicated pipeline "
+            "security job landed (dependency scanning, full-history secret scanning, "
+            "static analysis at medium severity and above, a CycloneDX SBOM, and a "
+            "clean-install packaging check) - see docs/security/ci-security.md. Recorded "
+            "as partial because that document also records what is deliberately not "
+            "gated: low-severity static-analysis findings, IaC, container and licence "
+            "scanning, and no SARIF upload to GitHub code scanning."
         ),
     ),
 )

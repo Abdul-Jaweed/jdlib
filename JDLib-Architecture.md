@@ -5,7 +5,9 @@
 > the security-hardening programme at commit `6125558` (`main`); the phase 11
 > documentation commit. §26.6 records exactly what that synchronisation
 > revised, what was verified by execution, and what remains as inspected at
-> `a30601d`; this revision's own edits are uncommitted at the time of writing.
+> `a30601d`; this revision's own edits landed in commits `6125558` (the
+> documents), `2bc22e3` (the console script and the knowledge-base refresh),
+> `0623146` (the phase 12 certification) and `1b3044b` (the suite numbers).
 > Every architectural claim below is grounded in source code, tests, packaging
 > metadata, or the frozen design documents under `docs/`.
 > All file references use repository-relative paths with line numbers, e.g.
@@ -2686,10 +2688,11 @@ operator declares (`--environment`) rather than a deployment's private settings,
 branch or framework is a `BadParameter`. `JdlibError` and SQLAlchemy errors
 print `error: …` to stderr with exit code 1; unexpected exceptions are not
 normalized. At `6125558` there is no `[project.scripts]` entry — consumers
-expose `app` themselves (`README.md:69-72`) — but the working tree (uncommitted
-at the time of writing) adds `def main()` (`integrations/cli.py:624-627`) and
+exposed `app` themselves (`README.md:69-72`) — and the console script landed in
+`2bc22e3`: `def main()` (`integrations/cli.py:624-627`) and
 `[project.scripts] jdlib = "jdlib.integrations.cli:main"` (`pyproject.toml:41-42`),
-so a future install ships a `jdlib` console script.
+so an install ships a `jdlib` console script (typer comes from the `cli` extra),
+and the CI smoke step runs it.
 
 ---
 
@@ -3937,7 +3940,7 @@ Source: `pyproject.toml:1-42` (64 lines at `6125558`; 67 in the working tree).
 | Wheel contents | `src/jdlib` only | `tests/`, `docs/`, `.github/` are **not** packaged |
 | `py.typed` | present (`src/jdlib/py.typed`, empty) | PEP 561; no explicit package-data rule (hatchling includes package files) |
 | sdist target | not configured | hatchling's default applies |
-| Entry points | `pytest11` at `6125558`; the working tree adds `[project.scripts] jdlib = "jdlib.integrations.cli:main"` | **no console script at `6125558`** — consumers expose `jdlib.integrations.cli:app` themselves; the in-flight change adds one (`integrations/cli.py:624-627`, `pyproject.toml:41-42`) |
+| Entry points | `pytest11` at `6125558`, plus `[project.scripts] jdlib = "jdlib.integrations.cli:main"` from `2bc22e3` | a `jdlib` console script ships with the package (typer via the `cli` extra); the CI smoke step runs it |
 | Version source | hard-coded in `pyproject.toml:7` and `__init__.py:27` | duplicated, not dynamic |
 | Optional extras | `fastapi`, `cli`, `http` | `http` (`httpx>=0.27`) was added by phase 2; `httpx` is also a core dependency |
 | `readme`, `license`, `authors`, `classifiers`, `keywords`, `urls` | **absent** | a `LICENSE` file does not exist either |
@@ -4122,10 +4125,9 @@ both build-failing:
   environment written as a build artefact; and a build + clean-install smoke
   test (wheel built, installed into a fresh environment, then `import jdlib`,
   `jdlib.security` and `jdlib.security.compliance` with the register size
-  printed, so a packaging mistake cannot ship silently). In the working tree
-  (uncommitted at the time of writing) the smoke test also runs the `jdlib`
-  console script — `jdlib security posture --json` — once the console script in
-  §18.2 exists.
+  printed, so a packaging mistake cannot ship silently). Since `2bc22e3` the
+  smoke test also runs the installed `jdlib` console script —
+  `jdlib security posture --json` — and checks that the report parses (§18.2).
 
 The gates are deterministic and deliberately shallow: they are a floor under
 review, not a substitute for it, and the phase document records what each one

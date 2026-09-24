@@ -246,8 +246,9 @@ Commit: `6125558` (`docs(security): documentation and knowledge base in line wit
 
 ### Suite status at this revision
 
-Verified on the development host (Windows, Docker), at commit `6125558` plus
-the uncommitted phase-11 changes:
+Verified on the development host (Windows, Docker), with the phase-11 documents
+committed in `6125558` and the console-script and knowledge-base work in
+`2bc22e3`:
 
 * `pytest -q -W error` → **1,217 passed, 6 skipped** (71.48 s), with the local
   Kong/Cerbos/ZITADEL stack up and its `JDLIB_INFRA_*` variables exported; the
