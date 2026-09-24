@@ -29,6 +29,7 @@ agrees with the runtime `http_status_for()` mapping.
 | `ExpiredToken` | `EXPIRED_TOKEN` | 401 | no | authentication |
 | `InvalidToken` | `INVALID_TOKEN` | 401 | no | authentication |
 | `UnknownPrincipal` | `UNKNOWN_PRINCIPAL` | 401 | no | authentication |
+| `AuthenticationUnavailable` | `AUTHENTICATION_UNAVAILABLE` | 503 | yes | authentication |
 | `AuthorizationError` | `PERMISSION_DENIED` | 403 | no | authorization |
 | `PermissionDenied` | `PERMISSION_DENIED` | 403 | no | authorization |
 | `RoleEscalationBlocked` | `ROLE_ESCALATION_BLOCKED` | 403 | no | authorization |

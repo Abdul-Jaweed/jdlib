@@ -18,7 +18,12 @@ from jdlib.context import Clock, Principal, PrincipalKind, SystemClock
 from jdlib.control.audit import PlatformAudit
 from jdlib.control.models import IdentityLink, User
 from jdlib.control.session import ControlPlaneSession
-from jdlib.errors import AuthenticationError, ExpiredToken, InvalidToken
+from jdlib.errors import (
+    AuthenticationError,
+    AuthenticationUnavailable,
+    ExpiredToken,
+    InvalidToken,
+)
 from jdlib.tenancy.resolution import RequestInfo
 
 JwksFetcher = Callable[[str], Awaitable[Mapping[str, object]]]
@@ -317,6 +322,15 @@ class OidcAuthenticator:
             return None
         try:
             key = await self._cache.signing_key(kid)
+        except Exception as exc:
+            # The key set could not be refreshed and holds nothing usable for this
+            # kid: the identity provider is the suspect, not the caller's token.
+            # Reported as an outage so the request can answer ``503`` - a token
+            # that could not be *checked* is not a token that was *rejected*, and
+            # collapsing the two sends the caller to fix a credential nobody read.
+            await record_authn_failure(self._audit, type(exc).__name__)
+            raise AuthenticationUnavailable("identity provider unavailable") from exc
+        try:
             if key is None:
                 raise InvalidToken("unknown signing key")
             claims = self._verifier.verify(token, key)

@@ -2,6 +2,7 @@ import uuid
 from datetime import timedelta
 
 import jwt as pyjwt
+import pytest
 import sqlalchemy as sa
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -9,7 +10,7 @@ from jdlib.authn.oidc import ClaimMapper, JwksCache, OidcAuthenticator, TokenVer
 from jdlib.config import OidcConfig
 from jdlib.context import PrincipalKind
 from jdlib.control.audit import RecordingPlatformAudit
-from jdlib.errors import TenantNotFound
+from jdlib.errors import AuthenticationUnavailable, TenantNotFound
 from jdlib.tenancy.resolution import RequestInfo
 from tests.support.context_fakes import FrozenClock
 
@@ -126,6 +127,16 @@ async def test_authenticator_audits_jwt_failures_without_token_material():
 
 
 async def test_authenticator_fails_closed_when_jwks_fetch_raises():
+    """A failed key lookup is an outage, and still never an authentication.
+
+    The property is unchanged - nothing is authenticated when the key set cannot
+    be read - but the answer changed from "no credential" to "provider
+    unavailable". `None` became `401 no credentials presented` at the middleware,
+    which tells a caller with a perfectly good token to go and fix it, and hides
+    an outage behind a credential metric. See
+    `tests/unit/security/test_adversarial_authn_outage.py` for the claim and the
+    guard against over-blocking.
+    """
     clock = FrozenClock()
     private, jwks = _keypair()
 
@@ -141,7 +152,9 @@ async def test_authenticator_fails_closed_when_jwks_fetch_raises():
         fetcher=failing_fetch,
     )
     token = _token(private, clock=clock)
-    assert await authenticator.authenticate(_request(token)) is None
+    with pytest.raises(AuthenticationUnavailable) as raised:
+        await authenticator.authenticate(_request(token))
+    assert isinstance(raised.value.__cause__, RuntimeError)
     assert [entry["metadata"]["reason"] for entry in audit.entries] == ["RuntimeError"]
     assert token not in str(audit.entries)
 

@@ -70,6 +70,19 @@ class UnknownPrincipal(AuthenticationError):
     pass
 
 
+class AuthenticationUnavailable(AuthenticationError):
+    """Authentication could not be attempted because the identity provider is unavailable.
+
+    Raised instead of :class:`InvalidToken` when the key set could not be
+    refreshed and holds no usable key material. It is still a **failure** -
+    nothing is ever authenticated because a provider was down - but it is
+    reported as ``503`` and marked retryable, so a client can tell "your
+    credential was rejected" from "your credential could not be checked", and
+    operators can alert on the difference. Messages never name the provider or
+    its endpoint.
+    """
+
+
 class AuthorizationError(JdlibError):
     pass
 
@@ -145,6 +158,7 @@ __all__ = [
     "InvalidToken",
     "ExpiredToken",
     "UnknownPrincipal",
+    "AuthenticationUnavailable",
     "AuthorizationError",
     "PermissionDenied",
     "RoleEscalationBlocked",

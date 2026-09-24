@@ -28,7 +28,7 @@ Tests: `tests/unit/security/` (unit), `tests/integration/test_authn_http_integra
 |---|---|
 | **Thundering-herd protection** | concurrent lookups share one refresh under an `asyncio.Lock`; 25 concurrent lookups for an unknown `kid` cause exactly **one** fetch (test) |
 | **Stale-if-available** | a refresh failure or refresh timeout never discards usable key material; a cached `kid` keeps validating |
-| **Cause surfaced** | when no usable key exists *and* the refresh failed, the original failure is re-raised (e.g. `RuntimeError`, `TimeoutError`) instead of being masked as "unknown key" — the audit trail distinguishes an identity-provider outage from a rotated-away key, while callers still fail closed |
+| **Cause surfaced** | when no usable key exists *and* the refresh failed, the original failure is re-raised (e.g. `RuntimeError`, `TimeoutError`) instead of being masked as "unknown key" — the audit trail distinguishes an identity-provider outage from a rotated-away key, while callers still fail closed, and the authenticator classifies the re-raised failure as `AuthenticationUnavailable` (`503`) rather than a credential problem |
 | **Rate-limited retries** | a failed refresh is not retried before `min_refresh_interval` (default 1s, configurable), so an IdP outage cannot become a request storm |
 | **Explicit timeout** | every fetch is bounded by `timeout` (default 5s) via `asyncio.wait_for`; a hanging IdP cannot hang a request (test asserts it completes in <1s) |
 | **Readiness** | `ready()` reports whether key material is loaded (spec #51) |
@@ -72,9 +72,17 @@ conformance is asserted with the runtime protocol check).
   or `iat`, wrong issuer, wrong audience, missing subject, unknown `kid`,
   malformed token, invalid signature, `alg=none`, wrong algorithm
   (`HS256` against a public key) → `InvalidToken`.
-* Key-source failures (e.g. an IdP outage surfacing from the JWKS cache) are
-  wrapped as `InvalidToken` with the cause chained — 401 semantics with the
-  cause preserved for logs/audit.
+* Key-source failures (e.g. an IdP outage surfacing from the JWKS cache) raise
+  `AuthenticationUnavailable` with the original failure chained — **503**
+  semantics, marked retryable, and never `InvalidToken`. This corrects an earlier
+  decision recorded here: the failure used to be wrapped as `InvalidToken`
+  (`401`) with the cause kept only for logs, and before that it was swallowed into
+  `None` by the authenticator's blanket `except`, which the middleware reports as
+  `401 no credentials presented`. Both tell a caller to fix a token that was
+  never checked, and both hide an outage behind a credential metric. The design is
+  the one the authorization path already had: an outage is `503`
+  (`AuthorizationUnavailable` / `AuthenticationUnavailable`), a refusal is `403`,
+  a bad credential is `401`.
 * `ready()` delegates to the key source (spec #51); `keys` and `mapping` are
   read-only diagnostics used by the adapter and health wiring.
 

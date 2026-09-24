@@ -10,6 +10,7 @@ from urllib.parse import parse_qs
 from jdlib.context import ContextFactory, Principal, context_scope
 from jdlib.errors import (
     AuthenticationError,
+    AuthenticationUnavailable,
     AuthorizationError,
     AuthorizationUnavailable,
     CrossTenantReferenceError,
@@ -29,8 +30,11 @@ ASGIApp = Callable[..., Awaitable[None]]
 # ``AuthorizationError`` and is listed first for exactly that reason - a decision
 # that could not be taken is an outage (503), not a refusal (403), and collapsing
 # the two tells a caller with a denied request that they were denied when the
-# engine was simply unreachable.
+# engine was simply unreachable. ``AuthenticationUnavailable`` is an
+# ``AuthenticationError`` and is listed first for the same reason: an identity
+# provider that could not be reached is an outage (503), never a rejection (401).
 _STATUS_MAP: tuple[tuple[type[JdlibError], int], ...] = (
+    (AuthenticationUnavailable, 503),
     (AuthenticationError, 401),
     (AuthorizationUnavailable, 503),
     (AuthorizationError, 403),

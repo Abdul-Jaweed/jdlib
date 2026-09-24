@@ -25,6 +25,7 @@ def test_expected_error_names_exist():
         "InvalidToken",
         "ExpiredToken",
         "UnknownPrincipal",
+        "AuthenticationUnavailable",
         "AuthorizationError",
         "PermissionDenied",
         "RoleEscalationBlocked",

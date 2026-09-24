@@ -33,6 +33,7 @@ class SecurityCode(StrEnum):
     INVALID_ISSUER = "INVALID_ISSUER"
     INSUFFICIENT_SCOPE = "INSUFFICIENT_SCOPE"
     UNKNOWN_PRINCIPAL = "UNKNOWN_PRINCIPAL"
+    AUTHENTICATION_UNAVAILABLE = "AUTHENTICATION_UNAVAILABLE"
 
     # -- Authorization and policy decisions
     PERMISSION_DENIED = "PERMISSION_DENIED"
@@ -212,6 +213,9 @@ _DESCRIPTORS: dict[type[BaseException], SecurityDescriptor] = {
     ),
     errors.AuthorizationUnavailable: SecurityDescriptor(
         SecurityCode.POLICY_UNAVAILABLE, 503, True, SecurityClassification.AUTHORIZATION
+    ),
+    errors.AuthenticationUnavailable: SecurityDescriptor(
+        SecurityCode.AUTHENTICATION_UNAVAILABLE, 503, True, SecurityClassification.AUTHENTICATION
     ),
 }
 
