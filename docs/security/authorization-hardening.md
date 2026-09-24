@@ -1,6 +1,13 @@
 # Authorization Hardening (Phase 3)
 
 Status: **COMPLETE** — decision model, PDP port, Cerbos adapter, enforcement
+
+> **Superseded in one respect by Phase 5:** a decision that could not be taken
+> (engine unavailable) is reported as a `503 AuthorizationUnavailable` rather
+> than a `403 PermissionDenied`. It is still a denial — nothing is allowed
+> because an engine was down — but the outage is now distinguishable from a
+> policy denial. See `error-responses.md` §4.
+
 point and fail-closed semantics are implemented and verified against a real
 Cerbos 0.37.0 engine.
 
