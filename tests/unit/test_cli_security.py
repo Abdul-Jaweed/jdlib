@@ -110,16 +110,19 @@ def test_evidence_is_structured_and_safe() -> None:
 
 
 def test_a_policy_body_never_reaches_the_output(tmp_path) -> None:
-    secret = "cerbos-policy-body-marker-2f8c1a"
+    # A marker rather than something credential-shaped: the point is that the
+    # policy *body* is never read, and a secret-looking fixture here would need a
+    # permanent scanning exception to say so.
+    marker = "policy-body-marker-2f8c1a"
     policy = tmp_path / "tenant.yaml"
     policy.write_text(
-        f"resourcePolicy:\n  apiVersion: api.cerbos.dev/v1\n# {secret}\n", encoding="utf-8"
+        f"resourcePolicy:\n  apiVersion: api.cerbos.dev/v1\n# {marker}\n", encoding="utf-8"
     )
 
     result = _invoke("security", "evidence", "--policy-directory", str(tmp_path), "--json")
 
     assert result.exit_code == 0, result.output
-    assert secret not in result.output
+    assert marker not in result.output
     records = json.loads(result.output)
     policy_record = next(r for r in records if "policy-configuration" in r["subject"])
     assert policy_record["observations"]["policy_files"] == 1

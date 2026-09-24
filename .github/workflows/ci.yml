@@ -1,5 +1,11 @@
 name: ci
 on: [push, pull_request]
+
+# Least privilege for every job in this workflow: both jobs only read the
+# repository. Nothing here needs write access to the repo, issues or packages.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -12,3 +18,112 @@ jobs:
       - run: python -m ruff check .
       - run: python -m mypy src/jdlib
       - run: python -m pytest -q
+
+  # Security gates. Every command below fails this job (and therefore the build)
+  # on a finding: no gate is advisory and none is "soft-fail". Tool versions are
+  # pinned, scanners run from a throwaway venv or a pinned container (they are
+  # not project dependencies), and every exception plus the reasoning behind
+  # each gate lives in docs/security/ci-security.md.
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (full history for secret scanning)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project dependencies and freeze the audited set
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pip freeze --exclude-editable > "$RUNNER_TEMP/requirements-lock.txt"
+          wc -l "$RUNNER_TEMP/requirements-lock.txt"
+
+      - name: Install pinned scanner tooling (throwaway venv)
+        run: |
+          python -m venv "$RUNNER_TEMP/scanners"
+          "$RUNNER_TEMP/scanners/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/scanners/bin/python" -m pip install \
+            pip-audit==2.10.1 \
+            bandit==1.9.4 \
+            cyclonedx-bom==7.4.0 \
+            build==1.6.1
+
+      # Gate 1 - dependency vulnerabilities: fails on any known advisory for the
+      # exact set of installed runtime + dev dependencies (frozen above).
+      - name: "Dependency vulnerabilities (pip-audit)"
+        run: |
+          "$RUNNER_TEMP/scanners/bin/python" -m pip_audit \
+            --requirement "$RUNNER_TEMP/requirements-lock.txt" \
+            --no-deps \
+            --desc on \
+            --progress-spinner off
+
+      # Gate 2 - secrets: scans the full git history. .gitleaks.toml allowlists
+      # only reviewed synthetic test fixtures, pinned by exact path AND exact
+      # value, so no rule and no directory is disabled. Output is redacted so a
+      # finding never prints a credential into the log or the artifact.
+      - name: "Secrets (gitleaks, full history)"
+        run: |
+          mkdir -p security-artifacts
+          docker run --rm \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/repo \
+            -v "${{ github.workspace }}:/repo" \
+            zricethezav/gitleaks:v8.30.1 detect \
+              --source=/repo \
+              --config=/repo/.gitleaks.toml \
+              --no-banner \
+              --redact \
+              --exit-code 1 \
+              --report-format json \
+              --report-path=/repo/security-artifacts/gitleaks-report.json
+
+      # Gate 3 - static analysis: fails on MEDIUM or HIGH severity findings.
+      # LOW severity findings appear in the metrics block but do not fail; the
+      # reviewed LOW backlog is documented in docs/security/ci-security.md.
+      - name: "Static analysis (bandit, medium+)"
+        run: |
+          "$RUNNER_TEMP/scanners/bin/python" -m bandit -r src/jdlib -ll -f txt
+
+      # Gate 4 - SBOM: CycloneDX JSON for the installed environment, generated
+      # with the project interpreter (so it describes the project's dependency
+      # set, not the scanner venv). Package metadata only - no secrets.
+      - name: "SBOM (CycloneDX, installed environment)"
+        run: |
+          mkdir -p security-artifacts
+          "$RUNNER_TEMP/scanners/bin/python" -m cyclonedx_py environment \
+            "$(python -c 'import sys; print(sys.executable)')" \
+            --pyproject pyproject.toml \
+            --mc-type library \
+            --output-format JSON \
+            --output-file security-artifacts/sbom.cdx.json
+
+      # Gate 5 - packaging: build both distributions, then prove the wheel is
+      # installable and importable in a clean venv with only runtime deps.
+      - name: "Build sdist and wheel (python -m build)"
+        run: |
+          "$RUNNER_TEMP/scanners/bin/python" -m build --outdir security-artifacts/dist
+
+      - name: "Install smoke test (fresh venv, import jdlib / jdlib.security / jdlib.security.compliance)"
+        run: |
+          python -m venv "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/bin/python" -m pip install security-artifacts/dist/*.whl
+          "$RUNNER_TEMP/smoke/bin/python" -c "import jdlib, jdlib.security, jdlib.security.compliance; from jdlib.security.compliance import CONTROL_REGISTRY; print('smoke test ok:', jdlib.__file__, '| controls:', len(CONTROL_REGISTRY))"
+
+      - name: Upload security artifacts (SBOM, gitleaks report, distributions)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-artifacts
+          path: security-artifacts/
+          if-no-files-found: warn
+          retention-days: 14

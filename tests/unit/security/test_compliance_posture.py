@@ -507,11 +507,11 @@ def test_no_secret_shaped_text_reaches_the_report() -> None:
             "secret_scan": True,
             "static_analysis": True,
             "software_bill_of_materials": True,
-            "note": "ran with token ghp_012345678901234567890123456789012345",
+            "note": "ran against postgres://app:hunter2@db.internal:5432/jdlib",
         },
         reproducible="re-run the test",
     )
     report = _report(config, evidence=(leaky,))
 
-    assert "ghp_" not in repr(report)
-    assert "ghp_" not in json.dumps(report.as_dict())
+    assert "hunter2" not in repr(report)
+    assert "db.internal" not in json.dumps(report.as_dict())

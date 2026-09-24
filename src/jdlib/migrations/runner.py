@@ -114,6 +114,9 @@ class MigrationRunner:
             ).scalar_one_or_none()
             if present is None:
                 return None
-            return connection.execute(
-                sa.text(f'SELECT version_num FROM "{schema}".alembic_version LIMIT 1')
-            ).scalar_one_or_none()
+            # Reviewed exception (docs/security/ci-security.md, SAST gate): `schema` is
+            # validated against a strict allowlist regex by _validate_tenant_schema /
+            # _validate_deployment_schema before any caller reaches this method, so the
+            # interpolated identifier cannot carry SQL injection payloads.
+            query = f'SELECT version_num FROM "{schema}".alembic_version LIMIT 1'  # nosec B608
+            return connection.execute(sa.text(query)).scalar_one_or_none()

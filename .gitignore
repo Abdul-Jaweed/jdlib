@@ -13,3 +13,6 @@ build/
 
 # local infra artefacts
 tests/infra/out/
+
+# artefacts from the CI security job (see docs/security/ci-security.md)
+security-artifacts/

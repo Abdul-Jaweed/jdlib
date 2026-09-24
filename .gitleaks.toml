@@ -1,0 +1,105 @@
+# gitleaks configuration for JDLib (jdlib).
+#
+# Extends the upstream default ruleset (no rule is removed or disabled) and adds
+# allowlist entries for reviewed, synthetic credential fixtures that live in the
+# test suite. Every entry pins BOTH the file path and the exact reviewed value
+# and uses `condition = "AND"`, so it can only ever suppress that one reviewed
+# fixture: a real credential anywhere else -- including a new value or a new
+# line in the same file -- is still reported and still fails the build.
+#
+# Review record: docs/security/ci-security.md (section "Secret scanning").
+# Re-run `gitleaks detect` locally after editing this file and update the
+# documentation with the reason for any new entry.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "synthetic fixture in tests/integration/test_security_audit_persistence.py:220 (rule: generic-api-key)"
+condition = "AND"
+paths = ['''^tests/integration/test_security_audit_persistence\.py$''']
+regexTarget = "secret"
+regexes = ['''^abcdef123456789$''']
+
+[[allowlists]]
+description = "synthetic fixture in tests/unit/security/test_audit_events.py:239 (rule: generic-api-key)"
+condition = "AND"
+paths = ['''^tests/unit/security/test_audit_events\.py$''']
+regexTarget = "secret"
+regexes = ['''^abcdef123456789$''']
+
+[[allowlists]]
+description = "synthetic fixture in tests/unit/security/test_error_responses.py:194 (rule: generic-api-key)"
+condition = "AND"
+paths = ['''^tests/unit/security/test_error_responses\.py$''']
+regexTarget = "secret"
+regexes = ['''^apikey=sk\-live\-0123456789abcdef0123456789abcdef$''']
+
+[[allowlists]]
+description = "synthetic fixture in tests/unit/security/test_error_responses.py:202 (rule: jwt)"
+condition = "AND"
+paths = ['''^tests/unit/security/test_error_responses\.py$''']
+regexTarget = "secret"
+regexes = ['''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJhZG1pbiJ9\.c2lnbmF0dXJlLXZhbHVl$''']
+
+[[allowlists]]
+description = "synthetic fixture in tests/unit/security/test_gateway_adapters.py:131 (rule: generic-api-key)"
+condition = "AND"
+paths = ['''^tests/unit/security/test_gateway_adapters\.py$''']
+regexTarget = "secret"
+regexes = ['''^subject_header=$''']
+
+[[allowlists]]
+description = "synthetic fixture in tests/unit/security/test_jwt_validator.py:3 (rule: generic-api-key)"
+condition = "AND"
+paths = ['''^tests/unit/security/test_jwt_validator\.py$''']
+regexTarget = "secret"
+regexes = ['''^iss/aud/sub/exp/nbf/iat/jti/scope/scp/$''']
+
+[[allowlists]]
+description = "synthetic fixture in tests/unit/security/test_security_context.py:163 (rule: generic-api-key)"
+condition = "AND"
+paths = ['''^tests/unit/security/test_security_context\.py$''']
+regexTarget = "secret"
+regexes = ['''^eyJhbGciOiJIUzI1NiJ9\.secret$''']
+
+[[allowlists]]
+description = "synthetic fixture in tests/unit/security/test_security_interfaces.py:84 (rule: generic-api-key)"
+condition = "AND"
+paths = ['''^tests/unit/security/test_security_interfaces\.py$''']
+regexTarget = "secret"
+regexes = ['''^eyJhbGciOiJSUzI1NiJ9\.outbound\.secret$''']
+
+[[allowlists]]
+description = "synthetic fixture in tests/unit/security/test_telemetry.py:33 (rule: jwt)"
+condition = "AND"
+paths = ['''^tests/unit/security/test_telemetry\.py$''']
+regexTarget = "secret"
+regexes = ['''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk$''']
+
+[[allowlists]]
+description = "synthetic fixture in tests/unit/security/test_telemetry.py:93 (rule: generic-api-key)"
+condition = "AND"
+paths = ['''^tests/unit/security/test_telemetry\.py$''']
+regexTarget = "secret"
+regexes = ['''^abcdef1234567890$''']
+
+# Historical synthetic fixtures: these two values were committed (phase 9) as
+# deliberately credential-shaped test data and have since been replaced in the
+# working tree by non-secret-shaped markers. The commits remain in history, so
+# the entries stay to keep the full-history scan honest about what they are.
+# Both pin the path AND the exact value: a different value in the same file, or
+# the same value anywhere else, is still reported.
+[[allowlists]]
+description = "synthetic fixture in tests/unit/security/test_compliance_posture.py (phase 9, rule: github-pat)"
+condition = "AND"
+paths = ['''^tests/unit/security/test_compliance_posture\.py$''']
+regexTarget = "secret"
+regexes = ['''^ghp_012345678901234567890123456789012345$''']
+
+[[allowlists]]
+description = "synthetic fixture in tests/unit/test_cli_security.py (phase 9, rule: generic-api-key)"
+condition = "AND"
+paths = ['''^tests/unit/test_cli_security\.py$''']
+regexTarget = "secret"
+regexes = ['''^cerbos\-policy\-body\-marker\-2f8c1a$''']
