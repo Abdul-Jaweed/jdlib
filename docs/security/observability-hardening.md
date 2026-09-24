@@ -81,15 +81,45 @@ directions — a collector outage must not disable security, and a failing span
 must not mask the exception the body is raising (the context manager returns
 `None`, never `True`).
 
-## 5. Remaining in this phase
+## 5. Docker observability stack (§7.5)
 
-* **§7.5 Docker observability stack** — an OpenTelemetry Collector (with
-  Prometheus/Grafana where practical) brought up the way `tests/infra/kong` does:
-  a `start.sh`, credentials/config under `tests/infra/`, a skip-clean harness
-  when Docker is unavailable, and a test proving telemetry emitted by the library
-  is actually collected — plus the collector itself shown to be *receiving*.
-* **§7.6 gate** — the full phase gate with the directive's verification list: no
-  secret leakage, no unexpected high-cardinality metrics, trace propagation
-  works, failure paths observable, telemetry failure does not disable security.
-  The first four are already test-enforced per layer; the gate consolidates the
-  evidence.
+`tests/infra/otel/` brings up a real OpenTelemetry Collector (contrib, OTLP
+gRPC + HTTP receivers, batch processor, file + Prometheus exporters) the same way
+the Kong harness does: a `start.sh`, a `stop.sh`, config in the repo, and an
+environment file the tests read. The file exporter exists for the assertion that
+matters — *what the collector received*, not what a mock was told.
+
+The library ships no OTLP exporter (the core grows no optional import), so the
+test plays the exporter role: a duck-typed tracer using the library's own
+`security_span` API over OTLP/HTTP, then it reads back what the collector stored.
+Four checks, all green against the real collector:
+
+| Check | Result |
+|---|---|
+| A security span reaches the collector and is stored (trace id, name, attributes verified in the exporter's output) | pass |
+| A secret in an allowed attribute never reaches the collector end-to-end (`s3cr3t-pw`, `db.internal` absent from stored telemetry) | pass |
+| The collector's own metrics are exposed (it is collecting, not merely listening) | pass |
+| The Prometheus exporter endpoint is serving | pass |
+
+Skips are clean when the harness has not been started, but a *listed yet
+unreachable* collector is a failure, not a skip: a green run that never reached
+the collector would be a lie.
+
+Two bugs were caught by running it rather than by review: the second span was
+constructed but never ended (so nothing was exported — OTel exports on span end),
+and the collector's internal metrics needed their own endpoint and port mapping
+before "it is collecting" could be asserted at all.
+
+## 6. Phase 7 gate (§7.6)
+
+| Verification | Where it is enforced |
+|---|---|
+| No secret leakage | `test_telemetry.py` (6 secret shapes × every field, sensitive field names, reserved names), `test_otel_infra.py` (end-to-end through the collector) |
+| No unexpected high-cardinality metrics | `test_telemetry.py` — unbounded label names *and* identifier-shaped label values are refused in the write path |
+| Trace propagation works | `test_tracing.py` (W3C parsing/formatting, 13 malformed shapes refused) + the collector test (real `traceparent`-shaped ids arriving) |
+| Failure paths are observable | `test_audit_events.py` / `test_audit_emitters.py` emit denials and errors as first-class events; `safe_emit` keeps a telemetry outage from hiding them |
+| Telemetry failure does not disable security | `test_telemetry.py::test_a_broken_metric_sink_cannot_break_an_authorization_decision`, `test_tracing.py` (failing tracer, failing span end) |
+
+Gate: **1089 passed, 6 skipped**, `ruff` and `mypy` clean (96 source files). The
+six skips remain the documented Tyk limitation; the observability harness adds
+none — it ran against a real collector.
