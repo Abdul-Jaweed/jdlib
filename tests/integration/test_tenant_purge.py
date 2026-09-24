@@ -39,7 +39,7 @@ from tests.support.context_fakes import FrozenClock, RecordingPrivilegeAudit
 from tests.support.invoice import Invoice, LineItem
 
 TENANT_SCHEMA = "jt_test"
-DESIRED_VERSION = "0001_tenant_baseline"
+DESIRED_VERSION = "0002_security_audit_columns"
 APP_ROLE = "jdlib_rls_app"
 APP_PASSWORD = "rls-test"
 

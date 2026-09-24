@@ -17,7 +17,7 @@ class _Runner:
         self.calls.append((schema, revision))
 
     def tenant_version(self, schema: str) -> str | None:
-        return "0001_tenant_baseline"
+        return "0002_security_audit_columns"
 
 
 def _record(handle: str | None = "t_acme") -> TenantRecord:

@@ -64,7 +64,7 @@ def test_upgrade_is_idempotent(postgres_url: str):
 def test_tenant_version_reads_alembic_version(postgres_url: str):
     runner = MigrationRunner(postgres_url)
     runner.provision_tenant_schema("t_versioned")
-    assert runner.tenant_version("t_versioned") == "0001_tenant_baseline"
+    assert runner.tenant_version("t_versioned") == "0002_security_audit_columns"
 
 
 def test_tenant_version_missing_schema_returns_none(postgres_url: str):

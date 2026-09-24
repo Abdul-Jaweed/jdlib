@@ -39,7 +39,7 @@ from jdlib.migrations.runner import MigrationRunner
 from jdlib.persistence.strategies.deprovision import DeprovisionMode
 from jdlib.persistence.strategies.shared import SharedSchemaStrategy
 
-DESIRED_VERSION = "0001_tenant_baseline"
+DESIRED_VERSION = "0002_security_audit_columns"
 TENANT_SCHEMA = "jt_test"
 
 ACCESS_MODELS: dict[str, type] = {

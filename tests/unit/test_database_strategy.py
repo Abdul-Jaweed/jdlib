@@ -26,7 +26,7 @@ class _Runner:
         return None
 
     def tenant_version(self, schema: str) -> str | None:
-        return "0001_tenant_baseline"
+        return "0002_security_audit_columns"
 
 
 class _UrlRunner:
@@ -80,7 +80,7 @@ class _FakeAdminConnection:
         self.queries.append(sql)
         if "to_regclass" in sql:
             return _FakeResult("public.alembic_version")
-        return _FakeResult("0001_tenant_baseline")
+        return _FakeResult("0002_security_audit_columns")
 
 
 class _FakeAdminEngine:
@@ -318,7 +318,7 @@ def test_tenant_version_url_overrides_sqlalchemy_url(monkeypatch):
     monkeypatch.setattr(sa, "create_engine", fake_create)
     runner = MigrationRunner("postgresql+psycopg://u:p@h/base")
     version = runner.tenant_version_url("postgresql+asyncpg://u:p@h/tenant_db", "public")
-    assert version == "0001_tenant_baseline"
+    assert version == "0002_security_audit_columns"
     assert captured["url"] == "postgresql+psycopg://u:p@h/tenant_db"
     assert engine.disposed is True
 

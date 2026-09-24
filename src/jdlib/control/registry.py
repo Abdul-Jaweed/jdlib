@@ -35,6 +35,7 @@ from jdlib.errors import (
     TenantOperationInProgress,
     TenantSuspended,
 )
+from jdlib.migrations import TENANT_SCHEMA_HEAD
 from jdlib.migrations.runner import MigrationRunner
 from jdlib.persistence.strategies.base import IsolationStrategy
 from jdlib.persistence.strategies.database import validate_database_handle
@@ -149,7 +150,7 @@ class TenantRegistry:
         runner: MigrationRunner,
         audit: PlatformAudit,
         seeder: SeedHook | None = None,
-        desired_version: str = "0001_tenant_baseline",
+        desired_version: str = TENANT_SCHEMA_HEAD,
         purger: TenantPlanePurger | None = None,
     ) -> None:
         self._session_factory = session_factory

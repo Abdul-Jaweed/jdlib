@@ -43,7 +43,7 @@ class _Runner:
         return None
 
     def tenant_version(self, schema: str) -> str | None:
-        return "0001_tenant_baseline"
+        return "0002_security_audit_columns"
 
 
 class _OperatorStub:
@@ -69,8 +69,8 @@ async def _build_app(control_session_factory, container: JdlibContainer | None =
             session.add(
                 TenantMigrationState(
                     tenant_id=tenant_id,
-                    current_version="0001_tenant_baseline",
-                    desired_version="0001_tenant_baseline",
+                    current_version="0002_security_audit_columns",
+                    desired_version="0002_security_audit_columns",
                     status="success",
                 )
             )
@@ -94,7 +94,7 @@ async def _build_app(control_session_factory, container: JdlibContainer | None =
         strategies={},
         runner=_Runner(),
         audit=RecordingPlatformAudit(),
-        desired_version="0001_tenant_baseline",
+        desired_version="0002_security_audit_columns",
     )
     reader = ControlAccessReader(control_session_factory)
     factory = ContextFactory(

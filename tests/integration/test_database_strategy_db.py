@@ -63,7 +63,7 @@ async def test_provision_migrate_deprovision_second_database(postgres_url, make_
 
     runner = MigrationRunner(postgres_url)
     await strategy.migrate(tenant, runner)
-    assert runner.tenant_version_url(dsn, "public") == "0001_tenant_baseline"
+    assert runner.tenant_version_url(dsn, "public") == "0002_security_audit_columns"
 
     session = await strategy.session(tenant)
     try:

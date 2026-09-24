@@ -19,6 +19,14 @@ class AuditEvent(TenantBase, TenantRouted):
     actor_type: Mapped[str] = mapped_column(sa.Text, nullable=False)
     actor_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid)
     action: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    # Security audit vocabulary (directive §4): a stable event name, the outcome
+    # and the component the event came from. Nullable/defaulted so rows written
+    # before the vocabulary existed remain readable.
+    event_type: Mapped[str | None] = mapped_column(sa.Text)
+    outcome: Mapped[str] = mapped_column(
+        sa.Text, nullable=False, server_default=sa.text("'SUCCESS'")
+    )
+    source: Mapped[str | None] = mapped_column(sa.Text)
     target_type: Mapped[str | None] = mapped_column(sa.Text)
     target_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid)
     metadata_json: Mapped[dict[str, object]] = mapped_column(
@@ -35,6 +43,7 @@ class AuditEvent(TenantBase, TenantRouted):
     __table_args__ = (
         sa.CheckConstraint(sql_in("actor_type", ActorType), name="actor_type"),
         sa.Index("ix_audit_events_tenant_id_occurred_at", "tenant_id", "occurred_at"),
+        sa.Index("ix_audit_events_tenant_id_event_type", "tenant_id", "event_type"),
         sa.Index("ix_audit_events_tenant_id_target_type_target_id",
                  "tenant_id", "target_type", "target_id"),
     )

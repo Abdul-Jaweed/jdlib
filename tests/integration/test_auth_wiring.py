@@ -43,7 +43,7 @@ class _Runner:
         return None
 
     def tenant_version(self, schema: str) -> str | None:
-        return "0001_tenant_baseline"
+        return "0002_security_audit_columns"
 
 
 class _OperatorStub:
@@ -60,8 +60,8 @@ async def _seed_placed_tenant(session, tenant_id: uuid.UUID, slug: str) -> None:
     session.add(
         TenantMigrationState(
             tenant_id=tenant_id,
-            current_version="0001_tenant_baseline",
-            desired_version="0001_tenant_baseline",
+            current_version="0002_security_audit_columns",
+            desired_version="0002_security_audit_columns",
             status="success",
         )
     )
@@ -73,7 +73,7 @@ async def test_tenant_directory_and_entitlement_adapters(control_session_factory
         strategies={},
         runner=_Runner(),
         audit=RecordingPlatformAudit(),
-        desired_version="0001_tenant_baseline",
+        desired_version="0002_security_audit_columns",
     )
     tenant_id = uuid.uuid4()
     user_id = uuid.uuid4()
@@ -89,8 +89,8 @@ async def test_tenant_directory_and_entitlement_adapters(control_session_factory
         session.add(
             TenantMigrationState(
                 tenant_id=tenant_id,
-                current_version="0001_tenant_baseline",
-                desired_version="0001_tenant_baseline",
+                current_version="0002_security_audit_columns",
+                desired_version="0002_security_audit_columns",
                 status="success",
             )
         )
@@ -133,8 +133,8 @@ async def test_api_key_principal_through_middleware(control_session_factory):
         session.add(
             TenantMigrationState(
                 tenant_id=tenant_id,
-                current_version="0001_tenant_baseline",
-                desired_version="0001_tenant_baseline",
+                current_version="0002_security_audit_columns",
+                desired_version="0002_security_audit_columns",
                 status="success",
             )
         )
@@ -158,7 +158,7 @@ async def test_api_key_principal_through_middleware(control_session_factory):
         strategies={},
         runner=_Runner(),
         audit=RecordingPlatformAudit(),
-        desired_version="0001_tenant_baseline",
+        desired_version="0002_security_audit_columns",
     )
     reader = ControlAccessReader(control_session_factory)
     factory = ContextFactory(
@@ -230,8 +230,8 @@ async def test_api_key_pinned_to_tenant_a_presenting_tenant_b_gets_404(
             session.add(
                 TenantMigrationState(
                     tenant_id=tenant_id,
-                    current_version="0001_tenant_baseline",
-                    desired_version="0001_tenant_baseline",
+                    current_version="0002_security_audit_columns",
+                    desired_version="0002_security_audit_columns",
                     status="success",
                 )
             )
@@ -255,7 +255,7 @@ async def test_api_key_pinned_to_tenant_a_presenting_tenant_b_gets_404(
         strategies={},
         runner=_Runner(),
         audit=RecordingPlatformAudit(),
-        desired_version="0001_tenant_baseline",
+        desired_version="0002_security_audit_columns",
     )
     reader = ControlAccessReader(control_session_factory)
     factory = ContextFactory(
@@ -359,7 +359,7 @@ async def test_reconstruct_denies_service_account_absent_from_envelope_tenant(
         strategies={},
         runner=_Runner(),
         audit=RecordingPlatformAudit(),
-        desired_version="0001_tenant_baseline",
+        desired_version="0002_security_audit_columns",
     )
     reader = ControlAccessReader(control_session_factory)
     codec = EnvelopeCodec(config=ContextConfig(signing_key="k"), clock=FrozenClock())
