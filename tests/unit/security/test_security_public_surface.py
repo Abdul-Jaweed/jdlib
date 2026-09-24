@@ -137,3 +137,43 @@ def test_authn_import_does_not_pull_optional_dependencies() -> None:
         check=True,
     )
     assert json.loads(result.stdout) == []
+
+
+AUTHZ_SURFACE = frozenset(
+    {
+        "AuthorizationDecision",
+        "AuthorizationPEP",
+        "AuthorizationQuery",
+        "CerbosConfig",
+        "CerbosPDP",
+        "CerbosTransport",
+        "Effect",
+        "PolicyDecisionPoint",
+    }
+)
+
+
+def test_authz_surface_is_exactly_the_documented_api() -> None:
+    from jdlib.security import authz
+
+    assert frozenset(authz.__all__) == AUTHZ_SURFACE
+    for name in authz.__all__:
+        assert getattr(authz, name) is not None
+
+
+def test_authz_import_does_not_pull_optional_dependencies() -> None:
+    # The Cerbos HTTP transport lives in ...authz.transports, so importing the
+    # authorization layer must not drag httpx (or anything else optional) in.
+    script = (
+        "import json, sys, jdlib.security.authz; "
+        f"loaded = sorted({{name.split('.')[0] for name in sys.modules}} "
+        f"& set({OPTIONAL_DISTRIBUTIONS!r})); "
+        "print(json.dumps(loaded))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(result.stdout) == []
