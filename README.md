@@ -358,11 +358,42 @@ routable from the host. To reuse an existing database instead, set
 | `db` | `upgrade-control`, `upgrade-tenants` |
 | `rls` | `install`, `verify` |
 | `schema` | `lint` |
+| `security` | `posture`, `evidence`, `compliance` |
 
 The CLI registers the `shared` and `schema` strategies. Provisioning a
 `database`-placement tenant needs the database strategy (with a
 `SecretProvider`) registered programmatically, since the CLI has no secret
 provider to resolve target DSNs.
+
+## Security and compliance
+
+Security documentation is indexed in [docs/security/README.md](docs/security/README.md):
+authentication, authorization, tenant isolation and row-level security, audit,
+observability, gateway trust, error responses, the adversarial review, the CI
+security gates and the compliance surface. [SECURITY.md](SECURITY.md) states what
+the library is responsible for, what it deliberately leaves to a deployment, and
+how to report a vulnerability.
+
+The `security` CLI group reports readiness against the control register:
+
+```bash
+jdlib security posture                 # every technical control, with reasons; exit 1 on a failure
+jdlib security posture --json --environment production
+jdlib security evidence --database-url "$JDLIB_CONTROL_DSN" --schema tenant_acme
+jdlib security compliance --framework soc2
+```
+
+`posture` assesses the profile you declare, and `--database-url` with `--schema`
+adds live observations (row-level security on the catalog, the revision the schema
+has applied). **These are technical controls, evidence and readiness — installing
+JDLib does not make an organisation certified or compliant**, and the register
+records its own gaps (tamper-evident audit storage is a deployment
+responsibility; Tyk plugin execution is not infrastructure-verified because the
+OSS image has no coprocess runtime, so those tests skip rather than pass).
+
+CI runs the gate plus dependency scanning, full-history secret scanning, static
+analysis, an SBOM and a packaging smoke test; `docs/security/ci-security.md` says
+what each covers, and which tools were evaluated and rejected.
 
 ## Extension points
 

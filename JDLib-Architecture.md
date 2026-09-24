@@ -1,7 +1,11 @@
 # JDLib — Complete Technical Architecture and Implementation Reference
 
 > **Single source of truth for the `jdlib` library.**
-> Derived entirely from the repository at commit `a30601d` (`main`).
+> Derived from the repository at commit `a30601d` (`main`) and synchronised with
+> the security-hardening programme at commit `4d113e5` (`main`, plus the
+> uncommitted phase 11 documentation sweep). §26.6 records exactly what that
+> synchronisation revised, what was verified by execution, and what remains as
+> inspected at `a30601d`.
 > Every architectural claim below is grounded in source code, tests, packaging
 > metadata, or the frozen design documents under `docs/`.
 > All file references use repository-relative paths with line numbers, e.g.
@@ -314,10 +318,14 @@ each of which is implemented:
 jdlib/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml                     # single CI job (ruff, mypy, pytest)
-├── .gitignore                         # ignores .venv, caches, dist, .superpowers, .worktrees
+│       └── ci.yml                     # two jobs: test (ruff, mypy, pytest) and
+│                                      #   security (phase 10 gates — §19.6)
+├── .gitleaks.toml                     # reviewed, value-pinned allowlist (phase 10)
+├── .gitignore                         # ignores .venv, caches, dist, .superpowers,
+│                                      #   .worktrees, tests/infra/out/, security-artifacts
 ├── README.md                          # 390-line consumer guide + canonical wiring
-├── pyproject.toml                     # hatchling metadata, deps, tool config (56 lines)
+│                                      #   (+ a security/compliance section, phase 11)
+├── pyproject.toml                     # hatchling metadata, deps, tool config (64 lines)
 ├── docs/
 │   ├── jdlib/
 │   │   ├── 02-relational-schema.md    # 538 lines — schema contract
@@ -326,23 +334,42 @@ jdlib/
 │   │   ├── 05-tenant-lifecycle.md     # 304 lines — lifecycle + relocation phases
 │   │   ├── 06-strategy-matrix.md      # 201 lines — three strategies + RLS
 │   │   └── 07-implementation-design.md# 839 lines — code-level blueprint
+│   ├── security/
+│   │   ├── security-core.md           # Phase 1 — context, config, errors, ports
+│   │   ├── authentication-hardening.md# Phase 2 — JWKS/JWT, tokens, ZITADEL, identity
+│   │   ├── authorization-hardening.md # Phase 3 — decisions, PDP port, Cerbos, PEP
+│   │   ├── gateway-hardening.md       # Phase 4 — adapters (Kong verified; Tyk limited)
+│   │   ├── error-responses.md         # Phase 5 — codes, envelope, WWW-Authenticate
+│   │   ├── audit-hardening.md         # Phase 6 — vocabulary, envelope, access, export
+│   │   ├── observability-hardening.md # Phase 7 — logs, metrics, spans, collector
+│   │   ├── adversarial-review.md      # Phase 8 — attacks, findings, verdicts
+│   │   ├── compliance-evidence.md     # Phase 9 — register, evidence, posture, CLI
+│   │   └── ci-security.md             # Phase 10 — the CI security gates
 │   └── superpowers/
 │       ├── specs/2026-09-21-jdlib-multitenancy-foundation-design.md
 │       └── plans/2026-09-21-jdlib-*.md   # 9 phase plans, all marked complete
+├── knowledge_base/                    # 36 documents describing the library at a30601d
 ├── src/
-│   └── jdlib/                         # 67 tracked files, 7,493 lines (shipped package)
-└── tests/                             # 68 tracked files, 13,023 lines
-    ├── unit/                          # 36 modules, 268 test defs
-    ├── integration/                   # 26 test modules + 3 support modules, 259 test defs
+│   └── jdlib/                         # 104 tracked files, 15,202 lines (shipped package)
+└── tests/                             # 125 tracked files, 23,269 lines
+    ├── unit/                          # 66 modules (37 top-level + 29 under security/),
+    │                                  #   677 test defs
+    ├── integration/                   # 33 test modules + 3 support modules, 307 test defs
+    ├── infra/                         # 5 modules, 35 test defs — Kong, Cerbos, ZITADEL,
+    │                                  #   OpenTelemetry and Tyk harnesses
     └── support/                       # test-only fakes and a consumer model fixture
 ```
 
-**Absent by design or by omission:** `examples/`, `LICENSE`, `CHANGELOG`,
-`CONTRIBUTING.md`, `SECURITY.md`, `Dockerfile`, compose files, `Makefile`,
-`tox.ini`, `noxfile.py`, lock files (`uv.lock`, `poetry.lock`), `setup.py`,
-`setup.cfg`, `requirements*.txt`, `.pre-commit-config.yaml`, `AGENTS.md`.
-`pyproject.toml` declares no `readme`, `license`, `authors`, `classifiers`,
-`keywords`, or `urls` metadata.
+**Absent by design or by omission:** `examples/`, `LICENSE`, `CONTRIBUTING.md`,
+`Dockerfile`, root compose files, `Makefile`, `tox.ini`, `noxfile.py`, lock files
+(`uv.lock`, `poetry.lock`), `setup.py`, `setup.cfg`, `requirements*.txt`,
+`.pre-commit-config.yaml`, `AGENTS.md`. `pyproject.toml` declares no `readme`,
+`license`, `authors`, `classifiers`, `keywords`, or `urls` metadata.
+
+**Added by the phase 11 documentation sweep (working tree, uncommitted at
+`4d113e5`; the tree above lists tracked files):** `CHANGELOG.md`, `SECURITY.md`,
+`docs/security/README.md`, `docs/compliance/README.md`,
+`docs/operations/README.md`, and a modified `README.md`.
 
 ### 3.2 Shipped package tree
 
@@ -387,7 +414,7 @@ src/jdlib/
 ├── integrations/
 │   ├── __init__.py                # docstring + __future__ only
 │   ├── fastapi.py                 # install, JdlibContainer, get_context, get_uow, require
-│   └── cli.py                     # Typer app: tenant/db/rls/schema groups
+│   └── cli.py                     # Typer app: tenant/db/rls/schema/security groups
 ├── migrations/
 │   ├── __init__.py                # empty
 │   ├── runner.py                  # MigrationRunner (synchronous, programmatic Alembic)
@@ -403,7 +430,7 @@ src/jdlib/
 │   ├── org.py                     # Organization, Team
 │   ├── settings.py                # TenantSetting
 │   ├── audit.py                   # tenant-plane AuditEvent
-│   └── audit_recorder.py          # TenantAuditRecorder
+│   └── audit_recorder.py          # TenantAuditRecorder + fail-closed attribution (§8.13)
 ├── persistence/
 │   ├── __init__.py                # empty
 │   ├── models.py                  # tenant_table_map, WriteFence, NullWriteFence,
@@ -421,7 +448,24 @@ src/jdlib/
 │       ├── shared.py              # SharedSchemaStrategy
 │       ├── schema.py              # SchemaPerTenantStrategy, validate_schema_name
 │       ├── database.py            # DatabasePerTenantStrategy, validate_database_handle
-│       └── rls.py                 # emit_rls_policies, install_rls, verify_rls
+│       └── rls.py                 # rls_eligible_tables, emit_rls_policies, install_rls,
+│                                  #   RlsInspection, inspect_rls, verify_rls
+├── security/                    # security programme (§15.4); __init__ files re-export
+│   ├── __init__.py              # core surface: context, config, errors, interfaces, responses
+│   ├── config.py                # SecurityConfig + sections, validate_security_config
+│   ├── context.py               # SecurityContext, RequestIds, AuthMethod, contextvar binding
+│   ├── errors.py                # SecurityCode/Descriptor, describe_error, www_authenticate
+│   ├── identity.py              # service-identity formalisation (IdentityKind, ServiceIdentity)
+│   ├── interfaces.py            # Authenticator/Gateway/RateLimiter/TokenProvider ports
+│   ├── redaction.py             # the one canonical secret-redaction pattern set
+│   ├── responses.py             # ErrorResponse, error_response (safe client-visible failures)
+│   ├── telemetry.py             # security_log_record, SecurityMetrics, safe_emit (Phase 7)
+│   ├── tracing.py               # traceparent parse/format, security spans (Phase 7)
+│   ├── audit/                   # vocabulary, envelope, emitters, access, export, adapters
+│   ├── authn/                   # algorithm policy, JwtTokenValidator, token provider, ZITADEL
+│   ├── authz/                   # decision model, PDP port, Cerbos adapter, AuthorizationPEP
+│   ├── gateway/                 # NoGatewayAdapter, KongGatewayAdapter, TykGatewayAdapter
+│   └── compliance/              # control register, evidence, posture, session collectors (§8.22)
 ├── tenancy/
 │   ├── __init__.py                # empty
 │   ├── resolution.py              # RequestInfo, resolvers, ResolverChain, build_chain
@@ -491,7 +535,10 @@ import `fastapi`, `pytest`, or `typer`.
 `__init__.py`; they are namespace-package portions. `jdlib.authz`,
 `jdlib.authn`, `jdlib.persistence`, `jdlib.tenancy`, and
 `jdlib.persistence.strategies` have **empty** `__init__.py` files with no
-re-exports.
+re-exports. The security programme's namespaces are the exception: `jdlib.security`
+and its sub-packages (`jdlib.security.audit`, `.authn`, `.authz`, `.gateway`,
+`.compliance`) have **non-empty** `__init__.py` files that re-export their
+deliberate public surface (§15.4, §8.22).
 
 ---
 
@@ -625,7 +672,10 @@ sequenceDiagram
 
 ## 5. Module Architecture
 
-### 5.1 Module inventory (64 Python modules + 2 Mako templates)
+### 5.1 Module inventory (64 pre-hardening modules + 2 Mako templates)
+
+The modules the library shipped at `a30601d`. The security programme's modules
+(added by phases 1–10) are inventoried separately in §5.3.
 
 | Module | Purpose | Public classes/functions | Depends on |
 |---|---|---|---|
@@ -656,7 +706,7 @@ sequenceDiagram
 | `jdlib.control.purge` | tenant-plane purge | `TenantPlanePurger` | sqlalchemy, config, context, models.base, persistence.models/session |
 | `jdlib.control.session` | control session wrapper | `ControlPlaneSession` | sqlalchemy |
 | `jdlib.integrations.fastapi` | FastAPI adapter | `JdlibContainer`, `install`, `get_context`, `get_uow`, `require` | fastapi, starlette, authz.guards/scopes, context, errors, persistence.uow, tenancy.middleware/resolution |
-| `jdlib.integrations.cli` | Typer CLI | `app` (+ 4 sub-apps) | typer, sqlalchemy, control.*, errors, lint, migrations.runner, models.base, persistence.strategies.{rls,schema,shared} |
+| `jdlib.integrations.cli` | Typer CLI | `app` (+ 5 sub-apps, incl. `security_app`) | typer, sqlalchemy, control.*, errors, lint, migrations.runner, models.base, persistence.strategies.{rls,schema,shared}, security.compliance(.session), security.config |
 | `jdlib.migrations.runner` | programmatic Alembic | `MigrationRunner` | alembic, sqlalchemy, control.base, errors |
 | `jdlib.migrations.control.env` | control Alembic env | `run_migrations_offline/online` | alembic, sqlalchemy, control.models/base |
 | `jdlib.migrations.tenant.env` | tenant Alembic env | `run_migrations_offline/online` | alembic, sqlalchemy, models.* |
@@ -664,7 +714,7 @@ sequenceDiagram
 | `jdlib.models.org` | example org graph | `Organization`, `Team` | sqlalchemy, models.base, `_uuid` |
 | `jdlib.models.settings` | example KV model | `TenantSetting` | sqlalchemy, models.base |
 | `jdlib.models.audit` | tenant audit model | `AuditEvent` | sqlalchemy, control.enums, models.base, `_uuid` |
-| `jdlib.models.audit_recorder` | tenant audit writer | `TenantAuditRecorder` | context, models.audit |
+| `jdlib.models.audit_recorder` | tenant audit writer | `TenantAuditRecorder` (`record`, `record_security`) | context, models.audit, security.audit, security.context |
 | `jdlib.persistence.models` | tenant model discovery + fence port | `tenant_table_map`, `WriteFence`, `NullWriteFence`, `privileged_bypass` | context, models.base |
 | `jdlib.persistence.session` | scoped session | `TenantSession`, `RawSqlAuditor` | sqlalchemy, context, errors, models.base, persistence.models, persistence.rawsql |
 | `jdlib.persistence.rawsql` | raw SQL proof | `RawSqlMode`, `CompiledRawSql`, `RawSqlValidator` | pglast, sqlalchemy, errors, persistence.models |
@@ -677,7 +727,7 @@ sequenceDiagram
 | `jdlib.persistence.strategies.shared` | shared-schema strategy | `SharedSchemaStrategy` | config, context, errors, migrations.runner, strategies.base/deprovision |
 | `jdlib.persistence.strategies.schema` | schema strategy | `validate_schema_name`, `SchemaPerTenantStrategy` | context, errors, migrations.runner, strategies.base/deprovision |
 | `jdlib.persistence.strategies.database` | database strategy | `validate_database_handle`, `DatabasePerTenantStrategy` | context, errors, migrations.runner, persistence.secrets, strategies.base/deprovision |
-| `jdlib.persistence.strategies.rls` | RLS install/verify | `rls_eligible_tables`, `emit_rls_policies`, `install_rls`, `verify_rls` | sqlalchemy, errors, models.base |
+| `jdlib.persistence.strategies.rls` | RLS install/inspect/verify | `rls_eligible_tables`, `emit_rls_policies`, `install_rls`, `RlsInspection`, `inspect_rls`, `verify_rls` | sqlalchemy, errors, models.base |
 | `jdlib.tenancy.resolution` | tenant resolution | `RequestInfo`, `TenantResolver`, `JwtClaimResolver`, `SubdomainResolver`, `PathResolver`, `HeaderResolver`, `ApiKeyResolver`, `ResolverChain`, `build_chain` | config, context |
 | `jdlib.tenancy.middleware` | ASGI pipeline | `http_status_for`, `PrincipalProvider`, `TenantMiddleware` | context, errors, tenancy.resolution |
 | `jdlib.tenancy.jobs` | cross-hop context | `ContextPropagator`, `tenant_job` | context, errors |
@@ -878,6 +928,62 @@ Leaves (no intra-package imports): `_uuid`, `config`, `errors`, `authn`,
 `integrations`, `migrations`, `persistence`, `persistence.secrets`,
 `persistence.strategies`, `persistence.strategies.deprovision`, `tenancy`.
 **No import cycles** exist in the static graph.
+
+### 5.3 Security-programme module inventory (`jdlib.security.*`)
+
+Added by the security-hardening programme (phases 1–10; see §15.4 for the phase
+documents). "Public names" counts `__all__` entries; "Depends on" lists
+module-level `jdlib.*` imports only. Third-party module-level imports across the
+whole namespace are limited to `pydantic` (the configuration models),
+`sqlalchemy` (`audit/export.py`, `compliance/session.py`), `pyjwt` (parts of
+`authn/`) and `httpx` (the two `transports.py` modules, behind the `http`
+extra); no web framework and no OpenTelemetry SDK is imported anywhere.
+
+| Module | Purpose | Public names | Depends on |
+|---|---|---|---|
+| `jdlib.security` | curated core surface | 38 re-exports | security.{config,context,errors,interfaces,responses} |
+| `jdlib.security.config` | `SecurityConfig` + sections, `validate_security_config`, `assert_strong_signing_key` | 13 | security.errors |
+| `jdlib.security.context` | `SecurityContext`, `RequestIds`, `AuthMethod`, `TokenMetadata`, contextvar binding | 8 | context, errors |
+| `jdlib.security.errors` | `SecurityCode`/`SecurityDescriptor`, `describe_error`, `www_authenticate` | 8 | errors |
+| `jdlib.security.identity` | service-identity formalisation (`IdentityKind`, `ServiceIdentity`) | 5 | context, errors |
+| `jdlib.security.interfaces` | `GatewayAdapter`, `TokenProvider`, `TokenValidator`, `RateLimiter`, … | 8 | security.context, tenancy.resolution |
+| `jdlib.security.redaction` | `REDACTED`, `SECRET_PATTERNS`, `SENSITIVE_KEYS`, `redact_text`, `is_sensitive_key` | 5 | stdlib only |
+| `jdlib.security.responses` | `ErrorResponse`, `error_response`, `MAX_MESSAGE_LENGTH` | 3 | security.{context,errors,redaction} |
+| `jdlib.security.telemetry` | structured logs, bounded metrics, `safe_emit` (phase 7) | 8 | security.{context,redaction} |
+| `jdlib.security.tracing` | W3C trace context and security spans (phase 7) | 12 | security.{context,redaction} |
+| `jdlib.security.audit` | audit namespace surface | 26 re-exports | security.audit.{access,adapters,emitters,events,export} |
+| `jdlib.security.audit.events` | `SecurityEventType`, `SecurityAuditEvent`, `audit_metadata` | 5 | `_uuid`, security.{context,redaction} |
+| `jdlib.security.audit.emitters` | `SecurityEventSink`, `TransactionAuditSink`, `authorization_audit_observer` | 6 | audit.events, security.authz.decision |
+| `jdlib.security.audit.access` | `AuditAccess`, `AuditCapability` | 2 | errors |
+| `jdlib.security.audit.export` | `AuditQuery`, `AuditPage`, `read_events`, `export_events`, renderers | 10 | models.audit, audit.{access,events} |
+| `jdlib.security.audit.adapters` | `AuditControlPlaneAudit`, `AuditPrivilegeAudit`, `AuditRawSqlAuditor` | 5 | context, persistence.rawsql, audit.{emitters,events} |
+| `jdlib.security.authn` | authentication namespace surface | 16 re-exports | security.authn.{algorithms,jwt,provider,zitadel} |
+| `jdlib.security.authn.algorithms` | `ASYMMETRIC_ALGORITHMS`, `assert_safe_algorithms` | 2 | security.errors |
+| `jdlib.security.authn.jwt` | `JwtTokenValidator`, `JwtClaimMapping`, `SigningKeySource` | 3 | authn.oidc, config, context, errors, security.* |
+| `jdlib.security.authn.provider` | `ClientCredentialsTokenProvider`, `ClientCredentialsConfig`, `ClientAuthMethod` | 6 | context, errors, security.* |
+| `jdlib.security.authn.zitadel` | `ZitadelConfig`, `build_zitadel_token_validator/provider`, `zitadel_provider_config` | 5 | authn.oidc, security.* |
+| `jdlib.security.authn.transports` | HTTP transports for authentication (the `http` extra) | 3 | security.authn.provider |
+| `jdlib.security.authz` | authorization namespace surface | 8 re-exports | security.authz.{cerbos,decision,interfaces,pep} |
+| `jdlib.security.authz.decision` | `AuthorizationDecision`, `AuthorizationQuery`, `Effect` | 3 | stdlib only |
+| `jdlib.security.authz.interfaces` | `PolicyDecisionPoint` port | 1 | security.authz.decision |
+| `jdlib.security.authz.cerbos` | `CerbosPDP`, `CerbosConfig`, `CerbosTransport` | 3 | context, security.authz.decision, security.errors |
+| `jdlib.security.authz.pep` | `AuthorizationPEP` | 2 | errors, security.{authz.decision,authz.interfaces,context} |
+| `jdlib.security.authz.transports` | HTTP transport for Cerbos (the `http` extra) | 2 | `httpx` only |
+| `jdlib.security.gateway` | gateway namespace surface | 5 re-exports | security.gateway.{adapters,config} |
+| `jdlib.security.gateway.adapters` | `NoGatewayAdapter`, `KongGatewayAdapter`, `TykGatewayAdapter` | 3 | context, security.{gateway.config,interfaces}, tenancy.resolution |
+| `jdlib.security.gateway.config` | `GatewayConfig`, `GatewayMode` | 3 | security.errors |
+| `jdlib.security.compliance` | compliance namespace surface (§8.22) | 22 re-exports | security.compliance.{controls,evidence,posture} |
+| `jdlib.security.compliance.controls` | `CONTROL_REGISTRY` and the control model | 10 | stdlib only |
+| `jdlib.security.compliance.evidence` | `SecurityEvidence` and the checkout-side collectors | 8 | `_uuid`, context, security.audit, security.config |
+| `jdlib.security.compliance.posture` | outcomes, findings, report, rules, `evaluate_posture` | 7 | context, security.compliance.{controls,evidence}, security.config |
+| `jdlib.security.compliance.session` | `collect_isolation_evidence`, `collect_schema_revision_evidence` | 2 | context, models.base, persistence.strategies.rls, security.compliance.evidence |
+
+The graph is acyclic and layered: `redaction`, `compliance.controls` and
+`authz.decision` are the leaves. `compliance.session` is the **only** module in
+the security tree that imports the persistence layer (§8.22). Inside the
+pre-hardening tree only two modules import the security namespace:
+`models/audit_recorder.py` (the security-audit envelope and the ambient security
+context) and `integrations/cli.py` (the `security` sub-app, §8.20).
 
 ---
 
@@ -1225,7 +1331,12 @@ async def authorize(
 | `build_chain` | `jdlib.tenancy.resolution` | `build_chain(config: ResolverConfig) -> ResolverChain` |
 | `lint_metadata` / `assert_clean` | `jdlib.lint` | `lint_metadata(controls: list[MetaData], rls_enabled: bool = False) -> list[LintIssue]` / `assert_clean(...) -> None` |
 | `TenantAuditRecorder` | `jdlib.models.audit_recorder` | `TenantAuditRecorder(session: object)` + `record(*, action, target_type=None, target_id=None, metadata=None) -> AuditEvent` |
-| `install_rls` / `verify_rls` | `jdlib.persistence.strategies.rls` | `install_rls(engine: AsyncEngine, *, metadata: sa.MetaData, app_role: str) -> None` / `verify_rls(engine: AsyncEngine, app_role: str, *, metadata: sa.MetaData) -> None` |
+| `install_rls` / `verify_rls` | `jdlib.persistence.strategies.rls` | `install_rls(engine: AsyncEngine, *, metadata: sa.MetaData, app_role: str) -> None` / `verify_rls(engine: AsyncEngine, app_role: str, *, metadata: sa.MetaData) -> None` (built on `inspect_rls`, §8.12) |
+| `RlsInspection` / `inspect_rls` | `jdlib.persistence.strategies.rls` | `inspect_rls(engine: AsyncEngine, *, metadata: sa.MetaData) -> RlsInspection`; frozen dataclass with `tables_checked`, `tables_enforced`, `tables_missing_rls`, `tables_missing_force`, `tables_missing_policy`, `tables_unprovisioned`, `is_enforced` |
+| `CONTROL_REGISTRY` and the control model | `jdlib.security.compliance` | `CONTROL_REGISTRY: Mapping[str, Control]`; `Control`, `ControlMapping`, `ControlFramework`, `ControlCategory`, `ImplementationStatus`, `VerificationMethod`, `control_by_id`, `controls_for_framework`, `frameworks_in_use` |
+| `evaluate_posture` / `PostureReport` | `jdlib.security.compliance` | `evaluate_posture(config: SecurityConfig, *, evidence=(), rules=None, clock=None, environment=None) -> PostureReport`; `PostureOutcome`, `Severity`, `PostureFinding`, `POSTURE_RULES` |
+| `SecurityEvidence` and collectors | `jdlib.security.compliance` / `.session` | `collect_configuration_evidence`, `collect_migration_evidence`, `collect_policy_evidence`; the session-backed `collect_isolation_evidence` / `collect_schema_revision_evidence` (async, `AsyncEngine`) |
+| `security_app` | `jdlib.integrations.cli` | `security_app = typer.Typer(no_args_is_help=True)` — the `security` group: `posture`, `evidence`, `compliance` (§8.20) |
 | assertions | `jdlib.testing` | `assert_scoped_count`, `assert_tenant_isolated`, `assert_cross_tenant_write_rejected` |
 
 ### 6.3 What happens internally after a consumer call
@@ -1254,7 +1365,8 @@ Principal (frozen, slots)                 TenantContext (frozen, slots)
  ├── tenant_id: UUID | None   (pin)       ├── principal: Principal
  ├── api_key_id: UUID | None              ├── request_id / correlation_id: str
  ├── scopes: frozenset[str] | None        ├── trace_id: str | None
- └── operator_level: OperatorLevel | None └── privilege: PrivilegeContext | None
+ └── operator_level: OperatorLevel | None ├── privilege: PrivilegeContext | None
+                                          └── live_privilege(now) -> PrivilegeContext | None
 
 PrivilegeContext (frozen, slots)
  ├── kind: PrivilegeKind (operator|system|test)
@@ -1262,7 +1374,8 @@ PrivilegeContext (frozen, slots)
  ├── justification: str | None
  ├── actor: Principal
  ├── issued_at: datetime
- └── expires_at: datetime | None
+ ├── expires_at: datetime | None
+ └── is_live(now) -> bool                # bounded on both sides — §8.1
 ```
 
 Collaborator protocols and their production implementations:
@@ -1523,6 +1636,21 @@ check; `for_test` additionally requires `config.allow_test_contexts`; a random
 `PLATFORM_OPERATOR` actor and non-expiring `SYSTEM`/`TEST` privilege are built
 and audited. Neither path consults the tenant directory, entitlement checker,
 or servability checker.
+
+**Privilege liveness (phase 8).** A privilege is bounded on both sides.
+`PrivilegeContext.is_live(now)` (`context.py:63-72`) refuses a context used
+before `issued_at` as well as one used at or after `expires_at` (`None` means the
+kind carries no expiry), and every enforcement point reads the privilege through
+`TenantContext.live_privilege(now)` (`context.py:86-95`) rather than the field,
+so "the context carries a privilege" can never be mistaken for "the privilege is
+still good". `TenantSession` decides through one `_privilege_refusal(...)`
+helper (`persistence/session.py:258-276`) that names why a missing, not-yet-valid
+or expired privilege cannot authorize the action — "you never had it" and "it
+lapsed" are different findings for an investigator. Every privileged gate uses
+it: hard delete in `before_flush`, `update_where` of `tenant_id`, `delete_where`
+on a `SoftDelete` model, and privileged raw SQL, with the refusal recorded
+through the auditor before the raise where the path audits
+(`persistence/session.py:253, 338, 356, 378-395`).
 
 **Error flow.** All raises are `JdlibError` subclasses, so the ASGI middleware
 maps them to 401/404/423 by the table in §13.3. The ordering of entitlement
@@ -2247,7 +2375,7 @@ use `DEPLOYMENT_SCHEMA_RE = [a-z_][a-z0-9_]{0,62}`; both `fullmatch` and raise
 helper module used by the CLI, by consumer Alembic environments
 (`emit_rls_policies`), and by operators (`install_rls`/`verify_rls`).
 
-**Policy emitted per eligible table** (`strategies/rls.py:53-67`):
+**Policy emitted per eligible table** (`strategies/rls.py:54-67`):
 
 ```sql
 ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;
@@ -2260,20 +2388,33 @@ CREATE POLICY tenant_isolation ON <t>
 ```
 
 Eligibility: `TenantRouted` subclasses present in the supplied metadata
-(`rls_eligible_tables`, `rls.py:39-50`).
+(`rls_eligible_tables`, `rls.py:40-51`).
 
-**Install** (`rls.py:78-105`): up to three attempts, each with
+**Install** (`rls.py:79-106`): up to three attempts, each with
 `SET LOCAL lock_timeout = '5s'` inside the DDL transaction; retries only for
 exception class names `DeadlockDetectedError` and `LockNotAvailableError` with
 `asyncio.sleep` delays of 0.25 s then 0.50 s; a successful install always
 follows with `verify_rls`.
 
-**Verify** (`rls.py:108-136`): the app role must exist, must be neither
-`BYPASSRLS` nor a superuser, every eligible table must be visible via
-`to_regclass`, RLS must be enabled **and** forced, and the
-`tenant_isolation` policy must exist. Failures raise `StrategyCapabilityError`
-and include a hint that the engine must be bound to the target schema
-(`tests/unit/test_rls_policies.py:10-53`).
+**Inspect** (`rls.py:109-172`): reading the catalog and judging it are separate
+concerns. `inspect_rls(engine, *, metadata)` returns a frozen `RlsInspection` —
+`tables_checked`, `tables_enforced`, the four problem tuples
+(`tables_missing_rls`, `tables_missing_force`, `tables_missing_policy`,
+`tables_unprovisioned`) and the `is_enforced` property — and makes no judgement:
+a table the engine cannot see is reported as unprovisioned, because for evidence
+that is an observation and for a caller who asked for a schema it is a failure
+it can explain.
+
+**Verify** (`rls.py:175-197`): the app role must exist, must be neither
+`BYPASSRLS` nor a superuser, and then `verify_rls` raises
+`StrategyCapabilityError` on the first problem `inspect_rls` reports, including
+a hint that the engine must be bound to the target schema
+(`tests/unit/test_rls_policies.py:10-53`). The split exists because the guard
+must raise on the first problem while evidence has to report *all* of them, and
+both must agree on what the catalog said:
+`jdlib.security.compliance.session.collect_isolation_evidence` shares
+`inspect_rls` (§8.22), which is why the CLI's `rls verify` and the evidence path
+cannot drift apart.
 
 **Session binding.** `SharedSchemaStrategy` sets `app.tenant_id` in an
 `after_begin` listener with `set_config(..., true)` (transaction-local), so an
@@ -2288,7 +2429,7 @@ unset setting yields **zero** rows, never all rows
 
 | Aspect | Platform audit | Tenant audit |
 |---|---|---|
-| Port | `PlatformAudit` protocol (`control/audit.py:27-37`) | `TenantAuditRecorder` class (`models/audit_recorder.py:10-36`) |
+| Port | `PlatformAudit` protocol (`control/audit.py:27-37`) | `TenantAuditRecorder` class (`models/audit_recorder.py:37-117`) |
 | Durable model | `jd_control.platform_audit_events` | `<tenant schema>.audit_events` |
 | Implementations | `DatabaseAuditSink`, `CompositeAuditSink`, `RecordingPlatformAudit`; `NullPlatformAudit` **raises** `RuntimeError("no platform audit sink is configured")` | writes into the consumer's `TenantSession` |
 | Identity columns | `request_id`, `correlation_id`, `trace_id` filled from the active context when present, else `NULL` | same, always from the context (context is required) |
@@ -2317,9 +2458,26 @@ entirely so older sinks lacking the parameter still work.
 `actor_type=actor.kind.value`, and
 `metadata={"capability": …, "justification": …}`.
 
-**`TenantAuditRecorder.record`** (`models/audit_recorder.py:29-52`): requires a
+**`TenantAuditRecorder.record`** (`models/audit_recorder.py:42-64`): requires a
 context (`MissingTenantContext` otherwise), stamps tenant/actor/request ids,
 copies metadata, `add()`s the row, and never flushes or commits.
+
+**Attribution is fail-closed and time is corroborated (phase 8).**
+`TenantAuditRecorder.record_security(event)` (`models/audit_recorder.py:66-117`)
+persists a `SecurityAuditEvent` (`jdlib.security.audit`) in the caller's
+transaction and refuses a row that would be mis-attributed: an event naming
+another tenant, or another actor id or actor kind, than the ambient one raises
+`ValueError` rather than being written — a mis-attributed audit row points an
+investigation at the wrong tenant or blames the wrong principal, which is worse
+than a missing row. The actor is taken from the most specific bound context (the
+request's `SecurityContext` when there is one, else the `TenantContext`,
+`_ambient_actor`, `audit_recorder.py:22-34`), and an event that names no actor
+is attributed the same way the tenant is. The timestamp is corroborated rather
+than trusted: `occurred_at` must sit within `MAX_TIMESTAMP_SKEW` (one minute,
+`audit_recorder.py:19`) of the recorder's clock, so request-derived data cannot
+backdate, postdate or replay an entry. Reading history is not writing it —
+`export` rebuilds envelopes from stored rows with their original timestamps
+(`docs/security/audit-hardening.md`).
 
 ---
 
@@ -2496,9 +2654,9 @@ but the handler's own session does not re-validate the guard's decision.
 
 ### 8.20 Typer CLI
 
-**Public API.** `app` (`jdlib.integrations.cli`). Five Typer app objects:
-`app`, `tenant_app`, `db_app`, `rls_app`, `schema_app`
-(`integrations/cli.py:33-41`). Shared options: `--database-url` (env
+**Public API.** `app` (`jdlib.integrations.cli`). Six Typer app objects:
+`app`, `tenant_app`, `db_app`, `rls_app`, `schema_app`, `security_app`
+(`integrations/cli.py:52-62`). Shared options: `--database-url` (env
 `JDLIB_CONTROL_DSN`), `--shared-schema` (default `public`), `--json`.
 
 | Group | Command | Options/arguments |
@@ -2511,14 +2669,21 @@ but the handler's own session does not re-validate the guard's decision.
 | `rls` | `install` | `--schema`, `--app-role` |
 | `rls` | `verify` | `--schema`, `--app-role` |
 | `schema` | `lint` | `--rls/--no-rls`; **no** database/shared-schema options |
+| `security` | `posture` | `--environment`, `--database-url` + `--schema` (live evidence), `--branch` (default `tenant`), `--policy-directory`, `--pdp-kind` (default `cerbos`), `--json`; **exits 1 when any control FAILs** (§8.22) |
+| `security` | `evidence` | the same options; prints the evidence records behind the report (`--json` emits the list) |
+| `security` | `compliance` | `--framework`, `--environment`, `--json`; the register and its framework mappings plus the posture counts |
 
 The CLI registers only `SharedSchemaStrategy` and `SchemaPerTenantStrategy`
-(`integrations/cli.py:84-95`); database placement requires programmatic
+(`integrations/cli.py:115-127`); database placement requires programmatic
 wiring (`README.md:362-365`). It cannot suspend/resume/archive/deprovision,
 manage identities/roles/grants/invitations, choose a revision, or downgrade.
-`JdlibError` and SQLAlchemy errors print `error: …` to stderr with exit code 1;
-unexpected exceptions are not normalized. There is no `[project.scripts]`
-entry — consumers expose `app` themselves (`README.md:69-72`).
+The `security` group is read-only reporting: it assesses the profile the
+operator declares (`--environment`) rather than a deployment's private settings,
+`--database-url` without `--schema` is refused, and an unknown environment,
+branch or framework is a `BadParameter`. `JdlibError` and SQLAlchemy errors
+print `error: …` to stderr with exit code 1; unexpected exceptions are not
+normalized. There is no `[project.scripts]` entry — consumers expose `app`
+themselves (`README.md:69-72`).
 
 ---
 
@@ -2583,6 +2748,99 @@ graph TB
     REG --> STRATS
     READER --> CP
 ```
+
+---
+
+### 8.22 Compliance evidence and posture (`jdlib.security.compliance`)
+
+**Overview.** The compliance surface (phase 9; directive §9.1–§9.5) answers
+"which technical controls does this library implement, what evidence stands
+behind that claim, and are they in force here" — and answers in readiness
+language throughout. A `ControlMapping` names where a control *belongs* in a
+framework; it is never an audit result, and the package docstring says so. Three
+properties are enforced by tests because each decays silently: **no silent
+partials** (a status other than `IMPLEMENTED`/`NOT_APPLICABLE` must carry a
+`status_note`), **every cited `evidence_sources` path must exist on disk**, and
+**at least three gaps must be recorded** so the register cannot quietly become a
+wish list. The register's own gaps are in the register, not omitted from it
+(`docs/security/compliance-evidence.md`).
+
+**The registry — 19 controls over 7 framework families.** `CONTROL_REGISTRY`
+(`controls.py:759-761`) is a frozen `Mapping[str, Control]`; `Control` carries
+`control_id`, `title`, `description`, `category`, `implementation_status`,
+`mappings`, `evidence_requirements`, `evidence_sources`, `technical_owner`,
+`verification_method` and an optional `status_note`. Control ids are shaped
+`JDL-…` (`JDL-AUTHN-01`, `JDL-ISO-01`, `JDL-SUPPLY-01`, …) and map onto
+`ControlFramework` members — SOC 2, ISO/IEC 27001, NIST CSF, NIST SP 800-53,
+OWASP ASVS, OWASP API Security Top 10, CIS — the seven families
+`frameworks_in_use()` returns. At this revision the register holds 19 controls:
+15 `IMPLEMENTED`, 2 `PARTIAL` (Tyk plugin execution; pipeline security), 1
+`NOT_IMPLEMENTED` with its reason (tamper-evident audit storage — a deployment
+responsibility, not a library one) and 1 `NOT_APPLICABLE` (replay protection for
+a stateless validator). `control_by_id`, `controls_for_framework` and
+`frameworks_in_use` are the lookup helpers (§26.6 records the run that confirmed
+these counts).
+
+**Evidence (directive §9.3).** `SecurityEvidence` is a frozen dataclass that
+makes the five required properties structure rather than convention:
+`observations` (a flat mapping of JSON scalars, passed through the **same**
+sanitiser as audit metadata — `jdlib.security.audit.audit_metadata` — so a
+credential-shaped value is redacted, a credential-named key is redacted whole,
+and a nested or oversized value is refused rather than smuggled into a report),
+`collected_at` (from an injected clock), `collected_by` (cannot be blank),
+`reproducible` (the command or procedure that regenerates the observation) and
+`control_id`/`subject`; `repr` prints observation *keys*, never values. Four
+collectors ship in `evidence.py`: `collect_configuration_evidence` (reads the
+fixed allow-list `CONFIGURATION_EVIDENCE_KEYS`, 16 keys, so a future field
+cannot arrive in a report unreviewed), `collect_migration_evidence` (one head per
+branch of `MIGRATION_BRANCHES = ("control", "tenant")`, refusing a branch with
+two heads or a revision file with no identifier), `collect_policy_evidence`
+(names and counts of policy files only — a policy body is a deployment's
+business and is never read) — and two session-backed collectors in
+`evidence`'s sibling `session.py`: `collect_isolation_evidence` (the
+PostgreSQL catalog, through `inspect_rls`, §8.12) and
+`collect_schema_revision_evidence` (the revision a live schema has applied,
+against the checkout's expected head; a missing revision table is an observation,
+not an error). A collector that cannot reach its subject raises: "no evidence"
+is a state a report may describe, but an assumed state is not.
+
+**Posture (directive §9.4).** `evaluate_posture(config, *, evidence=(), rules=None,
+clock=None, environment=None)` (`posture.py:667-716`) evaluates **every** control
+in the registry exactly once and returns a `PostureReport` — findings in
+deterministic order, `counts`, `worst_outcome`, `is_ready`, `failures` and
+`as_dict()`; a registry control with no rule raises. The four outcomes are
+`PASS` / `WARN` / `FAIL` / `NOT_APPLICABLE` with a `Severity` per finding, and
+the semantics are fixed in the module rather than left to each rule: `PASS` is a
+control in force — either a gate inside a code path a caller cannot route around
+or a state something actually observed; `WARN` is in force but unverified here
+(no evidence, or incomplete evidence, and the reason names what is missing), or
+switched off in `development`, the profile that declares itself unsafe on
+purpose; `FAIL` is a control that should be in force and is absent, disabled or
+contradicted; `NOT_APPLICABLE` is a subject this deployment does not have. A
+finding needs a reason of at least 20 characters, must name a known control, and
+cannot cite another control's evidence; serialization carries outcomes, reasons
+and evidence *summaries* — never observation values. `POSTURE_RULES` covers the
+registry exactly, and `rules=` exists so a caller (and the tests) can document
+what a missing rule would look like.
+
+**Import isolation.** The namespace is additive by construction: the security
+core's public surface is pinned by an exact-equality test, so new compliance API
+lives in a submodule rather than in `jdlib.security`. Importing
+`jdlib.security.compliance` pulls no optional dependency and nothing from the
+persistence layer; `compliance/session.py` is the only module in the namespace
+that imports it (`jdlib.persistence.strategies.rls`, `jdlib.models.base`), and
+the CLI imports that module explicitly (§8.20). A posture report over a
+configuration therefore needs no database.
+
+**Tests.** 65 unit tests — 9 (`test_compliance_controls.py`), 12
+(`test_compliance_evidence.py`), 31 (`test_compliance_posture.py`), 13
+(`tests/unit/test_cli_security.py`) — plus 6 live-collector tests on real
+PostgreSQL (`tests/integration/test_compliance_live_collectors.py`). The phase
+document also records a bug the phase found in itself: the audit-posture rule
+selected its configuration section by string, silently read the wrong section and
+would have passed a deployment with the audit trail switched off; it now takes
+the section name and uses `getattr`, with the regression test
+(`docs/security/compliance-evidence.md` §4).
 
 ---
 
@@ -2928,7 +3186,8 @@ referenced only through DSN strings.
 |---|---|---|
 | `fastapi` | `fastapi>=0.111` | `jdlib.integrations.fastapi` |
 | `cli` | `typer>=0.12` | `jdlib.integrations.cli` |
-| `dev` | the above plus `pytest>=8.2`, `pytest-asyncio>=0.23`, `ruff>=0.5`, `mypy>=1.10`, `testcontainers[postgres]>=4.5` | development, lint, type check, integration tests |
+| `http` | `httpx>=0.27` | the real HTTP transports of `jdlib.security.authn.provider` / `jdlib.security.authz.cerbos` (added by phase 2; `httpx` is already a core dependency, so the extra exists to let a consumer state the requirement explicitly) |
+| `dev` | the above plus `httpx>=0.27`, `pytest>=8.2`, `pytest-asyncio>=0.23`, `ruff>=0.5`, `mypy>=1.10`, `testcontainers[postgres]>=4.5` | development, lint, type check, integration tests |
 
 There are no `test`, `lint`, `typing`, or `all` extras.
 
@@ -3090,7 +3349,7 @@ pieces they need (`SharedSchemaStrategy(rls=…)`, `MigrationRunner(url)`,
 
 ## 13. Error and Exception Architecture
 
-### 13.1 Hierarchy (27 subclasses of `JdlibError`)
+### 13.1 Hierarchy (28 subclasses of `JdlibError` in this module, 27 exported; 31 package-wide)
 
 ```text
 Exception
@@ -3113,6 +3372,7 @@ Exception
     │   └── UnknownPrincipal
     ├── AuthorizationError
     │   ├── PermissionDenied
+    │   ├── AuthorizationUnavailable
     │   └── RoleEscalationBlocked
     ├── StrategyCapabilityError
     ├── PoolCapacityError
@@ -3124,9 +3384,15 @@ Exception
     └── MigrationError
 ```
 
-`errors.__all__` lists the 27 subclasses (not the base class). Only
-`TenantNotFound`, `CrossTenantReferenceError`, and `SchemaLintError` define
-custom constructors; `SchemaLintError.issues` is the only custom attribute.
+`errors.__all__` lists 27 subclasses (not the base class). A 28th,
+`AuthorizationUnavailable` (`errors.py:81-91`, added by the security programme's
+error-response work), is defined alongside them but is not in
+`jdlib.errors.__all__`; it is re-exported through `jdlib.security`
+(`security/errors.py:220`), mapped to `503`/retryable there, and raised by the
+authorization enforcement point when a decision could not be taken (§8.22's
+neighbours; `docs/security/error-responses.md` §4). Only `TenantNotFound`,
+`CrossTenantReferenceError`, and `SchemaLintError` define custom constructors;
+`SchemaLintError.issues` is the only custom attribute.
 
 ### 13.2 Where each error is raised
 
@@ -3225,22 +3491,35 @@ graph TD
 | Raw-SQL execution records (privileged only) | **Implemented** | `RawSqlAuditor.record_raw_sql`; ordinary tenant-bound raw SQL is **not** audited |
 | `request_id` | **Implemented** | generated per request (`uuid4().hex`) |
 | `correlation_id` | **Implemented** | from `x-correlation-id`, defaulting to `request_id` |
-| `trace_id` | **Partial** | extracted from a W3C `traceparent` second field; no span/trace export |
-| W3C `traceparent` propagation | **Partial** | parsed, never emitted |
+| `trace_id` | **Implemented** | strict W3C `traceparent` parse (`jdlib.security.tracing.request_ids_from_headers`), carried into logs and audit rows |
+| W3C `traceparent` propagation | **Implemented** | parsed strictly and re-rendered by `format_traceparent`; spans are emitted through a caller-supplied OpenTelemetry-compatible tracer, with no SDK dependency in the library |
 | Signed cross-hop context | **Implemented** | `EnvelopeCodec` (identity + request ids + signature) |
+| Structured security logs | **Implemented** | `jdlib.security.telemetry.security_log_record` — fixed field set (`LOG_FIELDS`), redaction-enforced, identifiers filled from the ambient security context (phase 7; `docs/security/observability-hardening.md` §1) |
+| Security metrics | **Implemented** | `SecurityMetrics` with a bounded label allow-list (`BOUNDED_LABELS`, `FORBIDDEN_LABELS`, `KNOWN_METRICS`); a smuggled identifier label is refused with `MetricLabelError` (phase 7, §2) |
+| Telemetry failure isolation | **Implemented** | `safe_emit` swallows a telemetry error and reports it once, so a collector outage cannot disable security (phase 7, §3) |
+| Security spans | **Implemented** | `SecuritySpan` / `security_span` — duck-typed against the OpenTelemetry API; span failures are swallowed in both directions (phase 7, §4) |
+| Security audit events | **Implemented** | `jdlib.security.audit` vocabulary + envelope, with producers for authorization decisions, privilege issuance, raw SQL and control-plane actions; `TenantAuditRecorder.record_security` persists them in the caller's transaction (§8.13) |
 
-### 14.2 What is explicitly absent
+### 14.2 What is explicitly absent (revised — phase 7)
 
-* **No logging at all.** There is no `logging` import, no logger, no
-  `logger.debug/info/warning/error` call anywhere in `src/jdlib`. No log
-  levels, no structured logging, no log configuration, no redaction helper.
-* **No metrics**, no counters, no histograms, no Prometheus/OpenTelemetry
-  instrumentation, no tracing SDK usage, no health endpoint.
+The pre-hardening text of this section said "no logging at all" and "no
+metrics"; that is no longer true, and the phase 7 surface is **Implemented**
+above. What remains absent:
+
+* **No logger configuration and no handler.** The library builds a structured
+  security record and leaves emission to the application's logging setup. The
+  only `logging` use in `src/jdlib` is one lazy `getLogger(...).warning` call in
+  `security/telemetry.py:264-266`, which reports a swallowed `safe_emit`
+  failure once.
+* **No metrics backend and no SDK dependency** — no Prometheus exposition, no
+  OpenTelemetry SDK import (the span layer is duck-typed and the application
+  supplies any tracer), no health endpoint.
+* **No log shipping, rotation, sampling or dashboards.**
 * **No debug utilities.**
 
-Consequence: operational visibility must be built by the consumer from the
-audit tables, the CLI `--json` output, and the request/correlation/trace ids in
-`TenantContext`.
+Consequence: operational visibility is built by the consumer from the audit
+tables, the structured security records, the metric surface and the CLI `--json`
+output, joined by the request/correlation/trace ids in `TenantContext`.
 
 ### 14.3 Audit event vocabulary (platform)
 
@@ -3252,8 +3531,22 @@ audit tables, the CLI `--json` output, and the request/correlation/trace ids in
 | privilege issuance | `privilege.operator`, `privilege.system`, `privilege.test` |
 | raw SQL | consumer-supplied `RawSqlAuditor` (library ships only the no-op default) |
 
-Tenant-plane `AuditEvent.action` is free-form; the only shipped writer is
-`TenantAuditRecorder`, which the consumer calls.
+Tenant-plane `AuditEvent.action` is free-form; the shipped writers are
+`TenantAuditRecorder.record` (which the consumer calls) and
+`TenantAuditRecorder.record_security`, which writes the security-event envelope
+into the same table (§8.13).
+
+The security programme added a **frozen vocabulary** for security events:
+`jdlib.security.audit.SecurityEventType` holds 36 members — the directive's 34
+event names plus the two audit-access events (`AUDIT_READ_DENIED`,
+`AUDIT_EXPORTED`) — grouped by category (authentication, authorization,
+tenancy, privilege, security), with `SecurityAuditEvent` as the envelope and
+producers that include the authorization enforcement point
+(`authorization_audit_observer`), the privilege and raw-SQL adapters, and the
+control-plane adapters (`jdlib.security.audit.adapters`). A test asserts the
+vocabulary is exactly the intended list, because evidence mappings and
+dashboards key off these strings; `docs/security/audit-hardening.md` is the
+reference, including its integrity evaluation and recorded residual risk.
 
 ### 14.4 Correlation model
 
@@ -3296,11 +3589,14 @@ context is active and leaves them `NULL` otherwise
 | Invitation secrets | Argon2id hashes; lookup id separated from secret; single-use conditional claim | `access.py:102-117, 920-1027` |
 | Identity verification | OIDC signature/issuer/audience/algorithm/time; API-key prefix scoping; no token material in audit metadata | `oidc.py:82-124`, `apikey.py:61-103` |
 | Context signing | HMAC-SHA256 + TTL + future-timestamp rejection | `context.py:387-438` |
-| Privileged access | `PrivilegeContext` with capability, justification, expiry, audit; `for_system`/`for_test` gated by a private sentinel | `context.py:254-372` |
+| Privileged access | `PrivilegeContext` with capability, justification, expiry, and **liveness enforced at every gate** (§8.1); `for_system`/`for_test` gated by a private sentinel | `context.py:254-372`, `persistence/session.py:258-276` |
 | Write admission | `RegistryWriteFence` blocks writes (and guarded reads) while unservable | `registry.py:636-652` |
 | Schema invariants | 12 lint rules incl. cascade-path and cross-plane FK bans | `lint.py:71-194` |
-| RLS | `ENABLE` + `FORCE` + `NOBYPASSRLS` verification; transaction-local `app.tenant_id` | `strategies/rls.py:53-136`, `shared.py:33-53` |
-| Secret redaction | `SecretStr` config, Argon2 at rest, DSNs never logged (no logging) | `config.py`, `authn/apikey.py`, `authz/access.py` |
+| RLS | `ENABLE` + `FORCE` + `NOBYPASSRLS` verification; transaction-local `app.tenant_id`; one shared catalogue inspection behind the guard and the evidence | `strategies/rls.py:54-197`, `shared.py:33-53` |
+| Secret redaction | `SecretStr` config, Argon2 at rest, DSNs never logged; one canonical redaction pattern set behind error responses, audit metadata, telemetry and evidence | `config.py`, `authn/apikey.py`, `authz/access.py`, `security/redaction.py` |
+| Security audit trail | frozen `SecurityEventType` vocabulary + `SecurityAuditEvent` envelope, fail-closed attribution, clock-corroborated timestamps | `security/audit/`, `models/audit_recorder.py:66-117` |
+| Compliance readiness | 19-control register mapped onto 7 framework families; posture over a declared configuration and observed evidence; `posture` exits non-zero on FAIL | `security/compliance/` (§8.22) |
+| CI supply chain | pinned pip-audit / gitleaks (full history) / bandit / CycloneDX / build gates, every one build-failing | `.github/workflows/ci.yml`, `docs/security/ci-security.md` (§19.6) |
 | Identifier safety | driver-level quoting for schema names; handle regexes; `%` doubling in Alembic URLs | `schema.py:16-23,67-84`, `database.py:18-43`, `runner.py:35-52` |
 | Error non-disclosure | unentitled caller for a suspended tenant gets 404, not 423 | `context.py:232-252` |
 
@@ -3328,6 +3624,11 @@ context is active and leaves them `NULL` otherwise
 * **DDL/DML hardening, database role separation** beyond what RLS helpers and
   the `NOBYPASSRLS` check enforce; PostgreSQL superuser/owner caveats are
   documented for RLS only.
+* **Certification and audit results** — the compliance surface maps technical
+  controls to framework references, collects evidence and reports readiness; it
+  is not an audit result, and installing the library does not make an
+  organisation certified or compliant (`docs/security/compliance-evidence.md`,
+  `docs/compliance/README.md`).
 * **Backups, HA, connection proxying, observability pipelines.**
 
 ### 15.3 Threat-oriented notes (evidence-based)
@@ -3342,6 +3643,33 @@ context is active and leaves them `NULL` otherwise
 | RLS bypass | FORCE + `NOBYPASSRLS` + superuser/bypass checks in `verify_rls` | the strategy does not enforce the runtime role; an engine connected as owner/superuser bypasses policies (`tests/integration/test_rls_db.py` covers these negatives) |
 | Cross-tenant FK/reference | composite tenant FKs, `RESTRICT`, lint L2/L3/L15 | `ResourceGrant` and `RoleBinding` principal/resource references are logical, validated only through injected lookups |
 | Deleted-tenant data leakage | `PlatformAuditEvent.tenant_id` intentionally has no FK so audit history survives deletion; row data is purged by strategies/purger | none observed |
+
+### 15.4 Security-hardening programme (phases 1–11)
+
+The security work after `a30601d` was delivered as a numbered programme. Each
+phase has one document under `docs/security/`, and each document carries its own
+`Status:` line, the tests behind its claims and the gaps it did not close. The
+phase numbers are the programme's own; they are unrelated to the foundation
+phases in `docs/superpowers/plans/`.
+
+| Phase | Document | What it added |
+|---|---|---|
+| 1 | `security-core.md` | `jdlib.security` — `SecurityContext`, `SecurityConfig`, the error model, the ports |
+| 2 | `authentication-hardening.md` | JWKS hardening, algorithm policy, `JwtTokenValidator`, outbound token provider, ZITADEL adapter, service identities |
+| 3 | `authorization-hardening.md` | decision model, PDP port, fail-closed Cerbos adapter, `AuthorizationPEP` |
+| 4 | `gateway-hardening.md` | gateway adapters and trust rules (Kong 3.6 verified; the Tyk live path is not verified) |
+| 5 | `error-responses.md` | stable codes, HTTP mapping, safe envelope, `WWW-Authenticate`, the 403 → 503 change |
+| 6 | `audit-hardening.md` | security event vocabulary, envelope, emitters, audit access and export, integrity evaluation |
+| 7 | `observability-hardening.md` | structured logs, bounded metrics, telemetry failure isolation, spans, collector verification |
+| 8 | `adversarial-review.md` | the adversarial pass, and the privilege-liveness and audit-corroboration fixes (§8.1, §8.13) |
+| 9 | `compliance-evidence.md` | the control register, evidence, posture and the `security` CLI (§8.22) |
+| 10 | `ci-security.md` | the `security` CI job's five gates (§19.6) |
+| 11 | (this revision) | the documentation sweep: `CHANGELOG.md`, `SECURITY.md`, the indexes, and this synchronisation (§26.6) |
+
+Verification status is per document and deliberately uneven: Kong 3.6 is the
+verified gateway while the Tyk plugin path is not infrastructure-verified
+(§19.7). Nothing in this set is a certification, an audit result, or a
+substitute for one.
 
 ---
 
@@ -3570,10 +3898,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev     = ["fastapi>=0.111", "mypy>=1.10", "pytest>=8.2", "pytest-asyncio>=0.23",
-           "ruff>=0.5", "testcontainers[postgres]>=4.5", "typer>=0.12"]
+dev     = ["fastapi>=0.111", "httpx>=0.27", "mypy>=1.10", "pytest>=8.2",
+           "pytest-asyncio>=0.23", "ruff>=0.5", "testcontainers[postgres]>=4.5",
+           "typer>=0.12"]
 fastapi = ["fastapi>=0.111"]
 cli     = ["typer>=0.12"]
+http    = ["httpx>=0.27"]
 
 [project.entry-points.pytest11]
 jdlib = "jdlib.testing.pytest_plugin"
@@ -3582,7 +3912,7 @@ jdlib = "jdlib.testing.pytest_plugin"
 packages = ["src/jdlib"]
 ```
 
-Source: `pyproject.toml:1-40` (56 lines total).
+Source: `pyproject.toml:1-42` (64 lines total).
 
 ### 18.2 Packaging facts and gaps
 
@@ -3594,6 +3924,7 @@ Source: `pyproject.toml:1-40` (56 lines total).
 | sdist target | not configured | hatchling's default applies |
 | Entry points | `pytest11` only | **no console script**; consumers expose `jdlib.integrations.cli:app` themselves |
 | Version source | hard-coded in `pyproject.toml:7` and `__init__.py:27` | duplicated, not dynamic |
+| Optional extras | `fastapi`, `cli`, `http` | `http` (`httpx>=0.27`) was added by phase 2; `httpx` is also a core dependency |
 | `readme`, `license`, `authors`, `classifiers`, `keywords`, `urls` | **absent** | a `LICENSE` file does not exist either |
 | Lock files | none (`uv.lock`, `poetry.lock`, `requirements*.txt` all absent) | reproducibility is left to the consumer |
 | Dependency bounds | lower bounds only | no upper bounds; resolver picks the latest compatible |
@@ -3602,10 +3933,10 @@ Source: `pyproject.toml:1-40` (56 lines total).
 
 | Tool | Configuration |
 |---|---|
-| pytest | `asyncio_mode = "auto"`, `testpaths = ["tests"]` (`pyproject.toml:42-44`) |
-| ruff | `line-length = 100`, `target-version = "py312"`, `select = ["E","F","I","UP","B","SIM"]` (`pyproject.toml:46-51`) |
-| mypy | `python_version = "3.12"`, `strict = true`, `files = ["src/jdlib"]` (`pyproject.toml:53-56`) |
-| coverage / tox / nox / black / isort / pyright / pylint / bandit | **absent** |
+| pytest | `asyncio_mode = "auto"`, `testpaths = ["tests"]`, markers `unit` / `integration` / `infra` / `e2e` (`pyproject.toml:44-52`) |
+| ruff | `line-length = 100`, `target-version = "py312"`, `select = ["E","F","I","UP","B","SIM"]` (`pyproject.toml:54-59`) |
+| mypy | `python_version = "3.12"`, `strict = true`, `files = ["src/jdlib"]` (`pyproject.toml:61-64`) |
+| coverage / tox / nox / black / isort / pyright / pylint | **absent**; `bandit` is not configured in `pyproject.toml` either — it runs only in CI (§19.6) |
 
 ### 18.4 Installation
 
@@ -3618,25 +3949,28 @@ pip install -e ".[dev]"        # from a checkout: tests, lint, type check
 
 ### 18.5 Distribution workflow
 
-**Not present.** There is no publish/release workflow, no CI build step, no
-twine/uv-publish configuration, and no PyPI metadata beyond the name/version.
-Distribution status on PyPI is **Unknown / Requires Confirmation** (the README
-documents `pip install jdlib`, but no publishing automation exists in the
-repository).
+**Not present.** There is no publish/release workflow and no twine/uv-publish
+configuration. The CI `security` job now builds a wheel and smoke-installs it
+into a clean environment (§19.6), but nothing tags or uploads a release, and
+there is no PyPI metadata beyond the name/version. Distribution status on PyPI
+is **Unknown / Requires Confirmation** (the README documents
+`pip install jdlib`, but no publishing automation exists in the repository).
 
 ### 18.6 Versioning policy
 
-Version `0.1.0` with no `CHANGELOG`, no tags documented in-repo, and no
-deprecation policy. Compatibility guarantees: **Unknown / Requires
-Confirmation**. The design docs describe a frozen public API, which is the only
-observable compatibility contract
+Version `0.1.0`; the working tree now carries a `CHANGELOG.md` (phase 11) that
+records the security-hardening programme as **unreleased** changes, but there
+are no tags documented in-repo, no published release, and no deprecation policy.
+Compatibility guarantees: **Unknown / Requires Confirmation**. The design docs
+describe a frozen public API, which is the only observable compatibility
+contract
 (`docs/superpowers/plans/2026-09-21-jdlib-integrations-phase-6.md:364-382`).
 
 ### 18.7 Packaging flow
 
 ```mermaid
 graph LR
-    SRC["src/jdlib (64 .py + 2 .mako + py.typed)"] --> HATCH["hatchling build backend"]
+    SRC["src/jdlib (104 .py + 2 .mako + py.typed)"] --> HATCH["hatchling build backend"]
     PYPROJ["pyproject.toml<br/>metadata + deps + extras"] --> HATCH
     HATCH --> WHEEL["wheel: jdlib/… (py.typed included)"]
     HATCH --> SDIST["sdist (hatchling default)"]
@@ -3650,7 +3984,9 @@ graph LR
 
 ## 19. Testing Architecture
 
-### 19.1 Suite shape (verified on `a30601d`)
+### 19.1 Suite shape
+
+**At `a30601d` (the pre-hardening baseline):**
 
 | Metric | Value |
 |---|---|
@@ -3662,18 +3998,39 @@ graph LR
 | Parametrized tests | 7 functions; a 4-case `matrix` fixture yields 24 nominal cases from 6 test definitions |
 | Warnings policy | `-W error` in the verification run; any warning is a failure |
 
+**At `4d113e5`, re-verified for this revision (§26.6):**
+
+| Metric | Value |
+|---|---|
+| Total passing tests | **1,215** (`pytest -q -W error`, real PostgreSQL 16 via testcontainers, 71.87 s) |
+| Skipped | **6**, all in `tests/infra/test_tyk_infra.py` (§19.7) |
+| Test-function definitions | 1,019 (677 unit + 307 integration + 35 infra) |
+| Unit | 66 modules (37 top-level + 29 under `unit/security/`), 11,650 lines |
+| Integration | 33 test modules + `conftest.py` + `rls_support.py` + `strategy_support.py`, 9,824 lines |
+| Infra | 5 modules, 1,589 lines — live Kong, Cerbos, ZITADEL and OpenTelemetry harnesses |
+| Support (fakes/fixtures) | 3 files, 178 lines |
+| Warnings policy | `-W error` in the verification run; any warning is a failure |
+
+Without the `JDLIB_INFRA_*` settings the infrastructure classes skip themselves
+and the same suite reports 1,190 passed, 31 skipped — the difference is exactly
+those classes (Kong 9, Cerbos 12, ZITADEL 4, Tyk 6), each skip naming the
+variable it wants.
+
 ### 19.2 Architecture of the suite
 
 ```mermaid
 graph TB
-    TS["tests/"] --> U["unit/ (268 defs)"]
-    TS --> I["integration/ (259 defs)"]
+    TS["tests/"] --> U["unit/ (677 defs)"]
+    TS --> I["integration/ (307 defs)"]
+    TS --> N["infra/ (35 defs)"]
     TS --> S["support/ (fakes + consumer Invoice model)"]
 
     U --> U1["enforcement units: session, rawsql, pdp, guards, context, envelopes, strategies, lint, config, errors, uuid"]
+    U --> U2["unit/security/: authn, authz, gateway, audit, telemetry, tracing, replies, compliance"]
     I --> I1["real PostgreSQL 16 via testcontainers or JDLIB_TEST_DATABASE_URL"]
     I1 --> I2["conftest: postgres_url, control_engine, control_metadata, async_engine, session_factory, control_session_factory"]
-    I2 --> I3["registry/lifecycle, access control, authn, RLS, purge, migrations, strategy matrix, FastAPI/CLI e2e"]
+    I2 --> I3["registry/lifecycle, access control, authn, RLS, purge, migrations, strategy matrix, FastAPI/CLI e2e, security-audit persistence, compliance collectors"]
+    N --> N1["live Kong 3.6, Cerbos, ZITADEL, OpenTelemetry collector; Tyk harness skipped without a coprocess runtime"]
     S --> S1["FrozenClock, StaticPrincipals, DictTenants, ServabilityStub, EntitlementsStub, ServiceAccountEntitlementsStub, OperatorsStub, RecordingPrivilegeAudit, Invoice/LineItem"]
 ```
 
@@ -3710,6 +4067,15 @@ partial unique index, ownership constraints) used as a schema fixture.
 | Audit | `unit/test_platform_audit_sinks.py`, `integration/test_audit_sinks.py` |
 | CLI | `unit/test_cli.py`, `integration/test_cli_integration.py` |
 | Test kit | `unit/test_testing_kit.py` |
+| Security core | `unit/security/test_security_context.py`, `test_security_config.py`, `test_security_errors.py`, `test_security_interfaces.py`, `test_security_public_surface.py` (exact security surface), `test_error_responses.py` |
+| Security authn | `unit/security/test_jwt_validator.py`, `test_jwks_hardening.py`, `test_token_provider.py`, `test_zitadel_adapter.py`, `test_service_identity.py`; `integration/test_authn_composite.py`, `test_authn_http_integration.py` |
+| Security authz | `unit/security/test_authz_decision.py`, `test_authz_pep.py`, `test_cerbos_pdp.py`; `tests/infra/test_cerbos_infra.py` (12 defs) |
+| Gateway | `unit/security/test_gateway_adapters.py`; `tests/infra/test_kong_infra.py` (9 defs) |
+| Security audit | `unit/security/test_audit_events.py`, `test_audit_emitters.py`, `test_audit_access_export.py`, `test_audit_adapters.py`, `test_audit_control_adapters.py`; `integration/test_security_audit_persistence.py`, `test_audit_isolation_export.py`, `test_audit_raw_sql_refusal.py` |
+| Telemetry and tracing | `unit/security/test_telemetry.py`, `test_tracing.py`; `tests/infra/test_otel_infra.py` (4 defs) |
+| Compliance and the security CLI | `unit/security/test_compliance_controls.py` (9), `test_compliance_evidence.py` (12), `test_compliance_posture.py` (31); `unit/test_cli_security.py` (13); `integration/test_compliance_live_collectors.py` (6, real PostgreSQL) |
+| Adversarial regressions | `unit/security/test_adversarial.py`, `test_adversarial_privilege.py`, `test_adversarial_service_identity.py`, `test_adversarial_audit_integrity.py` |
+| Live infrastructure | `tests/infra/` — Kong 3.6 (9), Cerbos (12), ZITADEL (4), OpenTelemetry collector (4), Tyk (6; skipped without a JavaScript/coprocess runtime) |
 
 ### 19.5 Concurrency and security regression tests
 
@@ -3725,12 +4091,24 @@ API-key tenant-pin bypass.
 
 ### 19.6 CI
 
-`.github/workflows/ci.yml:1-14` — a single `ci` job on `ubuntu-latest`:
-`actions/checkout@v4` → `actions/setup-python@v5` (3.12) →
-`pip install -e ".[dev]"` → `ruff check .` → `mypy src/jdlib` → `pytest -q`.
-No matrix, no PostgreSQL service, no `TESTCONTAINERS_HOST_OVERRIDE`, no
-publish job. Integration tests therefore rely on the runner's Docker for
-testcontainers.
+`.github/workflows/ci.yml` defines **two** jobs, both on `ubuntu-latest` and
+both build-failing:
+
+* `test` (pre-existing): `actions/checkout@v4` → `actions/setup-python@v5`
+  (3.12) → `pip install -e ".[dev]"` → `ruff check .` → `mypy src/jdlib` →
+  `pytest -q`. No matrix, no PostgreSQL service; integration tests rely on the
+  runner's Docker for testcontainers.
+* `security` (phase 10; `docs/security/ci-security.md`): five gates, each of
+  which fails the build on its own — `pip-audit` against the installed
+  environment; `gitleaks` over the **full history**, so an old leak is still a
+  finding; `bandit -ll` over `src/jdlib`; a CycloneDX SBOM of the installed
+  environment written as a build artefact; and a build + clean-install smoke
+  test (wheel built, installed into a fresh environment, `import jdlib` and the
+  CLI help checked, so a packaging mistake cannot ship silently).
+
+The gates are deterministic and deliberately shallow: they are a floor under
+review, not a substitute for it, and the phase document records what each one
+does and does not catch.
 
 ### 19.7 Known test gaps
 
@@ -4039,6 +4417,35 @@ sequenceDiagram
     AC-->>U: Membership
 ```
 
+### 21.8 Security posture run (`jdlib security …`)
+
+The operator-facing workflow behind the `security` CLI group (§8.20) and the
+compliance package (§8.22) — the same call a pipeline can gate on:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant OP as Operator / CI
+    participant CLI as jdlib security posture
+    participant CFG as Declared profile
+    participant CO as Evidence collectors
+    participant REG as CONTROL_REGISTRY (19 controls)
+    participant RP as PostureReport
+
+    OP->>CLI: posture --environment production --database-url … --schema …
+    CLI->>CFG: _declared_config(environment) (BadParameter on an unknown profile)
+    CLI->>CO: configuration, migration (+ policy-directory) evidence
+    CLI->>CO: isolation + schema-revision evidence (only with --database-url and --schema)
+    CLI->>REG: evaluate_posture(config, evidence=…, environment=…)
+    REG->>RP: one finding per control — outcome, severity, reason, evidence summary
+    RP-->>OP: table or --json; exit 1 when any control FAILs
+```
+
+`jdlib security evidence` runs the same collection without the verdict, and
+`jdlib security compliance` reports the register itself (optionally filtered by
+`--framework`) with the posture counts for the declared profile. All three are
+read-only; none of them needs a database unless a live collector was asked for.
+
 ---
 
 ## 22. Architectural Decisions
@@ -4220,8 +4627,11 @@ is marked as not evident.
 
 ### 22.15 The CLI is an operator subset, not an API surface
 
-* **Decision:** four command groups, shared+schema strategies only, `--json`
-  everywhere (`README.md:350-365`, `integrations/cli.py`).
+* **Decision:** five command groups (`tenant`, `db`, `rls`, `schema`,
+  `security`), shared+schema strategies only, `--json` everywhere
+  (`README.md:350-365`, `integrations/cli.py`). The `security` group (phase 9)
+  is read-only reporting: it assesses a declared configuration and lists
+  evidence — it never mutates a deployment.
 * **Reason (evidenced):** the phase-6 plan records this as an accepted scope
   deviation.
 * **Consequences:** database placement and all identity/RBAC management are
