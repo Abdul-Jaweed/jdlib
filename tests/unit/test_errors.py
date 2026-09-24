@@ -10,6 +10,7 @@ def test_all_errors_derive_from_jdlib_error():
 def test_expected_error_names_exist():
     expected = {
         "MissingTenantContext",
+        "DelegationRefusedError",
         "TenantNotFound",
         "TenantAccessDenied",
         "TenantSuspended",
