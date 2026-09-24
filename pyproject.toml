@@ -87,6 +87,15 @@ python_version = "3.12"
 strict = true
 files = ["src/jdlib"]
 
+[[tool.mypy.overrides]]
+# Optional extras (see [project.optional-dependencies]). The type check also runs in environments
+# where they are not installed, and an inline ignore cannot be environment-independent here: one
+# that covers import-not-found is *unused* wherever the package resolves to typed stubs, and
+# warn_unused_ignores makes that a failure. Declaring the modules unknown answers the same way in
+# both environments - a claim about resolution rather than about a particular checkout.
+module = ["redis.*", "boto3.*", "botocore.*"]
+ignore_missing_imports = true
+
 [tool.coverage.run]
 source = ["jdlib"]
 branch = true

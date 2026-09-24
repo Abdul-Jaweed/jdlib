@@ -124,7 +124,13 @@ class QueryCompiler:
 
         quote = self.dialect.quote
         columns = ", ".join(quote(column) for column in node.columns)
-        text = f"SELECT {columns} FROM {quote(node.table)}"
+        # Reviewed exception (docs/security/ci-security.md, SAST gate): neither `columns` nor
+        # `node.table` is caller text - they are the identifiers the allow-list authorised at
+        # parse time, and every caller-supplied *value* is bound through `bind` rather than
+        # interpolated. B608 is a low-confidence heuristic aimed at string-built SQL; this is the
+        # shaped code it aims at, and the allow-list is why it is a false positive rather than a
+        # broken rule.
+        text = f"SELECT {columns} FROM {quote(node.table)}"  # nosec B608
 
         predicates: list[str] = []
         if node.tenant_scoped:

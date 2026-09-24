@@ -209,8 +209,8 @@ class S3ObjectStorage:
     @staticmethod
     def _build_client(endpoint: str, access_key: str, secret_key: str) -> Any:
         try:
-            import boto3  # type: ignore[import-untyped]
-            from botocore.client import Config  # type: ignore[import-untyped]
+            import boto3
+            from botocore.client import Config
         except ImportError as exc:  # pragma: no cover - depends on the extra
             raise ObjectStorageError(
                 "the S3 backend needs the 's3' extra: pip install 'jdlib[s3]'"
