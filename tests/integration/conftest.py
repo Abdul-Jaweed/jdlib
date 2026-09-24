@@ -104,3 +104,22 @@ async def rls_engine(async_engine, rls_app_role: str):
 
     await run_rls_ddl(async_engine, lambda sync: emit_tenant_policies(sync, TENANT_SCHEMA))
     yield async_engine
+
+# --- Integration layer: skip cleanly, never fail, when its infrastructure is absent --------
+# Phase 1 hygiene. A missing Docker daemon means these tests are correct and UNRUN, which is a
+# different statement from a broken build. pytest_collection_modifyitems is global, so the
+# directory filter below is what keeps this from touching the unit layer.
+def pytest_collection_modifyitems(config, items):
+    from pathlib import Path
+
+    from tests.support import infra_guard
+
+    reason = infra_guard.docker_unavailable_reason()
+    if reason is None:
+        return
+    here = Path(__file__).resolve().parent
+    skip = pytest.mark.skip(reason=f"integration infrastructure unavailable: {reason}")
+    for item in items:
+        path = getattr(item, "path", None)
+        if path is not None and here in Path(path).resolve().parents:
+            item.add_marker(skip)
