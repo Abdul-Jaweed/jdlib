@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +17,12 @@ class ConnectionConfig:
     target: str
     credential_version: str
     tenant_id: str
+    #: Connection parameters that belong to the target rather than to the caller. A schema is
+    #: the reason this exists: asyncpg takes a search_path only as a connection setting, not
+    #: from the DSN, and improvising one at the call site would put deployment knowledge in
+    #: the query path. Not credential material, so it renders nowhere either - the repr below
+    #: is unchanged and says nothing about it.
+    server_settings: Mapping[str, str] = field(default_factory=dict)
 
     def __repr__(self) -> str:
         return (

@@ -51,7 +51,15 @@ class PostgresConnector:
             )
         from sqlalchemy.ext.asyncio import create_async_engine
 
-        self._engine = create_async_engine(target.target, pool_pre_ping=True)
+        # A target may carry connection settings of its own - a search_path, most often. The
+        # DSN cannot express them: SQLAlchemy passes unknown URL parameters to the driver and
+        # asyncpg rejects them, which is why the schema travels here instead.
+        connect_args: dict[str, Any] = {}
+        if target.server_settings:
+            connect_args["server_settings"] = dict(target.server_settings)
+        self._engine = create_async_engine(
+            target.target, pool_pre_ping=True, connect_args=connect_args
+        )
 
     @asynccontextmanager
     async def opened(

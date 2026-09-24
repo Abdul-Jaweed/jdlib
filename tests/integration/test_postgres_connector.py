@@ -113,3 +113,20 @@ async def test_health_reports_the_connection_state(async_dsn) -> None:
         assert await connector.health() is True
 
     assert await connector.health() is False
+
+
+async def test_a_target_can_carry_its_own_connection_settings(async_dsn) -> None:
+    """The schema travels on the target, because asyncpg will not take it from the DSN."""
+    connector = PostgresConnector()
+    target = ConnectionConfig(
+        handle="db/reports",
+        target=async_dsn,
+        credential_version="v1",
+        tenant_id=str(TENANT_ID),
+        server_settings={"search_path": "information_schema"},
+    )
+
+    async with connector.opened(target=target, context=_context()):
+        rows = await connector.execute(statement="select current_schema() as schema")
+
+    assert rows == [{"schema": "information_schema"}]
