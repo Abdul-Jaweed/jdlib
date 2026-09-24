@@ -9,6 +9,10 @@ implementation is limited, a shell, or documented only. Full evidence, file:line
 `.recon/capability-inventory.md` (133 capabilities; 78 REAL, 31 PARTIAL, 3 STUB, 21 ABSENT).
 JDLib's own baseline: `00-current-state.md`.
 
+Two rows were corrected after `06-reliability-inventory.md` (the reliability precondition this
+programme's directives require) found existing implementations this matrix had recorded as absent;
+the corrections are marked in place rather than silently rewritten.
+
 A status is a decision about **this library**, not a compliment to the source. `REJECT` means
 adopting it would damage JDLib; `KEEP` means implementing it again would duplicate JDLib.
 
@@ -95,7 +99,7 @@ adopting it would damage JDLib; `KEEP` means implementing it again would duplica
 |---|---|---|---|
 | PostgreSQL via ORM, tenant-scoped, RLS-backed | JDLib: `TenantSession`, `TenantRepository`, strategies | **KEEP** | the enforcement point; never bypassed by any new subsystem |
 | Connection lifecycle, pooling, caps, eviction safety | JDLib: strategies + `PoolCapacityError` | **KEEP** | source never tunes, pre-pings or bounds pools |
-| Timeouts, retries, circuit breaking | source: ABSENT (3 ad-hoc timeouts, zero retries in 18,900 LOC) | **ADOPT** | required of every connector (Phase 6/7) |
+| Timeouts, retries, circuit breaking | JDLib: **already implemented adapter-locally** — per-call `asyncio.wait_for` plus a transport timeout, bounded retry with full-jitter backoff and injected clock/sleeper (`security/authn/provider.py:96-158,254`), transient-vs-permanent classification, fail-closed exhaustion; source: ABSENT | **IMPROVE** | Phase 6's `ConnectionPolicy` **extends this idiom** rather than building a framework: the frozen-config validation, the two-layer timeout, the jittered backoff and `is_retryable()` as the classification oracle. Corrected from ADOPT after the reliability inventory (`06-reliability-inventory.md`) found the implementation this row had assumed absent |
 | Connector abstraction (`DataConnector` protocol, registry, factory) | JDLib: absent | **ADOPT** | Phase 6 |
 | Connector capability declarations | JDLib: `StrategyCapabilities` pattern exists for isolation | **ADOPT** | Phase 6 `ConnectorCapabilities`, mirroring the existing capability-table idiom |
 | Snowflake | source: REAL (the only genuinely implemented relational engine) | **DEFER** | Phase 7 candidate; no JDLib consumer or test target exists in this environment |
@@ -139,7 +143,7 @@ adopting it would damage JDLib; `KEEP` means implementing it again would duplica
 
 | Capability | Today | Status | Why |
 |---|---|---|---|
-| OpenTelemetry tracing at meaningful boundaries | JDLib: `security/tracing.py`, spans on security decisions | **KEEP** | source wraps *every* method in a decorator (self-reported 15–30% overhead) |
+| OpenTelemetry tracing at meaningful boundaries | JDLib: `security/tracing.py` defines the span helper (`security_span` at `:235`) and the safety rules, but **the helper has no call site in `src/`** | **IMPROVE** | wire the existing helper at the boundaries Phase 11 lists rather than defining another span API; the archived system's rejected pattern is the opposite error — a decorator on every method, self-reported 15–30% overhead |
 | Structured logging with correlation/request IDs | JDLib | **KEEP** | — |
 | Metrics | JDLib: `security/metrics.py` + Prometheus/collector verification | **KEEP** | source: no metrics |
 | No secret or payload leakage into telemetry | JDLib: telemetry-safety rules | **KEEP** | source exports `db.statement`/`db.parameters` with bind values |
@@ -199,9 +203,9 @@ Counted from this file's own rows (script-verified, not estimated):
 
 | Status | Rows |
 |---|---|
-| **KEEP** | 37 |
-| **ADOPT** | 33 |
-| **IMPROVE** | 11 |
+| **KEEP** | 36 |
+| **ADOPT** | 32 |
+| **IMPROVE** | 13 |
 | **REDESIGN** | 5 |
 | **DEFER** | 17 |
 | **REJECT** | 13 |
