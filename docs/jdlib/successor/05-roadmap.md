@@ -110,6 +110,14 @@ The PostgreSQL connector (reusing the existing engine, strategies and pool rules
 MongoDB, StarRocks, BigQuery: **DEFER**, each with the adoption conditions named in ADR-6. No empty
 shells ship (§38).
 
+**Status: DELIVERED for PostgreSQL; the other four engines remain DEFERRED** (2026-09-24). `PostgresConnector` in `jdlib.data`: it reuses the library's own async engine layer and the pool rule already in use (`create_async_engine`, `pool_pre_ping`) rather than adding an engine abstraction, and it builds its engine per open from the RESOLVED target - never from a DSN it holds, because a stored DSN is a credential that outlives its rotation.
+
+Two refusals carry the phase: a tenant mismatch between the authorized context and the target refuses to open, and a statement that is not a read is refused, because the connector declares `writes=False` and a declaration nothing enforces is a comment. The read check is deliberately shallow - first keyword, comments stripped - because the thorough analyser already exists elsewhere in the library for the tenant plane, and a second competing SQL analyser is the duplication the naming decisions forbid.
+
+Gate evidence: a live round trip, a health check across the open/close boundary, and a timeout (`pg_sleep` under a one-second policy timeout raising `ConnectorTimeoutError`), all against a real PostgreSQL 16 server in the integration layer with no mocks. The **retry** half of the policy gate is evidenced at the policy level in §6 rather than here: inducing a transient PostgreSQL failure reliably is not something this suite pretends to do, and the application-level recovery drill already covers restart behaviour. Five integration tests.
+
+Snowflake, MongoDB, StarRocks and BigQuery are **not** stubbed: no empty shell ships, per the directive's own rule, and their adoption conditions remain as ADR-6 records them.
+
 Gate: live round-trip against the existing PostgreSQL lab; health check; policy behaviour under
 timeout and retry.
 

@@ -16,6 +16,7 @@ from jdlib.data.errors import (
     ConnectorTimeoutError,
 )
 from jdlib.data.policy import ConnectionPolicy
+from jdlib.data.postgres import PostgresConnector
 from jdlib.data.registry import ConnectorRegistry
 
 __all__ = [
@@ -27,5 +28,6 @@ __all__ = [
     "ConnectorRegistry",
     "ConnectorTimeoutError",
     "DataConnector",
+    "PostgresConnector",
     "assert_connector_contract",
 ]
