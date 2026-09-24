@@ -19,7 +19,12 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from testcontainers.core.container import DockerContainer
+
+# The same rule as the Redis suite: the backend imports its client lazily, so a checkout without
+# the extra must skip with a reason rather than fail at the point it opens a connection.
+pytest.importorskip("boto3", reason="the object storage suite needs the 's3' extra")
+
+from testcontainers.core.container import DockerContainer  # noqa: E402
 
 from jdlib.context import Principal, PrincipalKind, TenantContext
 from jdlib.control.enums import PlacementStrategy

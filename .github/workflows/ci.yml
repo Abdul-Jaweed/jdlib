@@ -14,7 +14,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: python -m pip install -e ".[dev]"
+      # The optional extras are installed on purpose: the S3 and Redis integration suites need
+      # their client libraries, and a suite that skips on the runner is not evidence. Docker is
+      # present here, so these tests can run rather than report SKIPPED.
+      - run: python -m pip install -e ".[dev,s3,redis]"
       - run: python -m ruff check .
       - run: python -m mypy src/jdlib
       - run: python -m pytest -q
@@ -42,7 +45,9 @@ jobs:
       - name: Install project dependencies and freeze the audited set
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          # Including the extras: what they pull in is what ships to a deployment that enables
+          # them, so it belongs in the set pip-audit checks.
+          python -m pip install -e ".[dev,s3,redis]"
           python -m pip freeze --exclude-editable > "$RUNNER_TEMP/requirements-lock.txt"
           wc -l "$RUNNER_TEMP/requirements-lock.txt"
 

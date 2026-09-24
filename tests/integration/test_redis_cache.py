@@ -15,8 +15,14 @@ import asyncio
 
 import pytest
 
+# The provider imports the client lazily, so a checkout without the extra can still import the
+# library - and `testcontainers.community.redis` imports it eagerly, which turned a missing extra
+# into a collection error. A missing extra is a SKIP with a precise reason, the same rule the
+# Docker guard follows.
+pytest.importorskip("redis", reason="the Redis cache suite needs the 'redis' extra")
+
 # testcontainers.redis is deprecated, and the gate runs with -W error:
-from testcontainers.community.redis import RedisContainer
+from testcontainers.community.redis import RedisContainer  # noqa: E402
 
 TENANT_A = "11111111-1111-1111-1111-111111111111"
 TENANT_B = "22222222-2222-2222-2222-222222222222"
