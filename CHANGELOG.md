@@ -362,3 +362,39 @@ names the commit that fixed it.
   `SECURITY_CONFIGURATION_CHANGED` event through this sink and watched the trail
   stay empty.
 
+### An identity-provider outage was reported as a credential failure — 1cc27ea
+
+* **Symptom.** With no usable key cached and the key set unreachable, every request
+  that carried a token answered `401 no credentials presented`. A refused
+  connection to the identity provider was indistinguishable from a bad credential,
+  so an operator watching authentication failures saw an outage as user error.
+* **Cause.** `JwksCache.signing_key` does its part — with no usable key material it
+  re-raises the underlying refresh failure rather than pretending the `kid` was
+  unknown, and its own tests pin that ("surface the real cause so callers can audit
+  and alert on it"). One level up, `OidcAuthenticator.authenticate` caught every
+  failure of the lookup in a blanket `except Exception`, recorded it, and returned
+  `None`; the middleware reports `None` as `401`. The distinction the key set was
+  built to preserve was discarded one line later, and no consumer could recover it.
+* **Fix.** `AuthenticationUnavailable` (`errors.py`), raised by the authenticator
+  when the key lookup fails, with the underlying cause chained. `_STATUS_MAP` lists
+  it before `AuthenticationError` — an outage is `503` and retryable, a rejection is
+  `401` — exactly as `AuthorizationUnavailable` precedes `AuthorizationError`. The
+  error model gained the descriptor and code every public error is required to have
+  (`AUTHENTICATION_UNAVAILABLE`, 503, retryable, classification `authentication`).
+  The key set itself is untouched: stale-if-available, rate-limited retries and the
+  surfaced cause all still hold, its tests unchanged.
+* **Now.** `tests/unit/security/test_adversarial_authn_outage.py` (5 tests): the
+  outage travels with its cause, an unknown key against a healthy key set is still
+  `None` (`401` — the guard against over-blocking), a provider that answered is
+  never reported unavailable, and the mapping order is pinned. Mutation-checked:
+  restoring the swallow fails two of them. The existing fail-closed test in
+  `test_oidc_authenticator.py` now asserts the outage instead of `None`; the
+  security property it guards — nothing is authenticated when the key set cannot be
+  read — is unchanged. `tests/unit -q -W error` → **867 passed** at this revision
+  (862 before).
+* **Docs.** `docs/security/authentication-hardening.md` corrected (it described an
+  `InvalidToken` wrapping the code never performed) and `docs/security/error-responses.md`
+  carries the new code.
+* **Found by** the reference application asking what an unreachable identity
+  provider should answer. The honest answer — `503` — was unreachable from any
+  consumer, which is why the fix is here and not in the application.
