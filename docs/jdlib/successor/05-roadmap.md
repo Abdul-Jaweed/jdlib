@@ -162,6 +162,14 @@ resolved through §2's path; no provider class exported without a passing contra
 is only extended; the two *measured* trace-propagation gaps (gateway→app, JDLib→PDP) closed or
 documented as PARTIAL with the stopping point cited. gRPC: DEFER, flagged (ADR-11).
 
+**Status: DELIVERED (2026-09-24).** `jdlib.tenancy.job_envelope`: `JobEnvelope` and `JobDispatcher`, extending `ContextPropagator` rather than replacing it. The tenant token, its signature, its TTL and its clock were already `EnvelopeCodec`'s, and the chain a job must walk - principal active, tenant present, entitlement held, tenant servable - was already `ContextPropagator.reconstruct`'s. Nothing was rebuilt.
+
+A queue needs two things a request does not. The same delivery may arrive twice, so the envelope carries a job id; and a job may wait in a queue while the authority behind it is withdrawn, so the envelope carries its own lifetime and is revalidated **at execution, not at enqueue**. Both are signed together with the tenant token, so a rewritten expiry fails the way a rewritten tenant would - and the identity is the forgery that matters, since swapping a job id is how replay detection would be defeated.
+
+A job id is required rather than defaulted: an unidentified job is not a safer job, it is an undetectable replay. The chain runs authenticity, lifetime, identity, revocation, then the tenant chain, so a cheap local check precedes a lookup. Fail closed is tested as work not happening - one test drives each of the five failure modes and asserts the handler never ran - rather than as an error being reported after the fact.
+
+21 unit tests. One latent defect fixed on the way, in test support rather than production: `ServabilityStub` built itself as `suspended or set()`, and because an empty set is falsy a caller who passed one had it discarded - so suspending a tenant *after* constructing the stub could never be observed. That is exactly the case the gate needs to test.
+
 Gate: envelope forgery, TTL lapse, replay after revocation, tenant suspension between enqueue and
 execution; propagation re-measured with the same method that found the gaps.
 

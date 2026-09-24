@@ -53,7 +53,9 @@ class ServabilityStub:
         suspended: set[uuid.UUID] | None = None,
         records: dict[uuid.UUID, TenantRecord] | None = None,
     ) -> None:
-        self._suspended = suspended or set()
+        # `suspended or set()` would be wrong here: an empty set is falsy, so a caller who
+        # passes one would have it silently replaced and could never suspend a tenant later.
+        self._suspended = set() if suspended is None else suspended
         self._records = records or {}
 
     async def assert_servable(self, tenant_id: uuid.UUID) -> TenantRecord:
@@ -89,9 +91,7 @@ class ServiceAccountEntitlementsStub:
     async def can_act(self, principal: Principal, tenant_id: uuid.UUID) -> bool:
         if principal.kind is not PrincipalKind.SERVICE_ACCOUNT:
             return False
-        return (
-            principal.tenant_id == tenant_id and (tenant_id, principal.id) in self._registered
-        )
+        return principal.tenant_id == tenant_id and (tenant_id, principal.id) in self._registered
 
 
 class OperatorsStub:
