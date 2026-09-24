@@ -27,6 +27,15 @@ redis = [
     "redis>=5.0",
 ]
 
+# The S3 storage backend is optional for the same reason: jdlib imports without it, and the
+# provider says so clearly if it is missing. It is the one verified backend (ADR-5).
+s3 = [
+    "boto3>=1.34",
+    # Imported directly for the path-style addressing MinIO needs, so it is declared rather
+    # than relied on as a transitive dependency - which is what the declaration gate is for.
+    "botocore>=1.34",
+]
+
 dev = [
     "fastapi>=0.111",
     "httpx>=0.27",

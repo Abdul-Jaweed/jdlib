@@ -145,6 +145,14 @@ unbounded pagination, cross-tenant AST, query amplification — plus a test asse
 `ObjectStorageProvider`, `StoredObject`, `ObjectMetadata`, and exactly one verified backend
 (ADR-5). GCS and Azure stay deferred and unexported.
 
+**Status: DELIVERED (2026-09-24).** `jdlib.storage`: `ObjectStorageProvider` protocol, `StoredObject`, `ObjectMetadata`, `assert_object_storage_contract`, and one verified backend - `S3ObjectStorage`, tested against real MinIO. Google Cloud Storage and Azure Blob have **no module and no export**: a provider class in the public surface is a claim that it works, and a test asserts they are absent rather than merely discouraged.
+
+Keys are built in exactly one place and are always relative to the caller's tenant, so a key cannot name another tenant's object even if a caller tries. The refusal list is blunt on purpose - a parent segment, an absolute path, an empty key, a separator a different SDK might normalise - because silently repairing a key is exactly how one tenant's write lands in another tenant's prefix. Six hostile keys are tested.
+
+The S3 client is blocking, and every call is dispatched to a thread: that is the honest way to meet the async discipline ADR-14 asks for rather than an async-looking wrapper around a blocking call. The endpoint, bucket and credentials arrive through section 4's resolved target - never a stored DSN - and the provider refuses to open when the authorized context does not cover the target.
+
+13 integration tests against real MinIO, no mocks: put/get round trip, metadata without downloading, a stream that actually streams, delete, cross-tenant invisibility, key escapes, the unauthorized-context refusal, and the export boundary.
+
 Gate: live put/get/list/delete/stream round-trip; tenant-scoped key construction; credentials
 resolved through §2's path; no provider class exported without a passing contract suite.
 
