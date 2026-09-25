@@ -19,6 +19,7 @@ import fastapi
 import httpx
 import pytest
 import sqlalchemy as sa
+from fastapi.exceptions import HTTPException  # noqa: F401  (documented edge case below)
 
 from jdlib.data.errors import ConnectorError, ConnectorTimeoutError
 from jdlib.errors import ProvisioningError, TenantAccessDenied
@@ -120,6 +121,43 @@ async def test_a_connection_level_database_error_is_503_but_a_rejected_statement
     )
     assert rejected.status_code == 500
     assert rejected.json()["code"] == "INTERNAL_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_an_applications_own_http_exception_still_answers_the_envelope() -> None:
+    """Starlette answers `HTTPException` in a shape of its own - `{"detail": ...}`, no code,
+    no ids - so an application that raises one for its own rule (a duplicate name, a missing
+    project) was answering a fourth shape and bypassing the contract entirely."""
+    conflict = await _get(
+        HTTPException(status_code=409, detail="a project already exists in this tenant")
+    )
+    assert conflict.status_code == 409
+    body = conflict.json()
+    assert set(body) == {"code", "message", "request_id", "correlation_id"}
+    assert body["code"] == "CONFLICT"
+    assert body["message"] == "a project already exists in this tenant"
+
+    missing = await _get(HTTPException(status_code=404, detail="no such project"))
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_a_retry_after_header_survives_but_a_5xx_still_says_nothing() -> None:
+    """A 429 that FastAPI was told to send with `Retry-After` must keep it: the client acts on
+    it. And an `HTTPException` cannot be used to smuggle a 5xx message out - the generic
+    description wins above 499, which is the rule this whole module exists for."""
+    limited = await _get(
+        HTTPException(status_code=429, detail="slow down", headers={"Retry-After": "30"})
+    )
+    assert limited.status_code == 429
+    assert limited.headers["retry-after"] == "30"
+    assert limited.json()["code"] == "TOO_MANY_REQUESTS"
+
+    server = await _get(HTTPException(status_code=500, detail="dsn=postgresql://u:p@h/db"))
+    assert server.status_code == 500
+    assert server.json()["message"] == "an internal error occurred"
+    assert "dsn=" not in server.text
 
 
 @pytest.mark.asyncio

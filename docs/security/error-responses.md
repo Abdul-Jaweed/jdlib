@@ -72,6 +72,8 @@ envelope and one vocabulary:
 | Failure | Code | Status | Retryable | Classification | Described by |
 |---|---|---|---|---|---|
 | A malformed request body | `VALIDATION_FAILED` | 422 | no | validation | `jdlib.integrations.fastapi` (FastAPI's `RequestValidationError`) |
+| An application's own rejection — `fastapi.HTTPException` and its subclasses, the shape Starlette answers `{"detail": ...}` | well-known statuses map to `BAD_REQUEST` 400, `AUTHENTICATION_REQUIRED` 401, `PERMISSION_DENIED` 403, `NOT_FOUND` 404, `CONFLICT` 409, `VALIDATION_FAILED` 422, `TOO_MANY_REQUESTS` 429, `DEPENDENCY_UNAVAILABLE` 503; an unmapped status keeps its own code point | the application's own | by status | by status | `jdlib.integrations.fastapi`, which registers it so that "one envelope" is true for an application that raises one |
+| A rate limit | `TOO_MANY_REQUESTS` | 429 | yes | availability | the same table; a `Retry-After` the application set is passed through (the only two response headers that are: it and `WWW-Authenticate`) |
 | A dependency that is not answering: `ConnectorError`, a spent `RetryBudgetExhaustedError`, a `ShutdownInProgressError`, and the connection-level `sqlalchemy` errors (`OperationalError`, `InterfaceError`, `TimeoutError`) | `DEPENDENCY_UNAVAILABLE` | 503 | yes | availability | `jdlib.integrations.fastapi` |
 
 Two rules the edges must keep, and the tests assert:

@@ -118,20 +118,30 @@ def error_response(
     *,
     request_ids: RequestIds,
     descriptor: SecurityDescriptor | None = None,
+    status: int | None = None,
+    message: str | None = None,
 ) -> ErrorResponse:
     """Build the client-visible response for a failure.
 
     ``descriptor`` overrides the classification the core table would give the exception. The
     HTTP edges use it for the capabilities that sit *above* this module (a connector outage, a
     spent retry budget), which the core cannot name without inverting the dependency.
+
+    ``status`` and ``message`` override the transport details of an *application's* own error
+    (``HTTPException``, whose text is written for the caller). Neither can undo the 5xx rule:
+    the effective status decides, and above 499 the generic description wins - the one
+    override that would defeat the point of this module is the one it refuses.
     """
     descriptor = descriptor if descriptor is not None else describe_error(exc)
-    if descriptor.http_status >= 500:
+    effective_status = status if status is not None else descriptor.http_status
+    if effective_status >= 500:
         message = _GENERIC_MESSAGES.get(
             descriptor.classification, _GENERIC_MESSAGES[SecurityClassification.INTERNAL]
         )
-    else:
+    elif message is None:
         message = _sanitize(_redact(str(exc))) or descriptor.code.value
+    else:
+        message = _sanitize(_redact(message)) or descriptor.code.value
     headers: dict[str, str] = {}
     challenge = www_authenticate(exc)
     if challenge is not None:

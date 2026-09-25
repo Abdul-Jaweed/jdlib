@@ -22,6 +22,7 @@ from sqlalchemy.exc import InterfaceError as SqlAlchemyInterfaceError
 from sqlalchemy.exc import OperationalError as SqlAlchemyOperationalError
 from sqlalchemy.exc import TimeoutError as SqlAlchemyTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, Response
 
 from jdlib.authz.guards import Enforcer, tenant_target
@@ -32,7 +33,7 @@ from jdlib.errors import JdlibError
 from jdlib.persistence.uow import UnitOfWork
 from jdlib.reliability import RetryBudgetExhaustedError, ShutdownInProgressError
 from jdlib.security.context import RequestIds
-from jdlib.security.errors import SecurityDescriptor
+from jdlib.security.errors import SecurityClassification, SecurityCode, SecurityDescriptor
 from jdlib.security.responses import (
     DEPENDENCY_UNAVAILABLE_DESCRIPTOR,
     ErrorResponse,
@@ -135,9 +136,46 @@ def install_error_envelope(app: FastAPI) -> None:
     """
     app.add_exception_handler(JdlibError, _handle_jdlib_error)
     app.add_exception_handler(RequestValidationError, _handle_validation_error)
+    app.add_exception_handler(HTTPException, _handle_http_exception)
     for error_type, descriptor in _CAPABILITY_DESCRIPTORS:
         app.add_exception_handler(error_type, _descriptor_handler(descriptor))
     app.add_exception_handler(Exception, _handle_unexpected)
+
+
+#: `fastapi.HTTPException` is an application's own decision ("this name is taken", "no such
+#: project") and Starlette answers it in a shape of its own: `{"detail": ...}`, no code, no
+#: ids. Registering it here is what makes "one envelope" true rather than aspirational - an
+#: application that raises one still answers the documented contract. Well-known statuses get
+#: the code that names the condition; anything unmapped falls back to the status class, and a
+#: 5xx is still generic.
+_HTTP_STATUS_DESCRIPTORS: dict[int, SecurityDescriptor] = {
+    400: SecurityDescriptor(
+        SecurityCode.BAD_REQUEST, 400, False, SecurityClassification.VALIDATION
+    ),
+    401: SecurityDescriptor(
+        SecurityCode.AUTHENTICATION_REQUIRED, 401, False, SecurityClassification.AUTHENTICATION
+    ),
+    403: SecurityDescriptor(
+        SecurityCode.PERMISSION_DENIED, 403, False, SecurityClassification.AUTHORIZATION
+    ),
+    404: SecurityDescriptor(
+        SecurityCode.NOT_FOUND, 404, False, SecurityClassification.DATA_BOUNDARY
+    ),
+    409: SecurityDescriptor(
+        SecurityCode.CONFLICT, 409, False, SecurityClassification.DATA_BOUNDARY
+    ),
+    422: SecurityDescriptor(
+        SecurityCode.VALIDATION_FAILED, 422, False, SecurityClassification.VALIDATION
+    ),
+    429: SecurityDescriptor(
+        SecurityCode.TOO_MANY_REQUESTS, 429, True, SecurityClassification.AVAILABILITY
+    ),
+    503: DEPENDENCY_UNAVAILABLE_DESCRIPTOR,
+}
+
+#: The only response headers passed through from an application's own error: both are defined
+#: for the client to act on, and both are the response's, not the server's, business.
+_PASSTHROUGH_HEADERS = ("www-authenticate", "retry-after")
 
 
 def _ids_for(request: Request) -> RequestIds:
@@ -165,6 +203,32 @@ async def _handle_jdlib_error(request: Request, exc: Exception) -> Response:
     if not isinstance(exc, JdlibError):
         raise exc
     return _envelope(error_response(exc, request_ids=_ids_for(request)))
+
+
+async def _handle_http_exception(request: Request, exc: Exception) -> Response:
+    if not isinstance(exc, HTTPException):
+        raise exc
+    descriptor = _HTTP_STATUS_DESCRIPTORS.get(exc.status_code)
+    envelope = error_response(
+        exc,
+        request_ids=_ids_for(request),
+        descriptor=descriptor,
+        # The status is the application's, whether or not it is in the table above.
+        status=exc.status_code,
+        message=exc.detail if descriptor is not None else None,
+    )
+    carried = {
+        name: value
+        for name, value in (exc.headers or {}).items()
+        if name.lower() in _PASSTHROUGH_HEADERS
+    }
+    return _envelope(
+        ErrorResponse(
+            status=envelope.status,
+            payload=envelope.payload,
+            headers={**dict(envelope.headers), **carried},
+        )
+    )
 
 
 async def _handle_validation_error(request: Request, exc: Exception) -> Response:
