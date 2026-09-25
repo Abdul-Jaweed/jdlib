@@ -1,0 +1,27 @@
+"""What an MCP surface can refuse, in the library's own error taxonomy (directive §24).
+
+One class per outcome the caller or the operator has to tell apart, and every one of them is a
+`JdlibError`, so the canonical envelope and the audit trail treat an MCP failure like any other:
+a tool definition that cannot be described safely (a programming error, and the one that must fail
+loudly at import), an authorization refusal (the caller may not), and an execution failure (the
+caller may, and the operation did not).
+
+The classes are additive to the existing taxonomy rather than a parallel one: `jdlib.errors`
+already owns the envelope, and the MCP surface maps its failures into it.
+"""
+
+from __future__ import annotations
+
+from jdlib.errors import JdlibError
+
+
+class McpError(JdlibError):
+    """Base for every MCP failure."""
+
+
+class McpToolDefinitionError(McpError):
+    """A tool, or a registration, that cannot be described safely.
+
+    Raised while the surface is being assembled — never while a caller waits — so an incomplete
+    tool fails at import or startup rather than becoming a request that quietly does nothing.
+    """

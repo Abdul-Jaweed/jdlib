@@ -356,10 +356,57 @@ authentication → tenant → authorization → operation → audit → telemetr
 Tools are typed and bounded; arbitrary Cypher or arbitrary database access is not a tool — if it
 exists at all it is an explicitly privileged capability with authorization, audit and limits.
 
-**Status: NOT STARTED.** §16 landed 2026-09-26, so its graph tools now exist; it still depends on §2–§12 for everything else.
+**Status: PLANNED (started 2026-09-26).** §16 landed 2026-09-26, so its graph tools exist; the MCP
+surface depends on §2–§12 for everything else.
+
+### The reuse map — what the boundary composes rather than reimplements
+
+The directive's §18 chain (MCP → security boundary → SecurityContext → authentication → tenant
+resolution → authorization → service → resources) is built out of the parts that already exist:
+
+| Step | Reused from |
+|---|---|
+| authentication | `jdlib.authn.wiring.build_authenticator` — the same validator the HTTP path installs |
+| principal | the `PrincipalProvider` seam `jdlib.integrations.fastapi` already takes |
+| tenant resolution | the `TenantResolver` protocol (`jdlib/tenancy/resolution.py`) and the `ResolverChain` the FastAPI installer takes |
+| authorization | the `PolicyDecisionPoint` protocol (`jdlib/security/authz/interfaces.py`) behind the same `Enforcer` |
+| privilege | the existing privilege mechanism — a second one is explicitly forbidden (§20) |
+| audit | the `SecurityEventEmitter` seam and the `SecurityEventType` vocabulary, extended by name |
+| telemetry | the `TracerLike` span seam (`jdlib.security.tracing`) — spans, not a second metrics stack |
+| reliability | `jdlib.reliability` (breaker, budget, policy, lifecycle) — request and dependency timeouts, retry where safe, cancellation |
+| data | `jdlib.graph`'s `GraphRepository` and `jdlib.data`'s connectors — no tool touches a driver |
+| errors | `jdlib.security.responses` — the one canonical envelope, extended with the MCP shapes |
+
+A test asserts the reuse rather than the resemblance: the boundary is given the same collaborator
+objects the HTTP installer takes, and the denial path is proven not to execute the handler.
+
+### Slices
+
+1. the tool registry: a tool declares its capability, its schema and its handler, and a tool
+   without a declared capability cannot be registered at all (the roadmap's own gate);
+2. the security boundary: a request's credential becomes a `SecurityContext` through the reused
+   authenticator, and identity claims in tool arguments are refused rather than read;
+3. the invocation chain: boundary → authorization → handler inside the context scope → audit,
+   with the denial path proving the handler never ran and the error mapping proving no internal
+   detail escapes;
+4. the graph tools: `graph_get`, `graph_search`, `graph_create`, `graph_update`,
+   `graph_create_relationship`, `graph_delete` over `GraphRepository` — tenant from the context,
+   identifiers from the vocabulary, bounded inputs, a delete that needs the stronger capability;
+5. the resources: read-only, authorized, tenant-aware, bounded, audited when sensitive, and
+   structurally unable to expose configuration or secrets;
+6. reliability: request timeout, dependency timeout, cancellation propagating to the operation,
+   bounded concurrency, graceful shutdown — through the existing primitives;
+7. observability and audit: the `mcp.*` span names and the audit events, with the vocabulary pin
+   extended by name, and correlation ids carried end to end;
+8. the server: an optional `mcp` extra, the framework imported lazily (import-safety proven in a
+   subprocess), a factory that wires the registry onto FastMCP, and a graceful shutdown path;
+9. adversarial: forged identity arguments, a tool with no capability, cross-tenant tool calls,
+   injection through arguments, the error surface, and cancellation;
+10. the capability page, the roadmap close, and the complete gate.
 
 Gate: the same security, audit and observability assertions the HTTP path carries, run through the
-MCP entry point; a tool inventory test that fails when a tool is added without a declared capability.
+MCP entry point; a tool inventory test that fails when a tool is added without a declared capability;
+the live layer for the graph-backed tools; and the complete local gate green.
 
 ## §18 — Example application: minimal and enterprise (L) — the example-application directive
 
