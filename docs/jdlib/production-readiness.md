@@ -102,9 +102,10 @@ the boundary's span and, where the boundary can name a tenant, as an audit event
   policy, is `jdlib.reliability.breaker`: the same state machine the connector now consults instead
   of keeping its own, so a job dispatcher or a sink gets closed -> open -> half-open with exactly
   one trial admitted, time injected, and no second copy of the rules to drift from the first.
-  What no non-connector caller has *adopted* yet is a separate question from what the library
-  provides; the capability is here, tested, and importable, and the connector's own tests are what
-  prove the extraction kept its behaviour.
+  The job dispatcher **adopts** it too: `JobDispatcher` takes an optional `breaker`, consults it
+  before each attempt, and records the handler's outcome on it, so a dependency that is down stops
+  being retried job after job. A dispatcher built without one behaves exactly as before, which is
+  what keeps the adoption invisible to every deployment that did not ask for it.
   The inventory's ABSENT verdicts are left as they were written, because they are a measurement
   at a revision, not a status board; what has been built since is stated below it.
 - **Infrastructure-dependent layers are not all exercised on every machine.** The infra suite

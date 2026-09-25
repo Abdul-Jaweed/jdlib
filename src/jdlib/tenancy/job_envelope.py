@@ -26,7 +26,7 @@ from typing import Any
 
 from jdlib.context import Clock, EnvelopeCodec, TenantContext, context_scope
 from jdlib.errors import JdlibError
-from jdlib.reliability import RetryBudget
+from jdlib.reliability import CircuitBreaker, RetryBudget
 from jdlib.reliability.policy import backoff_seconds, is_retryable_failure
 from jdlib.tenancy.dead_letter import DeadLetter, DeadLetterStore
 from jdlib.tenancy.jobs import ContextPropagator
@@ -191,6 +191,7 @@ class JobDispatcher:
         retry: JobRetry | None = None,
         dead_letters: DeadLetterStore | None = None,
         retry_budget: RetryBudget | None = None,
+        breaker: CircuitBreaker | None = None,
         sleeper: Callable[[float], Awaitable[None]] | None = None,
         jitter: Callable[[float, float], float] | None = None,
     ) -> None:
@@ -202,6 +203,7 @@ class JobDispatcher:
         self._retry = retry if retry is not None else JobRetry()
         self._dead_letters = dead_letters
         self._retry_budget = retry_budget
+        self._breaker = breaker
         self._sleeper = sleeper
         self._jitter = jitter
 
@@ -249,10 +251,26 @@ class JobDispatcher:
                 raise
             known_tenant = context.tenant_id
 
+            if self._breaker is not None and not self._breaker.allow():
+                # The dependency this job talks to is refusing calls, so another attempt now
+                # would be another call it refuses. That is a give-up like any other, and it is
+                # recorded as the *condition*: no handler ran, so there is no exception to name.
+                await self._record_type(
+                    envelope, known_tenant, attempt, "breaker", "CircuitBreakerOpen"
+                )
+                raise JobAttemptsExhaustedError(
+                    f"job {envelope.job_id} was not attempted: "
+                    "the circuit for its dependency is open"
+                )
+
             try:
                 with context_scope(context):
-                    return await handler(*args, **kwargs)
+                    result = await handler(*args, **kwargs)
             except Exception as exc:
+                if self._breaker is not None:
+                    # A failure the handler saw is a failure of what the breaker guards, whether
+                    # or not this dispatcher is configured to retry it.
+                    self._breaker.record_failure()
                 if self._retry.max_attempts == 1:
                     # Retries were never configured: nothing was decided here, so nothing is
                     # recorded and the handler's own error is raised unchanged.
@@ -273,6 +291,10 @@ class JobDispatcher:
                         f"job {envelope.job_id} was not retried: the shared retry budget is spent"
                     ) from exc
                 await wait(backoff_seconds(self._retry.backoff, attempt, choose))
+            else:
+                if self._breaker is not None:
+                    self._breaker.record_success()
+                return result
 
         raise JobAttemptsExhaustedError(  # pragma: no cover - the loop always returns or raises
             f"job {envelope.job_id} ran out of attempts"
@@ -295,6 +317,17 @@ class JobDispatcher:
         exc: BaseException,
     ) -> None:
         """Write down a give-up. The error's *type* is recorded; its message never is."""
+        await self._record_type(envelope, tenant_id, attempts, reason, type(exc).__name__)
+
+    async def _record_type(
+        self,
+        envelope: JobEnvelope,
+        tenant_id: uuid.UUID | None,
+        attempts: int,
+        reason: str,
+        error_type: str,
+    ) -> None:
+        """Write down a give-up that names a condition rather than an exception."""
         if self._dead_letters is None:
             return
         await self._dead_letters.record(
@@ -303,7 +336,7 @@ class JobDispatcher:
                 tenant_id=tenant_id,
                 attempts=attempts,
                 reason=reason,
-                error_type=type(exc).__name__,
+                error_type=error_type,
                 recorded_at=self._clock.now(),
             )
         )

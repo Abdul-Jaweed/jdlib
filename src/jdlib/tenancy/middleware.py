@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
@@ -21,6 +20,7 @@ from jdlib.errors import (
     TenantNotWritable,
     TenantSuspended,
 )
+from jdlib.security.tracing import parse_traceparent
 from jdlib.tenancy.resolution import RequestInfo, ResolverChain
 
 ASGIApp = Callable[..., Awaitable[None]]
@@ -78,15 +78,19 @@ def _request_info(scope: Mapping[str, Any]) -> RequestInfo:
 
 
 def _request_ids(headers: Mapping[str, str]) -> tuple[str, str, str | None]:
+    """The request's ids, with this middleware's own policy about who may supply them.
+
+    The request id is always generated here - a caller does not get to name the id the audit
+    rows are keyed by - while a correlation id the caller sent is honoured, because that is
+    what correlation means, and it falls back to the request id so both rows carry one value.
+
+    The trace context is *not* this function's policy to hold: it is parsed by the library's
+    W3C parser, which refuses a malformed header rather than reading a trace id out of it.
+    """
     request_id = uuid.uuid4().hex
     correlation_id = headers.get("x-correlation-id", request_id)
-    trace_id: str | None = None
-    traceparent = headers.get("traceparent")
-    if traceparent:
-        parts = traceparent.split("-")
-        if len(parts) >= 4 and re.fullmatch(r"[0-9a-f]{32}", parts[1]):
-            trace_id = parts[1]
-    return request_id, correlation_id, trace_id
+    context = parse_traceparent(headers.get("traceparent"))
+    return request_id, correlation_id, context.trace_id if context is not None else None
 
 
 async def _send_error(send: Callable[..., Awaitable[None]], exc: JdlibError) -> None:

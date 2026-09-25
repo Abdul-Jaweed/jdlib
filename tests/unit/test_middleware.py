@@ -248,6 +248,35 @@ async def test_non_hex_traceparent_trace_id_is_ignored():
     assert seen == [None]
 
 
+async def test_a_structurally_invalid_traceparent_is_refused_not_half_read():
+    """The trace context is parsed by the library's own strict W3C parser.
+
+    A version the specification does not define, and an all-zero trace id, are exactly the
+    "half-understood header" that parser exists to refuse: accepting either would put a trace id
+    into the log that no span will ever carry - a join that silently matches nothing.
+    """
+    seen: list[str | None] = []
+
+    async def inner(scope, receive, send):
+        from jdlib.context import current_tenant
+
+        seen.append(current_tenant().trace_id)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    middleware = _middleware(_Provider(Principal(kind=PrincipalKind.USER, id=USER_ID)), inner)
+    for malformed in (
+        b"ff-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+        b"00-00000000000000000000000000000000-0123456789abcdef-01",
+    ):
+        seen.clear()
+        result = await _run(
+            middleware, [(b"x-tenant-slug", b"acme"), (b"traceparent", malformed)]
+        )
+        assert result["status"] == 200
+        assert seen == [None], f"{malformed!r} must be refused, not half-read"
+
+
 async def test_context_is_cleared_after_request():
     async def inner(scope, receive, send):
         await send({"type": "http.response.start", "status": 200, "headers": []})
