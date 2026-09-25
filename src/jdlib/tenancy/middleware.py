@@ -20,6 +20,8 @@ from jdlib.errors import (
     TenantNotWritable,
     TenantSuspended,
 )
+from jdlib.security.context import RequestIds
+from jdlib.security.responses import error_response
 from jdlib.security.tracing import parse_traceparent
 from jdlib.tenancy.resolution import RequestInfo, ResolverChain
 
@@ -93,17 +95,32 @@ def _request_ids(headers: Mapping[str, str]) -> tuple[str, str, str | None]:
     return request_id, correlation_id, context.trace_id if context is not None else None
 
 
-async def _send_error(send: Callable[..., Awaitable[None]], exc: JdlibError) -> None:
-    status = http_status_for(exc)
-    body = json.dumps({"error": type(exc).__name__, "detail": str(exc)}).encode()
+async def _send_error(
+    send: Callable[..., Awaitable[None]],
+    exc: JdlibError,
+    *,
+    request_ids: RequestIds,
+) -> None:
+    """Answer with the canonical envelope, built by the one module that owns its shape.
+
+    This used to send the exception's class name and text; `docs/security/error-responses.md`
+    describes four fields and a generic 5xx message, and `jdlib.security.responses` implements
+    them. Two edges answering differently is the defect this removes.
+    """
+    response = error_response(exc, request_ids=request_ids)
+    body = json.dumps(dict(response.payload)).encode()
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode()),
+    ]
+    headers.extend(
+        (name.lower().encode(), value.encode()) for name, value in response.headers.items()
+    )
     await send(
         {
             "type": "http.response.start",
-            "status": status,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-            ],
+            "status": response.status,
+            "headers": headers,
         }
     )
     await send({"type": "http.response.body", "body": body})
@@ -128,6 +145,9 @@ class TenantMiddleware:
             await self.app(scope, receive, send)
             return
         request = _request_info(scope)
+        # Derived from the headers alone, before anything can fail: an error answered for a
+        # request that never got a context still has to carry the ids the caller knows it by.
+        request_ids = RequestIds(*_request_ids(request.headers))
         try:
             principal = await self._principal_provider(request)
             if principal is None:
@@ -135,16 +155,15 @@ class TenantMiddleware:
             tenant_ref = await self._chain.resolve(request, principal)
             if tenant_ref is None:
                 raise TenantNotFound("tenant could not be resolved")
-            request_id, correlation_id, trace_id = _request_ids(request.headers)
             context = await self._factory.for_principal(
                 principal,
                 tenant_ref,
-                request_id=request_id,
-                correlation_id=correlation_id,
-                trace_id=trace_id,
+                request_id=request_ids.request_id,
+                correlation_id=request_ids.correlation_id,
+                trace_id=request_ids.trace_id,
             )
         except JdlibError as exc:
-            await _send_error(send, exc)
+            await _send_error(send, exc, request_ids=request_ids)
             return
         with context_scope(context):
             await self.app(scope, receive, send)

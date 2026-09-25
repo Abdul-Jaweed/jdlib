@@ -27,7 +27,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from jdlib.security.context import RequestIds
-from jdlib.security.errors import SecurityClassification, describe_error, www_authenticate
+from jdlib.security.errors import (
+    SecurityClassification,
+    SecurityCode,
+    SecurityDescriptor,
+    describe_error,
+    www_authenticate,
+)
 from jdlib.security.redaction import REDACTED as _REDACTED
 from jdlib.security.redaction import SECRET_PATTERNS as _SECRET_PATTERNS
 
@@ -72,9 +78,54 @@ def _sanitize(message: str) -> str:
     return collapsed[:MAX_MESSAGE_LENGTH]
 
 
-def error_response(exc: BaseException, *, request_ids: RequestIds) -> ErrorResponse:
-    """Build the client-visible response for a failure."""
-    descriptor = describe_error(exc)
+#: The two descriptors the HTTP edges supply for failures the *core* table deliberately does
+#: not know about. `jdlib.data` imports `jdlib.security` (context, audit, tracing), so the core
+#: table cannot name a connector error without a cycle - the edges map those here, with the
+#: same descriptor shape, so there is still exactly one envelope and one vocabulary.
+VALIDATION_FAILED_DESCRIPTOR = SecurityDescriptor(
+    code=SecurityCode.VALIDATION_FAILED,
+    http_status=422,
+    retryable=False,
+    classification=SecurityClassification.VALIDATION,
+)
+DEPENDENCY_UNAVAILABLE_DESCRIPTOR = SecurityDescriptor(
+    code=SecurityCode.DEPENDENCY_UNAVAILABLE,
+    http_status=503,
+    retryable=True,
+    classification=SecurityClassification.AVAILABILITY,
+)
+
+
+def validation_failed_response(
+    *, request_ids: RequestIds, message: str | None = None
+) -> ErrorResponse:
+    """A malformed request, in the canonical shape. Its text is sanitized like any other."""
+    descriptor = VALIDATION_FAILED_DESCRIPTOR
+    return ErrorResponse(
+        status=descriptor.http_status,
+        payload={
+            "code": descriptor.code.value,
+            "message": _sanitize(_redact(message)) if message else "the request failed validation",
+            "request_id": request_ids.request_id,
+            "correlation_id": request_ids.correlation_id or request_ids.request_id,
+        },
+        headers={},
+    )
+
+
+def error_response(
+    exc: BaseException,
+    *,
+    request_ids: RequestIds,
+    descriptor: SecurityDescriptor | None = None,
+) -> ErrorResponse:
+    """Build the client-visible response for a failure.
+
+    ``descriptor`` overrides the classification the core table would give the exception. The
+    HTTP edges use it for the capabilities that sit *above* this module (a connector outage, a
+    spent retry budget), which the core cannot name without inverting the dependency.
+    """
+    descriptor = descriptor if descriptor is not None else describe_error(exc)
     if descriptor.http_status >= 500:
         message = _GENERIC_MESSAGES.get(
             descriptor.classification, _GENERIC_MESSAGES[SecurityClassification.INTERNAL]
@@ -97,4 +148,11 @@ def error_response(exc: BaseException, *, request_ids: RequestIds) -> ErrorRespo
     )
 
 
-__all__ = ["MAX_MESSAGE_LENGTH", "ErrorResponse", "error_response"]
+__all__ = [
+    "DEPENDENCY_UNAVAILABLE_DESCRIPTOR",
+    "MAX_MESSAGE_LENGTH",
+    "VALIDATION_FAILED_DESCRIPTOR",
+    "ErrorResponse",
+    "error_response",
+    "validation_failed_response",
+]

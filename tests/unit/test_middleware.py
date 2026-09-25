@@ -190,7 +190,9 @@ async def test_missing_principal_is_401():
     middleware = _middleware(_Provider(None), inner)
     result = await _run(middleware, [(b"x-tenant-slug", b"acme")])
     assert result["status"] == 401
-    assert json.loads(result["body"])["error"] == "AuthenticationError"
+    body = json.loads(result["body"])
+    assert set(body) == {"code", "message", "request_id", "correlation_id"}
+    assert body["code"] == "AUTHENTICATION_REQUIRED"
     start = next(m for m in result["sent"] if m["type"] == "http.response.start")
     assert dict(start["headers"])[b"content-length"] == str(len(result["body"])).encode()
 
@@ -228,7 +230,7 @@ async def test_unentitled_principal_on_suspended_tenant_is_404_not_423():
     )
     result = await _run(middleware, [(b"x-tenant-slug", b"acme")])
     assert result["status"] == 404
-    assert json.loads(result["body"])["error"] == "TenantAccessDenied"
+    assert json.loads(result["body"])["code"] == "TENANT_ACCESS_DENIED"
 
 
 async def test_non_hex_traceparent_trace_id_is_ignored():

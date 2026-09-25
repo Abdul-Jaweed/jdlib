@@ -31,6 +31,7 @@ class SecurityCode(StrEnum):
     EXPIRED_TOKEN = "EXPIRED_TOKEN"
     INVALID_AUDIENCE = "INVALID_AUDIENCE"
     INVALID_ISSUER = "INVALID_ISSUER"
+    VALIDATION_FAILED = "VALIDATION_FAILED"
     INSUFFICIENT_SCOPE = "INSUFFICIENT_SCOPE"
     UNKNOWN_PRINCIPAL = "UNKNOWN_PRINCIPAL"
     AUTHENTICATION_UNAVAILABLE = "AUTHENTICATION_UNAVAILABLE"
@@ -54,6 +55,8 @@ class SecurityCode(StrEnum):
     CROSS_TENANT_ACCESS = "CROSS_TENANT_ACCESS"
     UNSCOPED_DATA_OPERATION = "UNSCOPED_DATA_OPERATION"
     INVALID_REFERENCE = "INVALID_REFERENCE"
+    #: A dependency (database, policy engine, another service) is not answering.
+    DEPENDENCY_UNAVAILABLE = "DEPENDENCY_UNAVAILABLE"
 
     # -- Configuration and schema
     SECURITY_CONFIGURATION_ERROR = "SECURITY_CONFIGURATION_ERROR"
@@ -76,6 +79,7 @@ class SecurityClassification(StrEnum):
     CONFIGURATION = "configuration"
     AVAILABILITY = "availability"
     INTERNAL = "internal"
+    VALIDATION = "validation"
 
 
 @dataclass(frozen=True, slots=True)

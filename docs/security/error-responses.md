@@ -60,6 +60,36 @@ All seven statuses the directive lists (401, 403, 404, 409, 423, 500, 503) are
 exercised by the test suite, and a matrix test walks the whole descriptor table
 asserting that each entry yields a status from that set and a complete envelope.
 
+## 1a. The two codes the HTTP edges supply (added 2026-09-25, with the G10 fix)
+
+The table above is generated from the core descriptor table, and the core cannot name every
+failure a client can see: `jdlib.data` imports `jdlib.security` (context, audit, tracing), so a
+descriptor for a connector error would close a dependency cycle. The HTTP edges therefore map
+those failures with the *same* descriptor shape and through the *same* builder
+(`jdlib.security.responses.error_response(..., descriptor=...)`), so there is still exactly one
+envelope and one vocabulary:
+
+| Failure | Code | Status | Retryable | Classification | Described by |
+|---|---|---|---|---|---|
+| A malformed request body | `VALIDATION_FAILED` | 422 | no | validation | `jdlib.integrations.fastapi` (FastAPI's `RequestValidationError`) |
+| A dependency that is not answering: `ConnectorError`, a spent `RetryBudgetExhaustedError`, a `ShutdownInProgressError`, and the connection-level `sqlalchemy` errors (`OperationalError`, `InterfaceError`, `TimeoutError`) | `DEPENDENCY_UNAVAILABLE` | 503 | yes | availability | `jdlib.integrations.fastapi` |
+
+Two rules the edges must keep, and the tests assert:
+
+* **The same shape.** Every one of these answers with exactly `code`, `message`,
+  `request_id`, `correlation_id` - and a 401 with its RFC 6750 challenge. The tenant middleware
+  and the FastAPI integration both used to answer `{"error": <class name>, "detail": <str(exc)>}`,
+  which is what this section's contract was written against; the class name leaked the
+  implementation and the detail leaked *every* message, including 5xx ones.
+* **A 5xx never echoes its own text.** A server-side message can legitimately name a DSN, an
+  internal endpoint or key material, so the client gets the generic description for its
+  classification. A 4xx keeps the error's own text - printable, redacted, capped - because that
+  text was written for a caller.
+* **Selectivity.** A connection the database *refused* is an outage (503, retry me); a
+  statement it *rejected* is a defect in the caller's application (500). A handler that mapped
+  every `DBAPIError` would pass a one-sided test and hide real defects, so the tests assert
+  both directions.
+
 ## 2. The safe response envelope
 
 `error_response(exc, request_ids=...)` returns

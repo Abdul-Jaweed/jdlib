@@ -168,7 +168,7 @@ async def test_grant_against_soft_deleted_resource_returns_409(control_session_f
         response = await client.post("/grants", headers={"Authorization": token})
 
     assert response.status_code == 409
-    assert response.json()["error"] == "InvalidReference"
+    assert response.json()["code"] == "INVALID_REFERENCE"
 
 
 def _client(app) -> httpx.AsyncClient:
@@ -190,10 +190,11 @@ async def test_request_without_credentials_returns_401_json(control_session_fact
     async with _client(app) as client:
         response = await client.get("/")
     assert response.status_code == 401
-    assert response.json() == {
-        "error": "AuthenticationError",
-        "detail": "no credentials presented",
-    }
+    body = response.json()
+    assert set(body) == {"code", "message", "request_id", "correlation_id"}
+    assert body["code"] == "AUTHENTICATION_REQUIRED"
+    assert body["message"] == "no credentials presented"
+    assert response.headers["www-authenticate"].lower().startswith("bearer")
 
 
 async def test_key_pinned_to_other_tenant_with_header_override_returns_404(
@@ -205,7 +206,7 @@ async def test_key_pinned_to_other_tenant_with_header_override_returns_404(
             "/", headers={"Authorization": token, "X-Tenant-Slug": other_slug}
         )
     assert response.status_code == 404
-    assert response.json()["error"] == "TenantAccessDenied"
+    assert response.json()["code"] == "TENANT_ACCESS_DENIED"
 
 
 async def test_route_jdlib_error_maps_to_json_via_handler(control_session_factory):
@@ -213,7 +214,10 @@ async def test_route_jdlib_error_maps_to_json_via_handler(control_session_factor
     async with _client(app) as client:
         response = await client.get("/denied", headers={"Authorization": token})
     assert response.status_code == 403
-    assert response.json() == {"error": "PermissionDenied", "detail": "nope"}
+    body = response.json()
+    assert set(body) == {"code", "message", "request_id", "correlation_id"}
+    assert body["code"] == "PERMISSION_DENIED"
+    assert body["message"] == "nope"
 
 
 class _FakeEnforcer:
@@ -281,7 +285,7 @@ async def test_denied_require_returns_403_json(control_session_factory):
         response = await client.get("/guarded-denied", headers={"Authorization": token})
 
     assert response.status_code == 403
-    assert response.json() == {
-        "error": "PermissionDenied",
-        "detail": "invoice.read: denied by policy",
-    }
+    body = response.json()
+    assert set(body) == {"code", "message", "request_id", "correlation_id"}
+    assert body["code"] == "PERMISSION_DENIED"
+    assert body["message"] == "invoice.read: denied by policy"
