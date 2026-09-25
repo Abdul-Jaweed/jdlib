@@ -79,7 +79,7 @@ def _request_info(scope: Mapping[str, Any]) -> RequestInfo:
     )
 
 
-def _request_ids(headers: Mapping[str, str]) -> tuple[str, str, str | None]:
+def request_ids_for(headers: Mapping[str, str]) -> tuple[str, str, str | None]:
     """The request's ids, with this middleware's own policy about who may supply them.
 
     The request id is always generated here - a caller does not get to name the id the audit
@@ -147,7 +147,7 @@ class TenantMiddleware:
         request = _request_info(scope)
         # Derived from the headers alone, before anything can fail: an error answered for a
         # request that never got a context still has to carry the ids the caller knows it by.
-        request_ids = RequestIds(*_request_ids(request.headers))
+        request_ids = RequestIds(*request_ids_for(request.headers))
         try:
             principal = await self._principal_provider(request)
             if principal is None:
