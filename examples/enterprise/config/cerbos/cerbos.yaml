@@ -1,0 +1,18 @@
+# The engine's own configuration, for the example's lab. One storage backend: the policy
+# directory mounted beside this file, so what runs is what is in the repository.
+server:
+  httpListenAddr: ":3592"
+  grpcListenAddr: ":3593"
+
+storage:
+  driver: "disk"
+  disk:
+    directory: /policies
+    watchForChanges: false
+
+# A request the engine cannot answer is a request the library treats as *degraded*, and a degraded
+# decision is never an allow. These limits make "cannot answer" the outcome of a slow or malformed
+# request rather than an open door.
+engine:
+  defaultPolicyVersion: "default"
+  lenientScopeSearch: false

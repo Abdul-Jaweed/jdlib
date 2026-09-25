@@ -607,3 +607,38 @@ names the commit that fixed it.
   now fails it.
 * **Found by** a mutation check of the example's own guard test — the RED that proved the test was
   decoration.
+
+### The example application — the enterprise example (directive §18)
+
+* **What landed.** `examples/enterprise/`: the layers a production application wires, each one a
+  place a collaborator is plugged in rather than a mechanism the example implements — settings
+  marked required/optional and secret/non-secret, the library's authenticator chain as the
+  principal provider, the bridge between the Cerbos PDP and the route guard, an operator directory
+  backed by the control plane's `platform_operators` record, the context factory, the container,
+  the security-event sink, and two tenant routes that declare their permissions. Committed in
+  `9359301`; its own entry lands here, one commit later, because that commit omitted it.
+* **Why it exists.** The minimal example answers "what is the least I must do"; this one answers
+  "what does the whole thing look like, and which part is whose job" — including the adapters a
+  deployment must write itself.
+
+### The example application — the authorization slice, verified against a live engine (directive §18)
+
+* **What landed.** `examples/enterprise/config/cerbos/policies/`: the policy set the bridge's
+  mapping is written against (`scope` / `tenant` / the permission strings the routes declare), plus
+  `tenant_scope_test.yaml` — 21 assertions executed by the engine's own compiler. `docker/` brings
+  up the lab (PostgreSQL and Cerbos on their own ports). `tests/test_authorization.py` pins the
+  mapping without an engine (5 tests); `tests/test_authorization_live.py` has the engine answer the
+  query the bridge builds over the wire (4 tests: allow, deny, the administrator's lifecycle
+  actions, and an administrator of another tenant denied).
+* **Why it exists.** A policy that has never been compiled is a claim, and a mapping that has never
+  been sent is a guess: the two halves are verified separately, and the live half is what makes the
+  cross-tenant rule a control rather than an intention.
+* **Evidence.** `cerbos compile` → 21 tests executed, 21 OK. Live: 4 passed against
+  `ghcr.io/cerbos/cerbos:0.54.0`; mutations 2/2 (the policy stops comparing tenants → the
+  cross-tenant test fails; the resource stops carrying its tenant → the allow tests fail). With the
+  endpoint unset the live file skips with its bring-up command as the reason.
+* **Found by** the lab: the image's entrypoint *is* the binary at `/cerbos`, so mounting the policy
+  directory there fails with `not a directory` before the container starts — mount it anywhere else.
+* **Found by** the live run's first shape: `HttpCerbosTransport(timeout=…)` takes a `timedelta`, and
+  a float fails only when the request is made, where the adapter reports it as a *degraded* decision
+  — every case answered DENY/degraded, which reads like a policy denial and is an outage.

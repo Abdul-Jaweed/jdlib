@@ -18,9 +18,10 @@ whose job".
 | `app/api/` — the tenant routes, each declaring its permission | **here** |
 | `app/bootstrap.py` — the operator step (migrate, create, provision) | **here** |
 | `config/.env.example` — every variable, marked, with no values | **here** |
-| `config/cerbos/` — the policy files, compiled and tested against a live engine | next |
+| `config/cerbos/` — the policy set, with the engine's own tests beside it | **here** — 21 policy tests, run by `cerbos compile` |
+| `docker/` — the lab (PostgreSQL, Cerbos) | **here** — Neo4j and the collector arrive with the graph and telemetry layers |
+| `tests/test_authorization.py`, `tests/test_authorization_live.py` — the bridge's mapping, and the engine's answers over the wire | **here** — 5 unit, 4 live |
 | `app/services/`, `app/repositories/`, `app/graph/`, `app/mcp/` | next |
-| `docker/` — the lab (PostgreSQL, Cerbos, Neo4j, collector) | next |
 | `tests/{integration,security,e2e}` — the matrix the directive asks for | next |
 
 The order is deliberate and dependency-forced: the policy files and the container lab land with the
@@ -39,6 +40,8 @@ written. This README is corrected in the same commit as each layer.
 | `app/security/container.py` | the collaborators `require(...)` reads from `app.state` |
 | `app/security/audit.py` | security events into the control plane's audit trail |
 | `app/api/router.py` | the tenant routes, each declaring the permission it needs |
+| `config/cerbos/policies/tenant_scope.yaml` | the policy set, written against `resource_for`'s names |
+| `config/cerbos/policies/tenant_scope_test.yaml` | the same properties, asserted to the engine's compiler |
 
 ## Prerequisites
 
@@ -83,13 +86,39 @@ A request to `/api/...` with no credentials answers the canonical envelope; a re
 principal the policy engine denies answers `403 PERMISSION_DENIED` with no handler output, and one
 the engine cannot answer at all answers `503` — a degraded decision is never an allow.
 
+## Verifying the policies
+
+Two halves, and both run without the application:
+
+```bash
+# Static: the engine's own compiler runs the policy tests beside the policies.
+docker run --rm -v "$PWD:/repo:ro" ghcr.io/cerbos/cerbos:0.54.0 \
+    compile /repo/examples/enterprise/config/cerbos/policies
+
+# Live: the query the bridge builds, answered by the engine over the wire.
+export JDLIB_ENTERPRISE_POSTGRES_PASSWORD="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+docker compose -f docker/docker-compose.yml up -d cerbos
+export JDLIB_EXAMPLE_CERBOS_ENDPOINT=http://127.0.0.1:4592
+pytest examples/enterprise/tests/test_authorization_live.py -q -W error
+```
+
+With `JDLIB_EXAMPLE_CERBOS_ENDPOINT` unset the live file skips with that reason, so a missing lab
+shows as a skip rather than a failure.
+
+Mount the policy directory at a destination other than `/cerbos`: the image's entrypoint *is* the
+binary at that path, and a directory mounted there fails with `not a directory` before the container
+starts.
+
 ## Tests
 
 ```bash
 pytest examples/enterprise/tests -q -W error     # from the repository root
 ```
 
-This slice's tests are structural: the ops routes answer without credentials, every tenant route
-declares a permission, an unauthenticated request answers the canonical envelope, and a plaintext
-policy endpoint is refused. The behavioural matrix — denial non-execution, tenant isolation, the
-end-to-end chain — arrives with the layers it tests.
+The structural slice: the ops routes answer without credentials, every tenant route declares a
+permission, an unauthenticated request answers the canonical envelope, and a plaintext policy
+endpoint is refused. The authorization slice: the bridge's mapping (unit, no engine), and the
+engine's own answers — allow, deny, and an administrator of another tenant denied (live).
+
+The behavioural matrix — denial non-execution, tenant isolation end to end, the whole chain through
+the gateway — arrives with the layers it tests.

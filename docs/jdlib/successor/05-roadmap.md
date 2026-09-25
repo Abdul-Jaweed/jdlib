@@ -526,7 +526,8 @@ a driver, a raw session factory or a second envelope.
 |---|---|---|
 | E1 — the minimal example | **landed** `47caeb6` | 11 tests in `examples/minimal/tests` (shape, envelope, readiness, startup refusal, the live operator step and the live denial with an allowing control); 9/9 mutations bit; two library defects found and fixed (`ConnectionError` → 503 on the async driver, and the guard's `jdlib_permission` declaration) |
 | E2 — configuration, security, api | **landed** | `examples/enterprise/`: settings marked required/optional, the Cerbos bridge, the operator directory, the audit sink, two guarded routes; 5 tests, 2/2 mutations |
-| E3 — services, repositories, graph, mcp, **and the Cerbos policy files + `docker/`** | next | the policy files move here from E2 so that every artifact ships having been run: a policy that has never been compiled against a live engine is a claim, not a control |
+| E3a — the Cerbos policy set, the lab, and the authorization verification | **landed** | `config/cerbos/policies/` with 21 tests executed by `cerbos compile`; `docker/docker-compose.yml`; 5 unit tests for the bridge's mapping and 4 live tests answered by the engine (allow, deny, cross-tenant deny); 2/2 mutations bit |
+| E3b — services, repositories, graph, mcp | next | the layers that need the tenant plane, built on the control plane the slices above wired |
 | E4–E8 | next | as listed below |
 
 The examples are type-checked from E1 onwards (`mypy src/jdlib examples` in `scripts/ci-local.sh` and

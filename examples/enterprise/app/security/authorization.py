@@ -18,7 +18,7 @@ from __future__ import annotations
 from examples.enterprise.app.configuration.settings import ExampleSettings
 from examples.enterprise.app.security.roles import RoleDirectory
 from jdlib.authz.pdp import Decision
-from jdlib.authz.scopes import ResourceRef, ScopeRef, Target
+from jdlib.authz.scopes import ScopeRef, Target
 from jdlib.context import TenantContext, current_tenant
 from jdlib.errors import PermissionDenied
 from jdlib.security.audit.emitters import SecurityEventSink, authorization_audit_observer
@@ -50,38 +50,49 @@ def build_pep(
     )
 
 
-def _resource_of(target: Target) -> tuple[str, str]:
-    """The (kind, id) pair a Cerbos policy names.
+def resource_for(target: Target) -> tuple[str, str]:
+    """The `(kind, id)` this application asks about, for a route's `Target`.
 
-    The mapping is this application's convention, and the policies in `config/cerbos/` are written
-    to match it: a resource-scoped guard is its own kind with the resource's id, while a
-    tenant-scoped one is the kind `scope` with the scope's name -- a scope is not a resource with an
-    id, and pretending otherwise would put a made-up id in front of the engine.
+    The mapping is the application's, so it is stated once, here, where the policy files can be read
+    beside it -- `config/cerbos/policies/tenant_scope.yaml` is written against exactly these names.
+
+    * a `ScopeRef` -- a tenant, an org, a team -- is the Cerbos resource kind `scope`, and the id is
+      the scope's *name* (`ScopeType.TENANT` -> `"tenant"`), because a policy needs to distinguish
+      a tenant scope from an org scope, not to name one tenant.
+    * a `ResourceRef` keeps its own type as the kind, and its id.
     """
-    if isinstance(target, ResourceRef):
-        return target.resource_type, str(target.resource_id)
-    return "scope", target.type.value
+    if isinstance(target, ScopeRef):
+        return "scope", target.type.value
+    return target.resource_type, str(target.resource_id)
 
 
-def _query(
-    permission: str, target: Target, context: TenantContext, roles: frozenset[str]
+def query_for(
+    permission: str,
+    target: Target,
+    *,
+    context: TenantContext,
+    roles: frozenset[str],
 ) -> AuthorizationQuery:
-    resource_kind, resource_id = _resource_of(target)
+    """The question put to the policy engine, built from the guard's arguments and the context.
+
+    The tenant in `attributes` is the **context's**, never a caller's argument: a route cannot ask
+    about another tenant's scope, because it has no way to name one. The policy's cross-tenant rule
+    (principal's tenant == resource's tenant) is then a second, independent check rather than the
+    only one.
+    """
+    kind, identifier = resource_for(target)
     attributes: dict[str, object] = {"tenantId": str(context.tenant_id)}
     if isinstance(target, ScopeRef) and target.id is not None:
         attributes["scopeId"] = str(target.id)
     return AuthorizationQuery(
         principal_id=str(context.principal.id),
         tenant_id=context.tenant_id,
-        resource_kind=resource_kind,
-        resource_id=resource_id,
+        resource_kind=kind,
+        resource_id=identifier,
         actions=(permission,),
         roles=roles,
-        # The tenant guard in the policies compares the principal's tenant with the resource's, so
-        # the resource has to carry one -- spelled the way the library spells the principal's, or
-        # every request would deny.
         attributes=attributes,
-        principal_attributes={"tenant_slug": context.tenant_slug},
+        principal_attributes={"tenantId": str(context.tenant_id)},
         request_id=context.request_id,
     )
 
@@ -107,7 +118,8 @@ class CerbosEnforcer:
             # refuses to decide for one at all -- which the library reports as *degraded*, i.e. 503.
             # The caller is facing a denial, not an outage, so it is decided here and said plainly.
             raise PermissionDenied(f"{permission}: the caller has no roles in this tenant")
-        decision = await self._pep.require(_query(permission, target, context, roles))
+        query = query_for(permission, target, context=context, roles=roles)
+        decision = await self._pep.require(query)
         # Reaching this line means the engine allowed it: `AuthorizationPEP.require` raises on a
         # denial and on a degraded decision, which is the whole reason to call it rather than
         # `check`.

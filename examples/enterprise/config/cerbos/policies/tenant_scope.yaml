@@ -1,0 +1,39 @@
+# The tenant plane's own resource: a *scope*, not a resource with an id.
+#
+# `CerbosEnforcer` (app/security/authorization.py) maps a tenant-scoped guard onto the resource kind
+# `scope` with the scope's name as the id, and sends the tenant the request is scoped to as the
+# resource attribute `tenantId`. The library sends the principal's own tenant under the same name,
+# which is what makes the guard below expressible at all: an authorization answer about another
+# tenant's scope is a denial, not a lookup.
+#
+# The action names are the permissions the routes declare (`require("tenant:read")`), because a
+# permission is what the application asks for; the *roles* are the control plane's, resolved per
+# request by `RoleDirectory`.
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: "default"
+  resource: "scope"
+  rules:
+    # Reading a tenant's own scope: any role the control plane granted in that tenant.
+    - actions: ["tenant:read", "audit:read"]
+      effect: EFFECT_ALLOW
+      roles: ["support", "operator", "admin"]
+      condition:
+        match:
+          expr: has(request.principal.attr.tenantId) && request.principal.attr.tenantId == request.resource.attr.tenantId
+
+    # Changing a tenant's lifecycle: the administrative role, and only in its own tenant.
+    - actions: ["tenant:suspend", "tenant:archive"]
+      effect: EFFECT_ALLOW
+      roles: ["admin"]
+      condition:
+        match:
+          expr: has(request.principal.attr.tenantId) && request.principal.attr.tenantId == request.resource.attr.tenantId
+
+    # Exporting a tenant's data: the administrative role, and only in its own tenant.
+    - actions: ["data:export"]
+      effect: EFFECT_ALLOW
+      roles: ["admin"]
+      condition:
+        match:
+          expr: has(request.principal.attr.tenantId) && request.principal.attr.tenantId == request.resource.attr.tenantId

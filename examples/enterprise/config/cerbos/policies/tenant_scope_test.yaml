@@ -1,0 +1,130 @@
+# The policy set's own tests, run by the engine's compiler (`cerbos compile`). They are the static
+# half of the verification: they run with no server, in CI, and they pin the properties the
+# application depends on -- including the one that matters most, that an administrator of *another*
+# tenant is denied.
+#
+# The live half (`tests/test_authorization_live.py`) proves the same properties over the wire, where
+# the query the bridge builds is what the engine actually receives.
+name: TenantScope
+description: "A scope is readable and changeable only from inside its own tenant."
+principals:
+  admin_of_a:
+    id: "admin-a"
+    roles: ["admin"]
+    attr:
+      tenantId: "tenant-a"
+  support_of_a:
+    id: "support-a"
+    roles: ["support"]
+    attr:
+      tenantId: "tenant-a"
+  operator_of_a:
+    id: "operator-a"
+    roles: ["operator"]
+    attr:
+      tenantId: "tenant-a"
+  admin_of_b:
+    id: "admin-b"
+    roles: ["admin"]
+    attr:
+      tenantId: "tenant-b"
+  unmatched_role:
+    id: "viewer"
+    roles: ["viewer"]
+    attr:
+      tenantId: "tenant-a"
+  no_tenant:
+    id: "untenanted"
+    roles: ["admin"]
+    attr: {}
+
+resources:
+  scope_of_a:
+    kind: "scope"
+    id: "tenant"
+    attr:
+      tenantId: "tenant-a"
+
+tests:
+  - name: "Read and audit are allowed inside the tenant, for every role the control plane grants"
+    input:
+      principals: ["admin_of_a", "support_of_a", "operator_of_a"]
+      resources: ["scope_of_a"]
+      actions: ["tenant:read", "audit:read"]
+    expected:
+      - principal: "admin_of_a"
+        resource: "scope_of_a"
+        actions:
+          "tenant:read": EFFECT_ALLOW
+          "audit:read": EFFECT_ALLOW
+      - principal: "support_of_a"
+        resource: "scope_of_a"
+        actions:
+          "tenant:read": EFFECT_ALLOW
+          "audit:read": EFFECT_ALLOW
+      - principal: "operator_of_a"
+        resource: "scope_of_a"
+        actions:
+          "tenant:read": EFFECT_ALLOW
+          "audit:read": EFFECT_ALLOW
+
+  - name: "Lifecycle changes are the administrator's, and data export too"
+    input:
+      principals: ["admin_of_a", "support_of_a", "operator_of_a"]
+      resources: ["scope_of_a"]
+      actions: ["tenant:suspend", "tenant:archive", "data:export"]
+    expected:
+      - principal: "admin_of_a"
+        resource: "scope_of_a"
+        actions:
+          "tenant:suspend": EFFECT_ALLOW
+          "tenant:archive": EFFECT_ALLOW
+          "data:export": EFFECT_ALLOW
+      - principal: "support_of_a"
+        resource: "scope_of_a"
+        actions:
+          "tenant:suspend": EFFECT_DENY
+          "tenant:archive": EFFECT_DENY
+          "data:export": EFFECT_DENY
+      - principal: "operator_of_a"
+        resource: "scope_of_a"
+        actions:
+          "tenant:suspend": EFFECT_DENY
+          "tenant:archive": EFFECT_DENY
+          "data:export": EFFECT_DENY
+
+  - name: "An administrator of another tenant is denied, though the role is right"
+    input:
+      principals: ["admin_of_b"]
+      resources: ["scope_of_a"]
+      actions: ["tenant:read", "tenant:suspend", "data:export"]
+    expected:
+      - principal: "admin_of_b"
+        resource: "scope_of_a"
+        actions:
+          "tenant:read": EFFECT_DENY
+          "tenant:suspend": EFFECT_DENY
+          "data:export": EFFECT_DENY
+
+  - name: "A role no rule names is granted nothing"
+    input:
+      principals: ["unmatched_role"]
+      resources: ["scope_of_a"]
+      actions: ["tenant:read", "data:export"]
+    expected:
+      - principal: "unmatched_role"
+        resource: "scope_of_a"
+        actions:
+          "tenant:read": EFFECT_DENY
+          "data:export": EFFECT_DENY
+
+  - name: "A principal with no tenant attribute is denied rather than compared"
+    input:
+      principals: ["no_tenant"]
+      resources: ["scope_of_a"]
+      actions: ["tenant:read"]
+    expected:
+      - principal: "no_tenant"
+        resource: "scope_of_a"
+        actions:
+          "tenant:read": EFFECT_DENY
