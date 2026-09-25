@@ -13,24 +13,30 @@ layer hold it with no database client installed.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jdlib.graph.errors import GraphError
-from jdlib.graph.policy import GraphPolicy
 from jdlib.graph.query import GraphQuery
 from jdlib.graph.tenant import require_scope, require_tenant_id
 from jdlib.security.context import SecurityContext
+
+if TYPE_CHECKING:
+    from jdlib.graph.policy import GraphPolicy
 
 
 class TransactionOutcome(StrEnum):
     """How a transaction ended.
 
     ``PENDING`` is the state it starts in and the only one in which a statement may run.
+    ``UNCERTAIN`` is the state a transaction enters when its commit failed: the server may have
+    applied it before the error arrived, so it is not the same thing as a rollback and must not
+    be treated as one.
     """
 
     PENDING = "pending"
     COMMITTED = "committed"
     ROLLED_BACK = "rolled-back"
+    UNCERTAIN = "uncertain"
 
 
 class GraphTransaction:
@@ -49,8 +55,14 @@ class GraphTransaction:
         return self._outcome
 
     def retryable(self) -> bool:
-        """Whether the work may be attempted again. A committed transaction never is."""
-        return self._outcome is not TransactionOutcome.COMMITTED
+        """Whether the work may be attempted again.
+
+        True only when nothing can have landed: a transaction that never began, or one that was
+        rolled back. A commit that *failed* leaves the outcome uncertain — the server may have
+        applied it before the error arrived — and an uncertain write is not repeated, because
+        repeating it is how a duplicate appears.
+        """
+        return self._outcome in (TransactionOutcome.PENDING, TransactionOutcome.ROLLED_BACK)
 
     async def __aenter__(self) -> GraphTransaction:
         self._transaction = await self._session.begin_transaction(
@@ -81,10 +93,20 @@ class GraphTransaction:
         return [dict(record) for record in await result.data()]
 
     async def commit(self) -> None:
-        """End the transaction, keeping its work."""
+        """End the transaction, keeping its work.
+
+        A commit that fails leaves the outcome ``UNCERTAIN`` rather than pending: the server may
+        have applied the transaction before the error arrived, and the difference between
+        "definitely not applied" and "unknown" is the difference between a safe retry and a
+        duplicate write.
+        """
         if self._outcome is not TransactionOutcome.PENDING:
             raise GraphError("graph transaction: the transaction has already ended")
-        await self._transaction.commit()
+        try:
+            await self._transaction.commit()
+        except Exception:
+            self._outcome = TransactionOutcome.UNCERTAIN
+            raise
         self._outcome = TransactionOutcome.COMMITTED
 
     async def rollback(self) -> None:

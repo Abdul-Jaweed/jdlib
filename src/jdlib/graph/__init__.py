@@ -13,6 +13,7 @@ from jdlib.graph.client import GraphClient, GraphRunner, Neo4jClient, SecretReso
 from jdlib.graph.config import GraphConfig
 from jdlib.graph.errors import (
     GraphAuthorizationError,
+    GraphCircuitOpenError,
     GraphConflictError,
     GraphError,
     GraphNotFoundError,
@@ -23,7 +24,7 @@ from jdlib.graph.errors import (
     GraphValidationError,
 )
 from jdlib.graph.models import GraphVocabulary, Label, PropertyKey, RelationshipType
-from jdlib.graph.policy import GraphPolicy
+from jdlib.graph.policy import GraphCircuitBreaker, GraphPolicy
 from jdlib.graph.query import (
     GraphQuery,
     node_create,
@@ -39,6 +40,8 @@ from jdlib.graph.transaction import GraphTransaction, TransactionOutcome
 
 __all__ = [
     "GraphAuthorizationError",
+    "GraphCircuitBreaker",
+    "GraphCircuitOpenError",
     "GraphClient",
     "GraphConfig",
     "GraphConflictError",

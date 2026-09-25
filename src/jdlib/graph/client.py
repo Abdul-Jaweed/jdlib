@@ -55,13 +55,15 @@ class GraphRunner(Protocol):
 
 @runtime_checkable
 class GraphClient(GraphRunner, Protocol):
-    """A runner that can also be opened, closed and asked about its health."""
+    """A runner that can also be opened, closed, asked about its health, and begin a transaction."""
 
     async def open(self, *, context: SecurityContext) -> None: ...
 
     async def close(self) -> None: ...
 
     async def health(self) -> bool: ...
+
+    def begin(self, *, context: SecurityContext) -> GraphTransaction: ...
 
 
 def _named(module: Any, *names: str) -> tuple[type[BaseException], ...]:

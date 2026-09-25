@@ -77,3 +77,12 @@ class GraphUnavailableError(GraphError):
 
     def __init__(self, *args: object, transient: bool = True) -> None:
         super().__init__(*args, transient=transient)
+
+
+class GraphCircuitOpenError(GraphError):
+    """The circuit is open after repeated failures: the call was refused without attempting.
+
+    Permanent by construction — the point of the breaker is to stop asking — and distinct from
+    :class:`GraphUnavailableError` so a caller can tell "the dependency answered badly" from
+    "we stopped asking".
+    """

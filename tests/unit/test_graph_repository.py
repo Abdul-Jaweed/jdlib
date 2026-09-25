@@ -23,11 +23,11 @@ from jdlib.context import Principal, PrincipalKind, TenantContext
 from jdlib.control.enums import PlacementStrategy
 from jdlib.errors import MissingTenantContext
 from jdlib.graph import (
-    GraphClient,
     GraphQuery,
     GraphValidationError,
     GraphVocabulary,
 )
+from jdlib.graph.client import GraphRunner
 from jdlib.graph.repository import GraphRepository
 from jdlib.security.context import AuthMethod, SecurityContext
 
@@ -278,6 +278,6 @@ async def test_related_answers_whether_the_edge_is_there() -> None:
 
 
 def test_the_repository_depends_on_the_protocol_not_the_driver() -> None:
-    """A recording client satisfies the seam, which is what makes the unit layer possible."""
+    """A recording runner satisfies the seam, which is what makes the unit layer possible."""
     _, recorded = _repository()
-    assert isinstance(recorded, GraphClient)
+    assert isinstance(recorded, GraphRunner)

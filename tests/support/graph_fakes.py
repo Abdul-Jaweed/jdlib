@@ -86,6 +86,9 @@ class FakeTransaction:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.committed = False
         self.rolled_back = False
+        #: A commit that fails is the case the retry rule exists for: the server may have applied
+        #: the transaction before the error arrived.
+        self.commit_error: BaseException | None = None
 
     async def run(self, text: str, parameters: dict[str, Any] | None = None) -> FakeResult:
         self.calls.append((text, dict(parameters or {})))
@@ -94,6 +97,8 @@ class FakeTransaction:
         return FakeResult(self._driver.rows)
 
     async def commit(self) -> None:
+        if self.commit_error is not None:
+            raise self.commit_error
         self.committed = True
 
     async def rollback(self) -> None:
