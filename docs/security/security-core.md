@@ -202,10 +202,17 @@ violating import is introduced, so the guard has teeth.
 6. **What regression risk exists?** Low: additive package, no touched behaviour.
    The only shared file changed is `jdlib/context.py`, where an enum member was
    added (existing members and their values are untouched).
-7. **What documentation is stale?** `knowledge_base/` (built before this phase)
-   does not yet describe `jdlib.security`; it will be refreshed in the Phase 11
-   documentation sweep.
-8. **What remains incomplete?** Middleware wiring of `SecurityContext` into the
-   ASGI/FastAPI path, the response envelope and `WWW-Authenticate` emission
-   (Phase 5), token validation and JWKS hardening (Phase 2), PDP/Cerbos
-   (Phase 3), gateway adapters (Phase 4), audit/observability (Phases 6–7).
+7. **What documentation is stale?** Nothing now. This item originally recorded
+   that `knowledge_base/` (built before this phase) did not yet describe
+   `jdlib.security`; the Phase 11 sweep has since refreshed it —
+   `knowledge_base/README.md` names the security layer and points at
+   `docs/security/` for the phase documents.
+8. **What remains incomplete?** Only the `SecurityContext` binding: the library
+   provides the scope (`security_context_scope`) and the factory, and the
+   consumer binds it in its own middleware — the reference application does, and
+   `data/policy.py` binds it on the data path. Everything else this item listed
+   has since landed: the response envelope and `WWW-Authenticate` emission
+   (`install_error_envelope`, G10), token validation and JWKS hardening
+   (`authn/wiring.py`), PDP/Cerbos (`CerbosPDP`, and the PEP in
+   `integrations/fastapi.py`), the gateway adapters (shipped; the consumer wires
+   them), and audit/observability (Phases 6–7).

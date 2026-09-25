@@ -4,7 +4,13 @@ Phase 0 (Successor Architecture) is the gate this programme's directive places b
 implementation: a capability inventory, a gap analysis, an adoption matrix, a target architecture,
 a public naming model and a roadmap, each committed before code is written.
 
-**Status: COMPLETE, committed.** Implementation phases (roadmap §1 onward) have not begun.
+**Status: COMPLETE, committed — and executed.** Phase 0 is the gate this programme's directive
+places before any implementation, and the implementation it gated has since run: the roadmap in
+this directory is **delivered through §15** (§3–§15 on 2026-09-24/25; §7 delivered for PostgreSQL
+with the other four engines deferred by decision), each phase carrying its own status line and its
+evidence in [05-roadmap.md](05-roadmap.md). The directive's remaining sections — first-class
+Neo4j, first-class FastMCP, and the strict certification gate — are next, and their status is
+recorded in the same roadmap.
 
 ## The documents
 

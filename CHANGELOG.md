@@ -428,3 +428,56 @@ names the commit that fixed it.
   **869 passed** at this revision (867 before).
 * **Found by** the reference application wiring the security context, and finding
   that the binding alone changed nothing: identifiers must travel with the event.
+
+### The envelope's fourth shape — a framework's own `HTTPException` — `27b8e63`, `42c26d0`
+
+* **Symptom.** A route that raised `fastapi.HTTPException` (or Starlette's, from a
+  dependency) answered the framework's default `{"detail": ...}` body while every
+  other failure answered the documented four-key envelope — an application's own
+  rejections, the ones it writes deliberately, were the ones that escaped it.
+* **Cause.** The request edge installed handlers for `JdlibError` and
+  `RequestValidationError` but never took over Starlette's default
+  `HTTPException` handler, so that path bypassed the envelope entirely.
+* **Fix.** `install_error_envelope` maps `HTTPException` by status, adds the
+  RFC 6750 challenge to a 401, and never lets a 5xx echo its own text
+  (`security/responses.py`, `integrations/fastapi.py`). `install` calls it, so a
+  consumer that installed the library gets the canonical envelope without a
+  second step.
+* **Now.** `tests/integration/test_error_envelope_contract.py` pins the shape, the
+  status mapping, the challenge and the 5xx rule, including the framework-handler
+  edges.
+* **Found by** the reference application asserting the envelope on a route that
+  raises its own `HTTPException`.
+
+### The policy engine recorded a request id the caller never sent — `3d0c26c`
+
+* **Symptom.** Cerbos' own decision log carried a freshly minted `request_id`, so
+  the engine's record of *why* a request was allowed was the one record that could
+  not be joined to the gateway's log, the application's log or the audit trail.
+* **Cause.** `CerbosPDP.decide` sent no `requestId` and no `traceparent`; the
+  engine therefore generated its own.
+* **Fix.** The caller's correlation id now travels as the request's `requestId`
+  with a W3C `traceparent` beside it (`security/authz/cerbos.py`). A live
+  experiment — not the documentation — established what Cerbos 0.54 records: it
+  keeps `requestId` and none of the headers, and it *rejects* the `metadata` field
+  an earlier attempt sent (`400`, `proto: unknown field "metadata"`).
+* **Now.** `tests/unit/security/test_cerbos_pdp.py` asserts the id travels and pins
+  the absence of `metadata`; the reference application's walkthrough asserts the
+  engine's own log line.
+* **Found by** the reference application trying to join one request across three
+  systems.
+
+### The statement that stores a request's evidence carried no request identity — `f6cc973`
+
+* **Symptom.** PostgreSQL's own log showed the audit INSERT with no way to say
+  which request it belonged to: the transaction that stores the evidence was
+  anonymous at the database's own edge.
+* **Cause.** `ControlPlaneSession.execute` had no way to set a session parameter,
+  so the audit sink could not name its transaction.
+* **Fix.** `ControlPlaneSession.execute(..., session_settings=...)` — an additive
+  keyword — and the audit sink sets `application_name` per transaction via
+  `set_config(..., true)` (`control/session.py`, `control/audit.py`).
+* **Now.** The reference application's lab shows the same id on the `set_config`,
+  the INSERT and the gateway's response: three independent records of one request.
+* **Found by** the reference application asking what its own audit trail looks like
+  from the database's side.

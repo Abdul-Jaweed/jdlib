@@ -160,10 +160,12 @@ retries and recovery once the endpoint returns.
 
 ## 8. Deferred (explicitly not implemented)
 
-* `build_authenticator` still constructs the pre-existing `OidcAuthenticator`;
-  the hardened validator is not yet wired into the application path. Doing so
-  changes request-path behaviour and needs its own tests plus a migration note,
-  so it is scheduled with the gateway phase rather than smuggled into this one.
+* **Closed.** `build_authenticator` still constructs the pre-existing
+  `OidcAuthenticator`, but it now builds it *from* the hardened pieces: it
+  constructs `JwksCache`, `TokenVerifier`, `ClaimMapper` and `UserLinker` and
+  passes them in (`src/jdlib/authn/wiring.py`), so the validator hardened here is
+  the one on the application path. This bullet originally recorded the deferral:
+  "the hardened validator is not yet wired into the application path".
 * The full ZITADEL end-to-end **token** flow (creating an org/project/service
   user and exercising `client_credentials` against the live instance) is not
   automated: it needs Management-API provisioning and credentials that must not

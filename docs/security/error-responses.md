@@ -188,9 +188,13 @@ negative assertion that `SecurityConfig` is not among them).
 
 ## 6. Deferred
 
-* The envelope is produced by the library but is not yet wired into a FastAPI
-  exception handler; the request-edge rework (handlers, `WWW-Authenticate`
-  emission, correlation-id extraction from headers) belongs to the integration
-  phase together with the PEP and gateway wiring.
+* **Closed (G10).** The envelope *is* wired: `jdlib.integrations.fastapi.install`
+  installs `install_error_envelope` — and it can be called alone by an
+  application that builds its own edge — the middleware derives the request ids
+  before anything can fail, a 401 emits its `WWW-Authenticate` challenge, and
+  `tests/integration/test_error_envelope_contract.py` pins the four-key shape,
+  the 5xx rule and the edges (including the framework's own `HTTPException`).
+  This section originally recorded the deferral: "produced by the library but
+  not yet wired into a FastAPI exception handler".
 * Response *sizes* are not compressed or padded; no timing side channel
   hardening beyond what is described here is claimed.

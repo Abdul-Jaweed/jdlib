@@ -157,10 +157,13 @@ pytest -q -W error -m infra
 
 ## 7. Deferred (explicitly not implemented)
 
-* The PEP is not yet wired into the FastAPI request path, and the internal
-  `DefaultPDP` does not yet compose with an external engine. Both change
-  request-path behaviour, so they belong with the gateway integration phase
-  where the request edge is being reworked anyway, with their own tests.
+* **Half closed.** The PEP *is* wired: `jdlib.integrations.fastapi.require`
+  builds on `Enforcer` with the container's `PDP` and `AuthzCache`, and it is the
+  guard the reference application applies to its routes. What remains deferred is
+  the composition of the internal `DefaultPDP` with an external engine: the
+  library ships `CerbosPDP` (which carries the caller's correlation id as
+  `requestId` plus a W3C `traceparent`), but a deployment selects one PDP — there
+  is no composite that consults both.
 * The Cerbos transport uses the HTTP API; the gRPC API is not implemented.
 * The policy pack in `tests/infra/` is a test fixture, not a production policy
   set; production policies ship with the deployment that owns them.

@@ -137,9 +137,12 @@ window is refused exactly as a replayed one is.
 
 ## 7. Deferred (explicitly not implemented)
 
-* The adapters are not yet wired into the FastAPI request path or the tenant
-  resolution chain (same deferral as the PEP: the request-edge rework belongs to
-  the integration phase, with its own tests).
+* **Still true, stated precisely.** The adapters are not wired into the
+  library's FastAPI request path or its tenant resolution chain: a deployment
+  wires them at its own edge, as the reference application does (its
+  `security.py` builds `KongGatewayAdapter`), which is the shape this deferral
+  anticipated. The library ships the adapters, their envelope verification and
+  their tests; it does not choose a gateway for you.
 * Kong's `X-Consumer-*` headers are supported via configuration overrides but
   the test configuration uses the `x-jdlib-*` convention.
 * No mTLS channel authentication is implemented; both adapters authenticate the

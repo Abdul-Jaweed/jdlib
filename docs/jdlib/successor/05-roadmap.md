@@ -32,6 +32,11 @@ ADR-15. Three defects found by Phase 0 recon, fixed before any new subsystem com
 Gate: unit + lint + types clean; the three new tests mutation-checked (they must fail when the fix
 is reverted).
 
+**Status: DELIVERED (2026-09-24).** `starlette` is declared with the FastAPI extra
+(`pyproject.toml:55`); `tests/unit/test_dependency_declarations.py` fails when a first-party import
+is neither declared nor stdlib; `scripts/ci-local.sh` runs the suite with coverage (reported, never
+a threshold); `tests/integration` skips cleanly without Docker.
+
 ---
 
 ## §2 — Credentials and secret providers (M) — directive Phase 3
@@ -44,6 +49,11 @@ payloads and `repr()` by a mutation-checked guard.
 
 Gate: unit + security tests; a mutation that removes the fail-closed branch fails the suite; a
 credential-shaped value written to a cache is caught by a test.
+
+**Status: DELIVERED (2026-09-24).** `jdlib.credentials`: `SecretRef` and `SecretVersion`
+(`refs.py`), `VersionedSecretProvider` — rotation is *detected*, not performed (`rotation.py`) —
+a composite provider, and redaction extended over the new paths (the cache refusal itself is §3's
+ADR-2 guard).
 
 ## §3 — Scoped caching (M) — directive Phase 2
 

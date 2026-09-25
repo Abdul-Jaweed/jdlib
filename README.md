@@ -64,12 +64,9 @@ control_sessions = async_sessionmaker(engine, expire_on_commit=False)
 
 ### 2. Migrate and provision
 
-Expose the CLI as a script (or invoke the Typer app from your own entry point):
-
-```toml
-[project.scripts]
-jdlib = "jdlib.integrations.cli:app"
-```
+`pip install "jdlib[cli]"` puts the `jdlib` console script on PATH
+(`jdlib.integrations.cli:main`; the module's Typer application is `app`, for
+embedding in your own entry point):
 
 ```bash
 jdlib db upgrade-control --database-url "$JDLIB_CONTROL_DSN"
@@ -210,10 +207,19 @@ async def list_invoices(
 (`Invoice` is your application's `TenantBase` + `TenantRouted` model, imported
 from your own package as shown; the tenant-scoped snippets below reuse it.)
 
-`install` adds the ASGI middleware, the `JdlibError` -> JSON exception handler
-(401/403/404/409/423/500 mapped from the error class; `InvalidReference`
-("... is deleted") and `CrossTenantReferenceError` both map to 409), and stores
-the container on `app.state`. The example uses one shared tenant engine;
+`install` adds the ASGI middleware, the canonical error envelope
+(`install_error_envelope`, which it calls for you), and stores the container on
+`app.state`. Every failure answers exactly `code`, `message`, `request_id` and
+`correlation_id`: a `JdlibError` maps to its descriptor's status
+(401/403/404/409/423/500/503), a malformed body is 422 `VALIDATION_FAILED`, an
+unanswered dependency is 503 `DEPENDENCY_UNAVAILABLE`, and `fastapi.HTTPException`
+is mapped by status so an application's own rejections keep the same shape. A 401
+carries its `WWW-Authenticate` challenge and a 5xx never echoes its own text:
+`Retry-After` and `WWW-Authenticate` are the only headers passed through.
+`InvalidReference` ("... is deleted") and `CrossTenantReferenceError` both map to
+409. Call `install_error_envelope(app)` alone if you build the request edge
+yourself; the contract and the edge table are in
+[docs/security/error-responses.md](docs/security/error-responses.md). The example uses one shared tenant engine;
 hybrid deployments route inside `uow_factory` by `context.strategy` (see
 `SessionRouter`).
 
@@ -347,9 +353,80 @@ The override is required on Docker Desktop, where the container IP is not
 routable from the host. To reuse an existing database instead, set
 `JDLIB_TEST_DATABASE_URL` and skip testcontainers.
 
+## Development
+
+Python 3.12+ (`requires-python = ">=3.12"`), and Docker for the container-backed
+layers.
+
+```bash
+python -m venv .venv
+.venv/Scripts/pip install -e ".[dev]"     # POSIX: .venv/bin/pip
+```
+
+### Test layers
+
+The layers are selected by **directory**, not by marker (the markers exist, but
+most tests carry none):
+
+| Layer | Command | Needs |
+|---|---|---|
+| Unit | `.venv/Scripts/python -m pytest tests/unit -q -W error` | nothing |
+| Integration | `... pytest tests/integration -q -W error` | Docker (testcontainers `postgres:16`), or `JDLIB_TEST_DATABASE_URL` |
+| Infra | `... pytest tests/infra -q -W error` | the local harness below; each suite skips cleanly when its service is absent |
+
+`-W error` is the project's own gate flag: warnings fail the suite.
+
+### Gates
+
+```bash
+.venv/Scripts/python -m ruff check .
+.venv/Scripts/python -m mypy src/jdlib
+.venv/Scripts/python -m pytest -q -W error
+bash scripts/ci-local.sh     # the complete gate
+```
+
+`scripts/ci-local.sh` mirrors `.github/workflows/ci.yml` — `git diff --check`,
+ruff, mypy, the whole suite with coverage, `python -m build`, and a clean-venv
+install smoke — and is the gate a change is expected to pass before it is pushed;
+the hosted workflow is the final verification. Bring the harness up first to
+include the infra layer:
+
+```bash
+docker compose -f tests/infra/docker-compose.yml up -d cerbos otel-collector zitadel
+bash tests/infra/kong/start.sh && . tests/infra/out/kong-credentials.env
+bash tests/infra/tyk/start.sh  && . tests/infra/out/tyk-credentials.env
+. tests/infra/out/otel.env
+export TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1
+export JDLIB_INFRA_CERBOS_URL=http://localhost:3592
+export JDLIB_INFRA_ZITADEL_ISSUER=http://localhost:8080
+export JDLIB_INFRA_KONG_PROXY_URL=http://127.0.0.1:8000
+export JDLIB_INFRA_TYK_URL=http://127.0.0.1:8081
+bash scripts/ci-local.sh
+```
+
+The compose file holds the persistence, PDP, identity-provider and collector
+services; Kong and Tyk each have their own `start.sh` beside them, and their ports
+are overridable (`JDLIB_INFRA_KONG_PROXY_PORT`, `JDLIB_INFRA_KONG_ADMIN_PORT`) for
+a machine where 8000/8001 are already taken. Per-service notes, ports and the
+skip contract: [`tests/infra/README.md`](tests/infra/README.md).
+
+### Repository layout
+
+```
+src/jdlib/           the library, one package per concern (strict mypy, py.typed)
+  tenancy/ authz/ authn/ security/ control/ persistence/ data/ query/ resources/
+  caching/ credentials/ storage/ reliability/ migrations/ models/ integrations/ testing/
+tests/unit/          fast and isolated; no infrastructure
+tests/integration/   real HTTP, PostgreSQL and Cerbos, no lab required
+tests/infra/         the local harness: compose file, Kong and Tyk harnesses, live suites
+docs/                design documents, the security programme, operations, compliance
+scripts/ci-local.sh  the complete local gate
+knowledge_base/      orientation material for the library as it exists today
+```
+
 ## CLI
 
-`jdlib.integrations.cli:app` is a Typer application (`--json` on every command;
+The `jdlib` console script (`jdlib.integrations.cli:main`, Typer; `--json` on every command;
 `--database-url` defaults to `JDLIB_CONTROL_DSN`):
 
 | Group | Commands |
@@ -420,3 +497,17 @@ what each covers, and which tools were evaluated and rejected.
   any `PolicyDecisionPoint`.
 - **Errors**: only `JdlibError` subclasses cross module boundaries; adapters are
   expected to map driver exceptions to them.
+
+## Documentation index
+
+| Where | What |
+|---|---|
+| `docs/jdlib/02`–`07` | the approved design documents: relational schema, isolation invariants, authorization model, tenant lifecycle, strategy matrix, implementation design |
+| `docs/jdlib/` (rest) | per-area reference: architecture, authentication, authorization, tenancy, query system, resource management, credentials, connectors, privileged access, security model, production readiness |
+| `docs/jdlib/capabilities/` | caching, connectors, credentials, jobs, query, resources, storage |
+| `docs/jdlib/successor/` | the successor programme: capability matrix, target architecture, adoption decisions and the roadmap, with per-phase status |
+| `docs/security/README.md` | the security-hardening programme: one document per phase, the adversarial review, the CI security gates, the compliance surface |
+| `docs/operations/`, `docs/compliance/` | runbooks, and the technical-control register with its own gaps |
+| `JDLib-Architecture.md` | the long-form technical reference |
+| `knowledge_base/` | orientation: module map, data flow, development guide, testing |
+| `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` | contribution rules, what the library is responsible for and how to report a vulnerability, release notes |
