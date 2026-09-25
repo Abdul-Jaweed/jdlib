@@ -34,6 +34,7 @@ from jdlib.graph.query import (
     relationship_delete,
     relationship_match,
 )
+from jdlib.graph.repository import GraphRepository
 
 __all__ = [
     "GraphAuthorizationError",
@@ -45,6 +46,7 @@ __all__ = [
     "GraphPolicy",
     "GraphQuery",
     "GraphQueryError",
+    "GraphRepository",
     "GraphTenantViolationError",
     "GraphTimeoutError",
     "GraphUnavailableError",
