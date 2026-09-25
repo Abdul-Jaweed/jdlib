@@ -41,8 +41,16 @@ docker compose -f tests/infra/docker-compose.yml up -d
 # just the persistence layer used by the integration tests
 docker compose -f tests/infra/docker-compose.yml up -d postgres
 
+# just what the infra suite talks to. That suite reaches its services by URL and needs no
+# Redis and no Postgres, so a machine where those two host ports are already taken (6379 and
+# 5432 are popular) can still run the layer - name the services instead of starting the whole
+# stack, which fails on the port bind and takes the rest of the bring-up with it.
+docker compose -f tests/infra/docker-compose.yml up -d cerbos otel-collector zitadel
+
 docker compose -f tests/infra/docker-compose.yml down -v
 ```
+
+Kong and Tyk are not in this compose file; each has its own `start.sh` beside it.
 
 Export the host override when running tests against these containers
 (Testcontainers and the compose services both publish to `127.0.0.1`):
