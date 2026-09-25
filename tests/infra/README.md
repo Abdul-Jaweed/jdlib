@@ -9,7 +9,7 @@ required for `pytest -m unit`; the hermetic integration suite
 | `postgres` | `postgres:16` | `-m integration`, `-m infra` | tenancy, RLS, audit and outbox persistence |
 | `cerbos` | `ghcr.io/cerbos/cerbos:0.37.0` | `-m infra`, `-m e2e` | external authorisation decisions (PDP) |
 | `redis` | `redis:7-alpine` | `-m infra` | rate limiting and distributed token caches |
-| `otel-collector` | `otel/opentelemetry-collector-contrib:0.103.0` | `-m infra`, `-m e2e` | trace/metric export verification |
+| `otel-collector` | `otel/opentelemetry-collector-contrib:0.110.0` | `-m infra`, `-m e2e` | trace/metric export verification |
 | `zitadel` | `ghcr.io/zitadel/zitadel:latest` | `-m infra` (local only) | identity provider for real token flows |
 | `kong` + `jdlib-echo` | `kong:3.6`, `mendhak/http-https-echo:31` | `-m infra` (local only) | real gateway behaviour: routing, edge auth, identity propagation, rate limiting |
 

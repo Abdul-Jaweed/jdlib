@@ -146,22 +146,42 @@ def _resolve(value: str) -> pathlib.Path:
     return pathlib.Path(__file__).parents[2] / path
 
 
-def _await_output(needle: str, *, output: pathlib.Path) -> str:
-    """Poll the collector's file exporter for what we sent."""
+def _store_size(output: pathlib.Path) -> int:
+    """The store's size before this test sends anything.
+
+    A store left behind by a previous session must not be able to green this
+    test: the claim is about what arrives *now*, so the search starts where
+    this run's bytes begin. Which was not theoretical - with the collector
+    unable to write a store at all, the un-anchored form passed on a stale
+    file, while the span test (anchored on a fresh trace id) failed. The
+    difference between the two was only the anchor.
+    """
+    try:
+        return output.stat().st_size
+    except OSError:
+        return 0
+
+
+def _await_output(needle: str, *, output: pathlib.Path, since: int = 0) -> str:
+    """Poll the collector's file exporter for what this run sent."""
     deadline = time.time() + TIMEOUT_SECONDS
     text = ""
     while time.time() < deadline:
         if output.exists():
             text = output.read_text(encoding="utf-8", errors="replace")
-            if needle in text:
+            if needle in text[since:]:
                 return text
         time.sleep(0.5)
-    raise AssertionError(f"collector never stored {needle!r} (output={output}, size={len(text)})")
+    raise AssertionError(
+        f"collector never stored {needle!r} in this run "
+        f"(output={output}, bytes before this run={since}, size={len(text)})"
+    )
 
 
 def test_a_security_span_reaches_the_collector_and_is_stored() -> None:
     endpoint = _CONFIG["JDLIB_INFRA_OTEL_OTLP_HTTP"]
     output = _resolve(_CONFIG["JDLIB_INFRA_OTEL_OUTPUT"])
+    since = _store_size(output)
     tracer = _OtlpTracer(endpoint)
 
     with security_span(
@@ -172,7 +192,7 @@ def test_a_security_span_reaches_the_collector_and_is_stored() -> None:
         span.set_attribute("security.outcome", "allow")
         trace_id = span._span.trace_id if span._span is not None else ""
 
-    stored = _await_output(trace_id, output=output)
+    stored = _await_output(trace_id, output=output, since=since)
     assert "authorization.decide" in stored
     assert "document.read" in stored
     assert str(trace_id) in stored
@@ -181,6 +201,7 @@ def test_a_security_span_reaches_the_collector_and_is_stored() -> None:
 def test_a_secret_cannot_reach_the_collector_even_end_to_end() -> None:
     endpoint = _CONFIG["JDLIB_INFRA_OTEL_OTLP_HTTP"]
     output = _resolve(_CONFIG["JDLIB_INFRA_OTEL_OUTPUT"])
+    since = _store_size(output)
     tracer = _OtlpTracer(endpoint)
     secret = "postgresql+asyncpg://app:s3cr3t-pw@db.internal:5432/jdlib"
 
@@ -189,7 +210,7 @@ def test_a_secret_cannot_reach_the_collector_even_end_to_end() -> None:
         tracer, "authentication.validate", attributes={"security.operation": secret}
     )
     span.end()
-    stored = _await_output("authentication.validate", output=output)
+    stored = _await_output("authentication.validate", output=output, since=since)
     assert "s3cr3t-pw" not in stored
     assert "db.internal" not in stored
 

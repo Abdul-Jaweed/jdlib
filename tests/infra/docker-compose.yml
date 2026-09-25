@@ -48,16 +48,24 @@ services:
       timeout: 3s
       retries: 30
 
+  # The same image, the same config and the same published ports as
+  # tests/infra/otel/start.sh. Both paths have to produce a collector the OTel
+  # tests can actually verify: a compose-only config with the debug exporter and
+  # no /out mount made three of them unpassable and let a fourth pass on a
+  # store left behind by a previous session.
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.103.0
+    image: ${JDLIB_INFRA_OTEL_IMAGE:-otel/opentelemetry-collector-contrib:0.110.0}
     container_name: jdlib-otel-collector
-    command: ["--config=/etc/otelcol/config.yaml"]
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
-      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+      - ./otel/collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./out/otel:/out
     ports:
       - "127.0.0.1:4317:4317"
       - "127.0.0.1:4318:4318"
       - "127.0.0.1:8889:8889"
+      - "127.0.0.1:8888:8888"
+      - "127.0.0.1:13133:13133"
 
   # Identity provider for the infra-marked authentication tests.
   # Heavy: its own schema, first-run migrations, several hundred MB image.
