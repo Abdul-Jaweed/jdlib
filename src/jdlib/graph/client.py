@@ -25,17 +25,25 @@ from typing import Any, Protocol, runtime_checkable
 from jdlib.credentials import ResolvedSecret, SecretRef
 from jdlib.graph.config import GraphConfig
 from jdlib.graph.errors import (
-    GraphConflictError,
     GraphError,
     GraphQueryError,
+    GraphTenantViolationError,
     GraphTimeoutError,
-    GraphUnavailableError,
 )
+from jdlib.graph.mapping import map_driver_error
 from jdlib.graph.policy import GraphPolicy
 from jdlib.graph.query import GraphQuery
 from jdlib.graph.tenant import require_open_tenant, require_scope
 from jdlib.graph.transaction import GraphTransaction
-from jdlib.security.context import SecurityContext
+from jdlib.security.audit.emitter import SecurityEventEmitter, emit_safely
+from jdlib.security.audit.events import (
+    AuditOutcome,
+    AuditSource,
+    SecurityAuditEvent,
+    SecurityEventType,
+)
+from jdlib.security.context import SecurityContext, security_context_scope
+from jdlib.security.tracing import SecuritySpan, TracerLike, security_span
 
 
 class SecretResolver(Protocol):
@@ -66,45 +74,6 @@ class GraphClient(GraphRunner, Protocol):
     def begin(self, *, context: SecurityContext) -> GraphTransaction: ...
 
 
-def _named(module: Any, *names: str) -> tuple[type[BaseException], ...]:
-    """The subset of ``names`` the driver actually defines.
-
-    A driver version that renames one of these degrades to the generic mapping rather than
-    raising ``AttributeError`` inside the error path, which is where a second failure is worst.
-    """
-    found: list[type[BaseException]] = []
-    for name in names:
-        candidate = getattr(module, name, None)
-        if isinstance(candidate, type) and issubclass(candidate, BaseException):
-            found.append(candidate)
-    return tuple(found)
-
-
-def map_driver_error(exc: BaseException) -> GraphError:
-    """Translate a driver failure into the taxonomy the reliability policy reads.
-
-    The message is the class's, never the driver's: a driver message can quote the statement and
-    its literals. The original travels as ``__cause__`` for whoever is debugging.
-    """
-    try:
-        from neo4j import exceptions as driver
-    except Exception:  # pragma: no cover - the driver is installed whenever it raised
-        return GraphError("graph client: the operation failed")
-    transient = _named(driver, "ServiceUnavailable", "SessionExpired", "TransientError")
-    if isinstance(exc, transient):
-        return GraphUnavailableError("graph client: the database is unavailable")
-    refused = _named(driver, "AuthError", "Unauthorized", "Forbidden")
-    if isinstance(exc, refused):
-        return GraphUnavailableError(
-            "graph client: the database refused the connection", transient=False
-        )
-    if isinstance(exc, _named(driver, "ConstraintError")):
-        return GraphConflictError("graph client: a constraint refused the write")
-    if isinstance(exc, _named(driver, "ClientError", "DatabaseError")):
-        return GraphQueryError("graph client: the database rejected the statement")
-    return GraphError("graph client: the operation failed")
-
-
 class Neo4jClient:
     """The verified Neo4j adapter over the library's own credential and reliability seams."""
 
@@ -115,11 +84,15 @@ class Neo4jClient:
         provider: SecretResolver,
         policy: GraphPolicy | None = None,
         driver_factory: Callable[..., Any] | None = None,
+        tracer: TracerLike | None = None,
+        emitter: SecurityEventEmitter | None = None,
     ) -> None:
         self._config = config
         self._provider = provider
         self._policy = policy or GraphPolicy()
         self._driver_factory = driver_factory
+        self._tracer = tracer
+        self._emitter = emitter
         self._driver: Any = None
         self._tenant_id: str | None = None
 
@@ -138,11 +111,16 @@ class Neo4jClient:
         """
         if self._driver is None:
             raise GraphError("graph client: begin before open")
-        require_open_tenant(context, self._tenant_id)
+        with security_context_scope(context):
+            require_open_tenant(
+                context, self._tenant_id, emitter=self._emitter, action="graph.begin"
+            )
         return GraphTransaction(
             session=self._driver.session(database=self._config.database),
             context=context,
             policy=self._policy,
+            tracer=self._tracer,
+            emitter=self._emitter,
         )
 
     @asynccontextmanager
@@ -173,17 +151,57 @@ class Neo4jClient:
     ) -> list[dict[str, Any]]:
         if self._driver is None:
             raise GraphError("graph client: run before open")
-        require_scope(query=query, context=context, tenant_id=self._tenant_id)
-        try:
-            return await asyncio.wait_for(
-                self._execute(query), timeout=self._policy.statement_timeout
-            )
-        except TimeoutError as exc:
-            raise GraphTimeoutError("graph client: the statement exceeded its deadline") from exc
-        except GraphError:
-            raise
-        except Exception as exc:
-            raise map_driver_error(exc) from exc
+        with security_span(
+            self._tracer, "graph.run", attributes={"security.operation": "graph.run"}
+        ) as span, security_context_scope(context):
+            # The scope is what attributes anything written from here: a refusal recorded with no
+            # actor is not evidence, and the event fills its actor from the ambient context.
+            try:
+                require_scope(
+                    query=query,
+                    context=context,
+                    tenant_id=self._tenant_id,
+                    emitter=self._emitter,
+                    action="graph.run",
+                )
+            except GraphTenantViolationError:
+                span.set_attribute("security.result", "refused")
+                raise
+            try:
+                rows = await asyncio.wait_for(
+                    self._execute(query), timeout=self._policy.statement_timeout
+                )
+            except TimeoutError as exc:
+                span.set_attribute("security.result", "timeout")
+                raise GraphTimeoutError(
+                    "graph client: the statement exceeded its deadline"
+                ) from exc
+            except GraphError:
+                span.set_attribute("security.result", "failed")
+                raise
+            except Exception as exc:
+                mapped = map_driver_error(exc)
+                self._record_rejection(mapped, span)
+                raise mapped from exc
+            span.set_attribute("security.result", "ok")
+            return rows
+
+    def _record_rejection(self, error: GraphError, span: SecuritySpan) -> None:
+        """A statement the database refused is a security-relevant event; the rest are noise."""
+        span.set_attribute("security.result", "failed")
+        if not isinstance(error, GraphQueryError):
+            return
+        emit_safely(
+            self._emitter,
+            SecurityAuditEvent(
+                event_type=SecurityEventType.QUERY_REJECTED,
+                outcome=AuditOutcome.ERROR,
+                action="graph.run",
+                source=AuditSource.SERVICE,
+                resource_type="graph-statement",
+                metadata={"error": type(error).__name__},
+            ),
+        )
 
     async def _execute(self, query: GraphQuery) -> list[dict[str, Any]]:
         async with self._driver.session(database=self._config.database) as session:

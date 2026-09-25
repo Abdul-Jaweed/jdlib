@@ -16,9 +16,12 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from jdlib.graph.errors import GraphError
+from jdlib.graph.mapping import map_driver_error
 from jdlib.graph.query import GraphQuery
 from jdlib.graph.tenant import require_scope, require_tenant_id
-from jdlib.security.context import SecurityContext
+from jdlib.security.audit.emitter import SecurityEventEmitter
+from jdlib.security.context import SecurityContext, security_context_scope
+from jdlib.security.tracing import SecuritySpan, TracerLike, security_span
 
 if TYPE_CHECKING:
     from jdlib.graph.policy import GraphPolicy
@@ -42,13 +45,26 @@ class TransactionOutcome(StrEnum):
 class GraphTransaction:
     """An explicit transaction over an injected session."""
 
-    def __init__(self, *, session: Any, context: SecurityContext, policy: GraphPolicy) -> None:
+    def __init__(
+        self,
+        *,
+        session: Any,
+        context: SecurityContext,
+        policy: GraphPolicy,
+        tracer: TracerLike | None = None,
+        emitter: SecurityEventEmitter | None = None,
+    ) -> None:
         self._session = session
         self._context = context
         self._policy = policy
+        self._tracer = tracer
+        self._emitter = emitter
         self._tenant_id = require_tenant_id(context)
         self._transaction: Any = None
         self._outcome = TransactionOutcome.PENDING
+        self._span: SecuritySpan = security_span(
+            tracer, "graph.transaction", attributes={"security.operation": "graph.transaction"}
+        )
 
     @property
     def outcome(self) -> TransactionOutcome:
@@ -78,6 +94,8 @@ class GraphTransaction:
                 else:
                     await self.rollback()
         finally:
+            self._span.set_attribute("security.outcome", self._outcome.value)
+            self._span.end()
             await self._session.close()
         return False
 
@@ -88,8 +106,20 @@ class GraphTransaction:
             raise GraphError(
                 "graph transaction: no statement runs outside a pending transaction"
             )
-        require_scope(query=query, context=context, tenant_id=self._tenant_id)
-        result = await self._transaction.run(query.text, query.parameters)
+        with security_context_scope(context):
+            require_scope(
+                query=query,
+                context=context,
+                tenant_id=self._tenant_id,
+                emitter=self._emitter,
+                action="graph.transaction",
+            )
+            try:
+                result = await self._transaction.run(query.text, query.parameters)
+            except GraphError:
+                raise
+            except Exception as exc:
+                raise map_driver_error(exc) from exc
         return [dict(record) for record in await result.data()]
 
     async def commit(self) -> None:
