@@ -95,6 +95,12 @@ class SecurityEventType(StrEnum):
     AUDIT_READ_DENIED = "AUDIT_READ_DENIED"
     AUDIT_EXPORTED = "AUDIT_EXPORTED"
 
+    # -- MCP surface (directive §27: the events a second entry surface must produce)
+    MCP_REQUEST = "MCP_REQUEST"
+    MCP_TOOL_INVOKED = "MCP_TOOL_INVOKED"
+    MCP_RESOURCE_READ = "MCP_RESOURCE_READ"
+    MCP_ERROR = "MCP_ERROR"
+
     @property
     def category(self) -> str:
         """Domain the event belongs to, so consumers can route without parsing."""
@@ -109,6 +115,8 @@ class SecurityEventType(StrEnum):
             return "privilege"
         if prefix == "AUDIT":
             return "audit"
+        if prefix == "MCP":
+            return "mcp"
         if prefix == "CONNECTOR":
             return "connector"
         return "security"

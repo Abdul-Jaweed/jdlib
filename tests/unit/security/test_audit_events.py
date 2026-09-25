@@ -112,6 +112,15 @@ SUCCESSOR_EVENT_TYPES = {
     "QUERY_REJECTED",
 }
 
+#: The MCP surface's own events (directive §27). Pinned by name so a member added without a
+#: producer is visible here rather than discovered by an operator reading an empty dashboard.
+MCP_EVENT_TYPES = {
+    "MCP_REQUEST",
+    "MCP_TOOL_INVOKED",
+    "MCP_RESOURCE_READ",
+    "MCP_ERROR",
+}
+
 
 def test_the_vocabulary_covers_the_directive_list() -> None:
     # The directive's names are all present; audit-trail access is its own
@@ -119,7 +128,9 @@ def test_the_vocabulary_covers_the_directive_list() -> None:
     names = {member.name for member in SecurityEventType}
     assert names >= REQUIRED_EVENT_TYPES
     assert names >= AUDIT_ACCESS_EVENT_TYPES
-    assert names == REQUIRED_EVENT_TYPES | AUDIT_ACCESS_EVENT_TYPES | SUCCESSOR_EVENT_TYPES
+    assert names == (
+        REQUIRED_EVENT_TYPES | AUDIT_ACCESS_EVENT_TYPES | SUCCESSOR_EVENT_TYPES | MCP_EVENT_TYPES
+    )
 
 
 def test_every_event_type_is_grouped_into_a_category() -> None:
@@ -133,6 +144,7 @@ def test_every_event_type_is_grouped_into_a_category() -> None:
             "security",
             "audit",
             "connector",
+            "mcp",
         }
 
 

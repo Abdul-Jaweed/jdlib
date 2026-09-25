@@ -36,6 +36,7 @@ from jdlib.context import context_scope
 from jdlib.errors import JdlibError, PermissionDenied
 from jdlib.integrations.mcp.boundary import McpSecurityBoundary
 from jdlib.integrations.mcp.errors import McpTimeoutError, McpToolExecutionError
+from jdlib.integrations.mcp.resources import McpResource
 from jdlib.integrations.mcp.tools import McpTool, McpToolRegistry
 from jdlib.reliability.concurrency import ConcurrencyGate
 from jdlib.reliability.lifecycle import ShutdownCoordinator
@@ -71,6 +72,7 @@ class McpInvoker:
         gate: ConcurrencyGate | None = None,
         timeout: float | None = None,
         shutdown: ShutdownCoordinator | None = None,
+        resources: Any = None,
     ) -> None:
         self._boundary = boundary
         self._registry = registry
@@ -81,6 +83,7 @@ class McpInvoker:
         self._gate = gate
         self._timeout = timeout
         self._shutdown = shutdown
+        self._resources = resources
 
     async def invoke(
         self, *, tool_name: str, arguments: Mapping[str, Any], request: RequestInfo
@@ -127,6 +130,7 @@ class McpInvoker:
             with security_context_scope(context), context_scope(context.require_tenant()):
                 if tool.capability is not None:
                     await self._authorize(tool, span)
+                self._record_invocation(tool)
                 try:
                     result = await tool.handler(**arguments)
                 except JdlibError:
@@ -134,12 +138,21 @@ class McpInvoker:
                     raise
                 except Exception as exc:
                     span.set_attribute("security.result", "failed")
+                    self._record_error(exc)
                     raise McpToolExecutionError("the tool could not complete") from exc
                 span.set_attribute("security.result", "ok")
                 return result
 
     async def _authorize(self, tool: McpTool, span: SecuritySpan) -> None:
         """Ask the tool's own declared question, and record a refusal before raising it."""
+        with security_span(
+            self._tracer,
+            "mcp.authorization",
+            attributes={"security.operation": "mcp.authorization"},
+        ):
+            await self._ask(tool, span)
+
+    async def _ask(self, tool: McpTool, span: SecuritySpan) -> None:
         try:
             if self._uow_factory is None:
                 await self._enforcer.require(tool.capability, tenant_target(), session=None)
@@ -150,6 +163,100 @@ class McpInvoker:
             span.set_attribute("security.result", "denied")
             self._record_refusal(tool)
             raise
+
+    def _record_invocation(self, tool: McpTool) -> None:
+        """Record the attempt before it is made: a failure afterwards is a separate event."""
+        emit_safely(
+            self._emitter,
+            SecurityAuditEvent(
+                event_type=SecurityEventType.MCP_TOOL_INVOKED,
+                outcome=AuditOutcome.SUCCESS,
+                action="mcp.tool.invoked",
+                source=AuditSource.API,
+                resource_type=tool.resource_kind or "mcp-tool",
+                metadata={"tool": tool.name, "capability": tool.capability or ""},
+            ),
+        )
+
+    def _record_error(self, exc: BaseException) -> None:
+        """Record the failure by class, never by text: a message can quote a statement and its
+        literals, and the trail is not the place for either."""
+        emit_safely(
+            self._emitter,
+            SecurityAuditEvent(
+                event_type=SecurityEventType.MCP_ERROR,
+                outcome=AuditOutcome.ERROR,
+                action="mcp.error",
+                source=AuditSource.API,
+                resource_type="mcp-tool",
+                metadata={"error": type(exc).__name__},
+            ),
+        )
+
+    async def invoke_resource(self, *, uri: str, request: RequestInfo) -> Any:
+        """Read one resource through the same chain a tool call takes."""
+        if self._shutdown is not None:
+            self._shutdown.admit()
+        if self._gate is not None:
+            async with self._gate:
+                return await self._read_resource(uri=uri, request=request)
+        return await self._read_resource(uri=uri, request=request)
+
+    async def _read_resource(self, *, uri: str, request: RequestInfo) -> Any:
+        with security_span(
+            self._tracer,
+            "mcp.resource",
+            attributes={"security.operation": "mcp.resource"},
+        ) as span:
+            context = await self._boundary.establish(request=request)
+            resource: McpResource = self._resources.get(uri)
+            with security_context_scope(context), context_scope(context.require_tenant()):
+                if resource.capability:
+                    await self._ask_resource(resource, span)
+                result = await resource.handler()
+                self._record_resource(resource)
+                span.set_attribute("security.result", "ok")
+                return result
+
+    async def _ask_resource(self, resource: McpResource, span: SecuritySpan) -> None:
+        try:
+            if self._uow_factory is None:
+                await self._enforcer.require(resource.capability, tenant_target(), session=None)
+            else:
+                async with self._uow_factory() as session:
+                    await self._enforcer.require(
+                        resource.capability, tenant_target(), session=session
+                    )
+        except PermissionDenied:
+            span.set_attribute("security.result", "denied")
+            self._record_resource_refusal(resource)
+            raise
+
+    def _record_resource(self, resource: McpResource) -> None:
+        emit_safely(
+            self._emitter,
+            SecurityAuditEvent(
+                event_type=SecurityEventType.MCP_RESOURCE_READ,
+                outcome=AuditOutcome.SUCCESS,
+                action="mcp.resource.read",
+                source=AuditSource.API,
+                resource_type="mcp-resource",
+                metadata={"uri": resource.uri, "sensitive": resource.sensitive},
+            ),
+        )
+
+    def _record_resource_refusal(self, resource: McpResource) -> None:
+        emit_safely(
+            self._emitter,
+            SecurityAuditEvent(
+                event_type=REFUSAL_EVENT,
+                outcome=AuditOutcome.DENIED,
+                action="mcp.authorization.denied",
+                source=AuditSource.API,
+                resource_type="mcp-resource",
+                metadata={"uri": resource.uri, "capability": resource.capability},
+            ),
+        )
 
     def _record_refusal(self, tool: McpTool) -> None:
         """Write the refusal down before it is raised.
@@ -163,9 +270,9 @@ class McpInvoker:
             SecurityAuditEvent(
                 event_type=REFUSAL_EVENT,
                 outcome=AuditOutcome.DENIED,
-                action=f"mcp.tool.{tool.name}",
+                action="mcp.authorization.denied",
                 source=AuditSource.SERVICE,
                 resource_type=tool.resource_kind or "mcp-tool",
-                metadata={"capability": tool.capability or ""},
+                metadata={"tool": tool.name, "capability": tool.capability or ""},
             ),
         )

@@ -22,8 +22,19 @@ from collections.abc import Callable
 
 from jdlib.context import ContextFactory
 from jdlib.errors import AuthenticationError, TenantNotFound
-from jdlib.security.audit.emitter import SecurityEventEmitter
-from jdlib.security.context import AuthMethod, RequestIds, SecurityContext
+from jdlib.security.audit.emitter import SecurityEventEmitter, emit_safely
+from jdlib.security.audit.events import (
+    AuditOutcome,
+    AuditSource,
+    SecurityAuditEvent,
+    SecurityEventType,
+)
+from jdlib.security.context import (
+    AuthMethod,
+    RequestIds,
+    SecurityContext,
+    security_context_scope,
+)
 from jdlib.security.tracing import SecuritySpan, TracerLike, security_span
 from jdlib.tenancy.middleware import PrincipalProvider, request_ids_for
 from jdlib.tenancy.resolution import RequestInfo, ResolverChain
@@ -83,9 +94,30 @@ class McpSecurityBoundary:
                 trace_id=request_ids.trace_id,
             )
             span.set_attribute("security.result", "ok")
-            return SecurityContext.from_tenant_context(
+            context = SecurityContext.from_tenant_context(
                 tenant, auth_method=self._resolved_auth_method()
             )
+            with security_context_scope(context):
+                self._record(context)
+            return context
+
+    def _record(self, context: SecurityContext) -> None:
+        """Record the established request while its own scope is in force.
+
+        Emitted inside the scope on purpose: an event written one line before the scope arrives
+        carries an empty actor, and a request record with no actor is not evidence.
+        """
+        emit_safely(
+            self._emitter,
+            SecurityAuditEvent(
+                event_type=SecurityEventType.MCP_REQUEST,
+                outcome=AuditOutcome.SUCCESS,
+                action="mcp.request",
+                source=AuditSource.API,
+                resource_type="mcp-surface",
+                metadata={"auth_method": str(context.auth_method)},
+            ),
+        )
 
     def _resolved_auth_method(self) -> AuthMethod:
         """How this request was authenticated, as far as the library can know.
