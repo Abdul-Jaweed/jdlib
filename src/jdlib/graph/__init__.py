@@ -21,6 +21,17 @@ from jdlib.graph.errors import (
     GraphUnavailableError,
     GraphValidationError,
 )
+from jdlib.graph.models import GraphVocabulary, Label, PropertyKey, RelationshipType
+from jdlib.graph.query import (
+    GraphQuery,
+    node_create,
+    node_delete,
+    node_match,
+    node_update,
+    relationship_create,
+    relationship_delete,
+    relationship_match,
+)
 
 __all__ = [
     "GraphAuthorizationError",
@@ -28,9 +39,21 @@ __all__ = [
     "GraphConflictError",
     "GraphError",
     "GraphNotFoundError",
+    "GraphQuery",
     "GraphQueryError",
     "GraphTenantViolationError",
     "GraphTimeoutError",
     "GraphUnavailableError",
     "GraphValidationError",
+    "GraphVocabulary",
+    "Label",
+    "PropertyKey",
+    "RelationshipType",
+    "node_create",
+    "node_delete",
+    "node_match",
+    "node_update",
+    "relationship_create",
+    "relationship_delete",
+    "relationship_match",
 ]
