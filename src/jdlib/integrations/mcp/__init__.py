@@ -7,7 +7,8 @@ everything it exposes is declared, authorized, tenant-scoped, audited and observ
 * `tools` — tools as declarations, with the registry that refuses an undeclared one;
 * `boundary` — the HTTP edge's own authentication and tenant resolution, run for this surface;
 * `invocation` — boundary → decision → handler → record, with the denial proven non-executing;
-* `graph_tools` — the graph's operations, declared, with nowhere to put an identity or a statement.
+* `graph_tools` — the graph's operations, declared, with nowhere to put an identity or a statement;
+* `resources` — read-only bodies whose rule is what they may never say.
 
 The framework itself is an optional extra, imported where it is used rather than at import of this
 package, so the library still imports without it.
@@ -23,6 +24,12 @@ from jdlib.integrations.mcp.errors import (
 )
 from jdlib.integrations.mcp.graph_tools import graph_tools
 from jdlib.integrations.mcp.invocation import McpInvoker
+from jdlib.integrations.mcp.resources import (
+    McpResource,
+    graph_schema_resource,
+    health_resource,
+    tenant_resource,
+)
 from jdlib.integrations.mcp.tools import McpTool, McpToolRegistry
 
 __all__ = [
@@ -32,6 +39,10 @@ __all__ = [
     "McpTool",
     "McpToolDefinitionError",
     "McpToolExecutionError",
+    "McpResource",
     "McpToolRegistry",
+    "graph_schema_resource",
     "graph_tools",
+    "health_resource",
+    "tenant_resource",
 ]

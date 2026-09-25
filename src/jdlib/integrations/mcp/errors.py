@@ -34,3 +34,12 @@ class McpToolExecutionError(McpError):
     connection strings and internal paths inside, where the log and the trace can see them. The
     original travels as ``__cause__`` for whoever is diagnosing.
     """
+
+
+class McpResourceDefinitionError(McpError):
+    """A resource that cannot be described safely.
+
+    The same gate the tool registry applies, applied to resources: a resource with no declared
+    capability is a resource nobody authorized, and it cannot be constructed rather than being
+    rejected later by a reviewer.
+    """
