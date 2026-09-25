@@ -8,6 +8,13 @@
 > `a30601d`; this revision's own edits landed in commits `6125558` (the
 > documents), `2bc22e3` (the console script and the knowledge-base refresh),
 > `0623146` (the phase 12 certification) and `1b3044b` (the suite numbers).
+> **Successor programme (after this snapshot).** The successor phases landed
+> after `6125558`: `jdlib.credentials`, `jdlib.caching`, `jdlib.data` (the
+> connector framework), `jdlib.query`, `jdlib.storage` and `jdlib.reliability`,
+> plus the audit and observability boundaries — each with its own record and
+> status line under `docs/jdlib/successor/`. The tree and the line counts in §3
+> describe the `6125558` revision; where this document and a phase document
+> disagree about a package that arrived later, the phase document is current.
 > Every architectural claim below is grounded in source code, tests, packaging
 > metadata, or the frozen design documents under `docs/`.
 > All file references use repository-relative paths with line numbers, e.g.
