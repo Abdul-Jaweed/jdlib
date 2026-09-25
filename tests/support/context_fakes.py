@@ -134,6 +134,9 @@ class RecordingPrivilegeAudit:
         justification: str | None,
         actor: Principal,
         tenant_id: uuid.UUID,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         self.records.append(
             {
@@ -142,5 +145,8 @@ class RecordingPrivilegeAudit:
                 "justification": justification,
                 "actor_id": actor.id,
                 "tenant_id": tenant_id,
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "trace_id": trace_id,
             }
         )

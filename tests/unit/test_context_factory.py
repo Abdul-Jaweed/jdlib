@@ -218,6 +218,12 @@ async def test_for_operator_creates_audited_expiring_privilege():
             "justification": "ticket-1",
             "actor_id": OPERATOR_ID,
             "tenant_id": TENANT_ID,
+            # The identifiers the grant was made under, on the row that records the
+            # grant: the operator surface has no ambient tenant context to fall back
+            # to, so dropping these left the privilege row untraceable.
+            "request_id": "req-1",
+            "correlation_id": None,
+            "trace_id": None,
         }
     ]
 
@@ -283,6 +289,10 @@ async def test_for_system_requires_issuer_capability():
             "justification": None,
             "actor_id": context.privilege.actor.id,
             "tenant_id": TENANT_ID,
+            # A system context has no request behind it; the keys are always present.
+            "request_id": None,
+            "correlation_id": None,
+            "trace_id": None,
         }
     ]
 
@@ -305,6 +315,10 @@ async def test_for_test_is_gated_by_config():
             "justification": None,
             "actor_id": USER_ID,
             "tenant_id": TENANT_ID,
+            # The generated request id, recorded on the grant it was generated for.
+            "request_id": context.request_id,
+            "correlation_id": None,
+            "trace_id": None,
         }
     ]
 

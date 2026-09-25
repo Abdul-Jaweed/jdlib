@@ -71,6 +71,9 @@ class AuditPrivilegeAudit:
         justification: str | None,
         actor: Principal,
         tenant_id: uuid.UUID,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         metadata: dict[str, object] = {
             **self._extra,
@@ -89,6 +92,9 @@ class AuditPrivilegeAudit:
                 principal_id=actor.id,
                 principal_kind=str(actor.kind),
                 resource_type="privilege",
+                request_id=request_id,
+                correlation_id=correlation_id,
+                trace_id=trace_id,
                 metadata=metadata,
             )
         )
@@ -284,6 +290,9 @@ class AuditControlPlaneAudit:
         justification: str | None,
         actor: Principal,
         tenant_id: uuid.UUID,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         await self._privileges.record_privilege(
             kind=kind,
@@ -291,6 +300,9 @@ class AuditControlPlaneAudit:
             justification=justification,
             actor=actor,
             tenant_id=tenant_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            trace_id=trace_id,
         )
 
 

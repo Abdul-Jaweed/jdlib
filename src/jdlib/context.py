@@ -278,7 +278,19 @@ class PrivilegeAudit(Protocol):
         justification: str | None,
         actor: Principal,
         tenant_id: uuid.UUID,
-    ) -> None: ...
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> None:
+        """Record one privilege grant.
+
+        The identifiers are optional and fall back to the ambient tenant context -
+        which does not exist on the operator surface, because a platform operator is
+        deliberately not a tenant principal and the request never enters the tenant
+        middleware. Callers that hold the identifiers must pass them; a grant that
+        cannot be found by the request that made it is a grant nobody can review.
+        """
+        ...
 
 
 class _PrivilegeIssuer:
@@ -405,6 +417,9 @@ class ContextFactory:
             justification=justification,
             actor=operator,
             tenant_id=record.id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            trace_id=trace_id,
         )
         return self._build(
             record,
@@ -469,17 +484,19 @@ class ContextFactory:
             issued_at=now,
             expires_at=None,
         )
+        request_id = uuid.uuid4().hex
         await self._audit.record_privilege(
             kind=PrivilegeKind.TEST,
             capability=None,
             justification=None,
             actor=principal,
             tenant_id=tenant.id,
+            request_id=request_id,
         )
         return self._build(
             tenant,
             principal,
-            request_id=uuid.uuid4().hex,
+            request_id=request_id,
             correlation_id=None,
             trace_id=None,
             privilege=privilege,

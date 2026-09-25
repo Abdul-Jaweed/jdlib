@@ -203,6 +203,9 @@ class PrivilegeAuditAdapter:
         justification: str | None,
         actor: Principal,
         tenant_id: uuid.UUID,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         await self._sink.record(
             action=f"privilege.{kind.value}",
@@ -210,4 +213,7 @@ class PrivilegeAuditAdapter:
             actor_id=actor.id,
             metadata={"capability": capability, "justification": justification},
             actor_type=actor.kind.value,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            trace_id=trace_id,
         )
