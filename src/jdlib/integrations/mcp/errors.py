@@ -52,3 +52,22 @@ class McpTimeoutError(McpError):
     that difference is the one the graph's `UNCERTAIN` outcome exists to preserve. A caller must
     not read this as "nothing happened, try again".
     """
+
+
+class McpServerUnavailableError(McpError):
+    """The server factory needs the optional `mcp` extra; importing the library does not.
+
+    Raised by the factory rather than at module import, so a deployment that never builds a
+    server never needs fastmcp — and the message names the extra to install.
+    """
+
+
+class McpArgumentsRefusedError(McpError):
+    """A call the tool's own declaration does not describe.
+
+    The declarations advertise `additionalProperties: false` with no identity and no statement
+    slot anywhere. fastmcp 4.0.10 advertises that schema and does not enforce it, so the
+    invocation chain enforces it — an advertised contract the library does not keep is a lie
+    told to every client, and an undeclared argument that reaches a handler is a slot the
+    declaration says does not exist.
+    """

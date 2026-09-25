@@ -18,7 +18,9 @@ from __future__ import annotations
 
 from jdlib.integrations.mcp.boundary import McpSecurityBoundary
 from jdlib.integrations.mcp.errors import (
+    McpArgumentsRefusedError,
     McpError,
+    McpServerUnavailableError,
     McpToolDefinitionError,
     McpToolExecutionError,
 )
@@ -30,10 +32,13 @@ from jdlib.integrations.mcp.resources import (
     health_resource,
     tenant_resource,
 )
+from jdlib.integrations.mcp.server import build_mcp_server, request_from_http
 from jdlib.integrations.mcp.tools import McpTool, McpToolRegistry
 
 __all__ = [
+    "McpArgumentsRefusedError",
     "McpError",
+    "McpServerUnavailableError",
     "McpInvoker",
     "McpSecurityBoundary",
     "McpTool",
@@ -41,8 +46,10 @@ __all__ = [
     "McpToolExecutionError",
     "McpResource",
     "McpToolRegistry",
+    "build_mcp_server",
     "graph_schema_resource",
     "graph_tools",
     "health_resource",
+    "request_from_http",
     "tenant_resource",
 ]

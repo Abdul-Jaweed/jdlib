@@ -28,14 +28,18 @@ which implementation it holds. One limit is inherited with it: a decision the en
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
-from typing import Any
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, cast
 
 from jdlib.authz.guards import tenant_target
 from jdlib.context import context_scope
 from jdlib.errors import JdlibError, PermissionDenied
 from jdlib.integrations.mcp.boundary import McpSecurityBoundary
-from jdlib.integrations.mcp.errors import McpTimeoutError, McpToolExecutionError
+from jdlib.integrations.mcp.errors import (
+    McpArgumentsRefusedError,
+    McpTimeoutError,
+    McpToolExecutionError,
+)
 from jdlib.integrations.mcp.resources import McpResource
 from jdlib.integrations.mcp.tools import McpTool, McpToolRegistry
 from jdlib.reliability.concurrency import ConcurrencyGate
@@ -128,6 +132,7 @@ class McpInvoker:
             context = await self._boundary.establish(request=request)
             tool = self._registry.get(tool_name)
             with security_context_scope(context), context_scope(context.require_tenant()):
+                self._validate(tool, arguments)
                 if tool.capability is not None:
                     await self._authorize(tool, span)
                 self._record_invocation(tool)
@@ -162,6 +167,19 @@ class McpInvoker:
         except PermissionDenied:
             span.set_attribute("security.result", "denied")
             self._record_refusal(tool)
+            raise
+
+    def _validate(self, tool: McpTool, arguments: Mapping[str, Any]) -> None:
+        """Refuse a call the declaration does not describe, before anything else runs.
+
+        Before authorization on purpose: asking a policy engine about a call the tool's own
+        contract does not describe spends a decision on a request that cannot proceed, and the
+        refusal is the caller's to fix either way.
+        """
+        try:
+            _refuse_undeclared(tool, arguments)
+        except McpArgumentsRefusedError as exc:
+            self._record_error(exc)
             raise
 
     def _record_invocation(self, tool: McpTool) -> None:
@@ -276,3 +294,47 @@ class McpInvoker:
                 metadata={"tool": tool.name, "capability": tool.capability or ""},
             ),
         )
+
+
+_JSON_TYPES: dict[str, type] = {"string": str, "object": dict, "array": list}
+
+
+def _matches_type(declared: str, value: Any) -> bool:
+    """Whether `value` satisfies the declared JSON type.
+
+    A shape this check does not model is not a refusal: the point is to enforce what the
+    declarations actually say, not to become a JSON Schema implementation.
+    """
+    if declared == "boolean":
+        return isinstance(value, bool)
+    if declared in {"integer", "number"}:
+        if isinstance(value, bool):  # bool is an int in Python; JSON is not
+            return False
+        expected: Any = int if declared == "integer" else (int, float)
+        return isinstance(value, expected)
+    kind = _JSON_TYPES.get(declared)
+    return True if kind is None else isinstance(value, kind)
+
+
+def _refuse_undeclared(tool: McpTool, arguments: Mapping[str, Any]) -> None:
+    """Raise unless the arguments are exactly what the tool declares."""
+    schema = cast("Mapping[str, Any]", tool.input_schema or {})
+    properties = cast("Mapping[str, Any]", schema.get("properties") or {})
+    required = cast("Sequence[str]", schema.get("required") or ())
+    missing = sorted(name for name in required if name not in arguments)
+    if missing:
+        raise McpArgumentsRefusedError(
+            f"the call is missing required arguments: {', '.join(missing)}"
+        )
+    if schema.get("additionalProperties", True) is False:
+        undeclared = sorted(name for name in arguments if name not in properties)
+        if undeclared:
+            raise McpArgumentsRefusedError(
+                "the call carries arguments the tool does not declare: " + ", ".join(undeclared)
+            )
+    for name, value in arguments.items():
+        declared = (properties.get(name) or {}).get("type")
+        if declared is not None and not _matches_type(str(declared), value):
+            raise McpArgumentsRefusedError(
+                f"argument {name!r} is not of the declared type {declared!r}"
+            )
