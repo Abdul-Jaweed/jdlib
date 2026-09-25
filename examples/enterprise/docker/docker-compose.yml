@@ -2,6 +2,7 @@
 #
 #   export JDLIB_ENTERPRISE_POSTGRES_PASSWORD="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
 #   export JDLIB_ENTERPRISE_APP_PASSWORD="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+#   export JDLIB_ENTERPRISE_GRAPH_PASSWORD="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
 #   docker compose -f docker/docker-compose.yml up -d
 #
 # Two roles, deliberately: the owner (`jdlib`, the image's own superuser) migrates and installs
@@ -55,3 +56,30 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # The graph, for the projection. Its own instance on offset ports, like the database above: a lab
+  # that shares an engine with another stack is a lab whose tests can pass on the other stack's
+  # data. The library's client speaks bolt to this server; the driver arrives with the `graph`
+  # extra, and this server exists only for the live layer.
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: jdlib-enterprise-neo4j
+    environment:
+      NEO4J_AUTH: "neo4j/${JDLIB_ENTERPRISE_GRAPH_PASSWORD:?export JDLIB_ENTERPRISE_GRAPH_PASSWORD first (any value; this is a local lab)}"
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    ports:
+      - "127.0.0.1:7688:7687"
+      - "127.0.0.1:7475:7474"
+    healthcheck:
+      # The password comes from the compose environment, the way the harness's own healthcheck
+      # takes it: the container has no variable holding it separately, and `$NEO4J_AUTH` is the
+      # `user/password` pair rather than the password.
+      test:
+        [
+          "CMD-SHELL",
+          "cypher-shell -u neo4j -p '${JDLIB_ENTERPRISE_GRAPH_PASSWORD:?}' 'RETURN 1' >/dev/null 2>&1 || exit 1",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 60

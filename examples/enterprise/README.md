@@ -19,9 +19,11 @@ whose job".
 | `app/bootstrap.py` — the operator step (migrate, create, provision) | **here** |
 | `config/.env.example` — every variable, marked, with no values | **here** |
 | `config/cerbos/` — the policy set, with the engine's own tests beside it | **here** — 21 policy tests, run by `cerbos compile` |
-| `docker/` — the lab (PostgreSQL, Cerbos) | **here** — Neo4j and the collector arrive with the graph and telemetry layers |
+| `docker/` — the lab (PostgreSQL, Cerbos, Neo4j) | **here** — the collector arrives with the telemetry layer |
 | `tests/test_authorization.py`, `tests/test_authorization_live.py` — the bridge's mapping, and the engine's answers over the wire | **here** — 5 unit, 4 live |
-| `app/services/`, `app/repositories/`, `app/graph/`, `app/mcp/` | next |
+| `app/services/`, `app/repositories/` — the tenant plane | **here** |
+| `app/graph.py` — the tenant-bound graph plane and the projection | **here** — 7 live tests against Neo4j |
+| `app/mcp/` — the MCP surface | next |
 | `tests/{integration,security,e2e}` — the matrix the directive asks for | next |
 
 The order is deliberate and dependency-forced: the policy files and the container lab land with the
@@ -35,6 +37,7 @@ written. This README is corrected in the same commit as each layer.
 | `app/configuration/settings.py` | what the environment supplies that the library does not already own |
 | `app/security/authentication.py` | the library's authenticator chain, as the middleware's principal provider |
 | `app/security/authorization.py` | the bridge: Cerbos answers, the library's guard asks |
+| `app/graph.py` | the graph's URI, its credential handle, the vocabulary, and the projection the resource plane drives |
 | `app/security/roles.py` | the roles a principal holds in a tenant, from the control plane |
 | `app/security/context.py` | the library's `ContextFactory`, and the operator directory it leaves to the application |
 | `app/security/container.py` | the collaborators `require(...)` reads from `app.state` |
@@ -148,6 +151,42 @@ python -m examples.enterprise.app.bootstrap --slug acme --name "Acme Inc"
 pytest examples/enterprise/tests/test_tenant_plane_live.py -q -W error
 ```
 
+## The graph plane
+
+`app/graph.py` is the second data plane, and it is a plane rather than a second kind of access:
+the relational plane is the *record*, the graph is derived from it, and the security model is the
+same one. Three properties, each measured against a live server:
+
+**The tenant comes from the context, never from an argument.** `Neo4jClient.open` binds a client to
+the tenant it was opened for, and every statement is checked against that binding, so the plane keeps
+one client per tenant and passes each call's context to the statement. A client opened for one tenant
+**refuses** another tenant's statement — that is a different control from a scope the caller could
+forget, and `test_a_statement_for_another_tenant_is_refused_by_the_client` measures the refusal with a
+statement that is perfectly well-formed for the tenant it names.
+
+**The vocabulary is declared, not inferred.** `VOCABULARY` lists the labels, relationship types and
+property keys this deployment may contain; the repository resolves a caller's name through it, so an
+undeclared label never reaches a statement. A graph that accepts whatever a caller spells is a graph
+whose schema is decided by its callers.
+
+**Schema is the operator's job, and it is why `bootstrap` has a graph step.** A constraint has no
+tenant to be scoped to, so it cannot go through the client at all: `ensure_graph_constraints` uses the
+driver directly, with the operator's credentials, before the application serves. Without it a second
+projection of the same row is a *second node* rather than a conflict — the mutation that turned the
+upsert into a create succeeded at the database, which is what a missing constraint looks like.
+
+The lab's Neo4j is the example's own instance (bolt `7688`, HTTP `7475`), like the database above it:
+a lab that shares an engine with another stack is a lab whose tests can pass on the other stack's
+data. The password is **one variable for both sides** — `JDLIB_ENTERPRISE_GRAPH_PASSWORD`
+initialises the server and is what the credential handle `graph-password` resolves:
+
+```bash
+export JDLIB_ENTERPRISE_GRAPH_PASSWORD=...      # the lab and the application read the same name
+docker compose -f docker/docker-compose.yml up -d neo4j
+export JDLIB_EXAMPLE_GRAPH_URI=bolt://127.0.0.1:7688
+pytest examples/enterprise/tests/test_graph_live.py -q -W error
+```
+
 ## Tests
 
 ```bash
@@ -162,6 +201,10 @@ operator step: the settings a serving process needs (and the owner's DSN it must
 refusals that name their variable. The tenant plane (live): read-back over a fresh connection,
 ordering, isolation at both layers, the composite foreign key, unscoped statements refused beside
 the scoped form, rollback, and a suspended tenant that cannot write.
+
+The graph plane (live): a projected node read back over a fresh client, the upsert, cross-tenant
+invisibility, the client's refusal of another tenant's statement, the closed vocabulary, and the
+identity constraint the operator step declares.
 
 The behavioural matrix over HTTP — denial non-execution, tenant isolation end to end, the whole chain
 through the gateway — arrives with the layers it tests.

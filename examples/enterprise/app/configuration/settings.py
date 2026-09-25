@@ -50,6 +50,13 @@ class ExampleSettings(BaseSettings):
     service_name: str = "jdlib-enterprise-example"
     #: optional, non-secret -- an OTLP/HTTP endpoint; empty means "do not trace".
     otel_endpoint: str = ""
+    #: optional, non-secret -- the graph's bolt URI; empty means "this process projects nothing".
+    #: The password is a *reference*: `JDLIB_EXAMPLE_GRAPH_PASSWORD`, resolved through the
+    #: library's versioned credential provider at connect time and never held here.
+    graph_uri: str = ""
+    #: optional, non-secret -- the graph database and the user basic auth presents.
+    graph_database: str = "neo4j"
+    graph_username: str = "neo4j"
     #: optional, SECRET -- the owner role's DSN: migrations, provisioning, policy installation.
     #: Required by the *operator step* (`app/bootstrap.py`), never by the request path: the runtime
     #: DSN is the library's own `JDLIB_CONTROL_DSN`, read by `TenancyConfig`, and a serving process

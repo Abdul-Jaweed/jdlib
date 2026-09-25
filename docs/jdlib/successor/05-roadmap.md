@@ -528,7 +528,8 @@ a driver, a raw session factory or a second envelope.
 | E2 — configuration, security, api | **landed** | `examples/enterprise/`: settings marked required/optional, the Cerbos bridge, the operator directory, the audit sink, two guarded routes; 5 tests, 2/2 mutations |
 | E3a — the Cerbos policy set, the lab, and the authorization verification | **landed** | `config/cerbos/policies/` with 21 tests executed by `cerbos compile`; `docker/docker-compose.yml`; 5 unit tests for the bridge's mapping and 4 live tests answered by the engine (allow, deny, cross-tenant deny); 2/2 mutations bit |
 | E3b — the tenant plane: models, repositories, services, api | **landed** | `examples/enterprise/app/{models,repositories,services}/`, `app/dataplane.py`, `app/api/resources.py`, `app/asgi.py`; the two-role lab (`docker/initdb/`); **11 live tests** against real PostgreSQL (read-back over a fresh connection, ordering, cross-tenant invisibility at both layers, the composite foreign key, unscoped statements refused with the scoped form beside them, rollback, suspend/resume) and 5 unit tests for the operator step; **3/3 mutations bit** (the installer's policy, the composite FK, the bootstrap's guard) |
-| E3c — graph and MCP surfaces | next | the two layers that consume what E3b built: a graph repository use and an MCP server from `build_mcp_server` |
+| E3c-i — the graph plane | **landed** | `examples/enterprise/app/graph.py` (a client per tenant, the closed `VOCABULARY`, the projection as an upsert in one transaction, `ensure_graph_constraints` as the operator step's schema declaration) and `tests/test_graph_live.py` — **7 live tests** against the example's own Neo4j (`docker/docker-compose.yml`, bolt 7688): read-back over a fresh client, the upsert, cross-tenant invisibility, the client refusing another tenant's well-formed statement, an undeclared label refused before any statement, the row's own id, and the identity constraint; **2/2 mutations bit**. Found: the lab had no identity constraint, so "project twice" was a second node rather than an update — the mutation that turned the upsert into a create succeeded at the database |
+| E3c-ii — the MCP surface | next | the second protocol over the same chain: a server from `build_mcp_server`, the example's own tools beside `graph_tools`, and the refusal that is measured before a handler runs |
 | E4–E8 | next | as listed below |
 
 The examples are type-checked from E1 onwards (`mypy src/jdlib examples` in `scripts/ci-local.sh` and
@@ -546,9 +547,12 @@ the workflow), and their tests are collected by the repository's own gate (`test
    `config/`, `docker/` and the README.
 3. **E3 — the enterprise example: services, repositories, graph, mcp.** *Split*: **E3a** landed the
    policy set and its live verification; **E3b** landed the tenant plane (models, repositories,
-   services, the resource routes, the two-role lab); **E3c** is the graph and MCP surfaces, built on
-   what E3b wired. The split is recorded rather than silent: E3b's lab is what the graph and MCP
-   slices need before they can be tested against anything real.
+   services, the resource routes, the two-role lab); **E3c-i** landed the graph plane (the
+   tenant-bound client, the closed vocabulary, the projection, the operator step's schema
+   declaration, and its own Neo4j in the lab); **E3c-ii** is the MCP surface, built on what E3b and
+   E3c-i wired. The splits are recorded rather than silent: E3b's lab is what the graph slice needs
+   before it can be tested against anything real, and the graph's repository is what the MCP
+   surface's tools take.
 4. **E4 — the enterprise example's tests.** `tests/{unit,integration,security,e2e}` in the example:
    unit (no services), integration (Postgres via the harness), security (tenant isolation, denial
    non-execution, no error leakage), e2e (a request through the whole chain).

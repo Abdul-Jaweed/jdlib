@@ -658,6 +658,9 @@ names the commit that fixed it.
 * **Found by** the operator step's own imports: `bootstrap` referenced the settings class and the RLS
   installer without importing either, and nothing called the function — a `NameError` that would have
   surfaced in an operator's hands. Its new test calls the entry point, which is what exercises them.
+* **Found by** the lab's own init script: it is executed by the container's shell as it sits on disk,
+  and a CRLF shebang is `/bin/bash\r`, which the kernel reports as "required file not found". Git's
+  autocrlf would hand every Windows checkout CRLF, so `.gitattributes` now pins `*.sh` to LF.
 
 ### The example application — the authorization slice, verified against a live engine (directive §18)
 
@@ -680,3 +683,37 @@ names the commit that fixed it.
 * **Found by** the live run's first shape: `HttpCerbosTransport(timeout=…)` takes a `timedelta`, and
   a float fails only when the request is made, where the adapter reports it as a *degraded* decision
   — every case answered DENY/degraded, which reads like a policy denial and is an outage.
+
+### The example application — the graph plane, against real Neo4j (directive §18)
+
+* **What landed.** `examples/enterprise/app/graph.py`: the tenant-bound graph plane (a client per
+  tenant, opened *for* that tenant), the declared `VOCABULARY`, the projection as an upsert inside one
+  transaction, and `ensure_graph_constraints` — the schema declaration, which `bootstrap` runs the way
+  it runs the migration. The example's lab gains its own Neo4j (`docker/docker-compose.yml`, bolt on
+  7688), and `tests/test_graph_live.py` drives all of it against the server: 7 live tests.
+* **Why it exists.** The relational plane is the record and the graph is derived from it. Two controls
+  make the derivation safe — the client's tenant binding and the closed vocabulary — and neither is
+  visible without a server: a scope that is a parameter and a scope that is enforced look identical in
+  a unit test.
+* **Evidence.** 7 live tests pass against the example's own Neo4j (`docker compose -f
+  examples/enterprise/docker/docker-compose.yml up -d neo4j`): read-back over a *fresh client* (the
+  positive path), the upsert, the node invisible to the other tenant, the client refusing another
+  tenant's well-formed statement, an undeclared label refused before any statement, the projection
+  carrying the row's own id, and the identity constraint (a duplicate create is a conflict; the same id
+  in another tenant is not). Mutations **2/2**: with the upsert turned into a create, exactly the upsert
+  test fails; with `Invoice` added to the vocabulary, exactly the undeclared-label test fails.
+* **Found by** the mutation that bit *at the database and not at the code*: with the upsert turned into
+  a create, the create **succeeded** — the lab carried no identity constraint, so "project twice" was a
+  second node and the projection's idempotence held only because nothing else wrote at the same moment.
+  `ensure_graph_constraints` declares `(tenant_id, id)` unique per label, and the operator step refuses
+  over data that violates it, naming the offending nodes.
+* **Found by** one secret with two names: the application resolved `JDLIB_EXAMPLE_GRAPH_PASSWORD` while
+  the lab's compose file initialised the server from `JDLIB_ENTERPRISE_GRAPH_PASSWORD`, so the first
+  live run failed with `CredentialUnavailableError` on a password that was exported. The handle is now
+  `graph-password` under the `JDLIB_ENTERPRISE_` prefix — one variable, one rotation.
+* **Found by** running the suite the way the README documents it: with the owner's DSN exported, the
+  operator step's three tests failed — they assert a process that serves without it, and the fixture
+  only *set* variables, so the shell decided the premise. The fixture now removes the variable
+  (`monkeypatch.delenv`), because a test whose premise the environment can supply is not measuring the
+  code — and it had passed before only because every earlier run of this file happened to be on a bare
+  environment.

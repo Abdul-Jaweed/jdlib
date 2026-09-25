@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from examples.enterprise.app.configuration.settings import ExampleSettings
 from examples.enterprise.app.dataplane import install_tenant_rls, shared_strategy
 from examples.enterprise.app.dsn import async_dsn, control_dsn, sync_dsn
+from examples.enterprise.app.graph import ensure_graph_constraints, graph_config
 from jdlib import TenancyConfig
 from jdlib.control.audit import DatabaseAuditSink
 from jdlib.control.enums import PlacementStrategy
@@ -82,6 +83,20 @@ async def bootstrap(*, slug: str, name: str) -> str:
         # Policies last: a policy cannot be installed on a table that does not exist yet, and the
         # privileges are granted here because the library deliberately grants none.
         await install_tenant_rls(url, "public", app_role=app_role)
+
+        # The graph's schema, if this deployment has a graph at all. It is declared here for the
+        # same reason the migration is: the request path must not hold the credentials to declare
+        # it, and a constraint has no tenant to be scoped to, so it cannot go through the client
+        # the request path uses. Idempotent -- `IF NOT EXISTS` -- so a second run is a no-op.
+        settings = ExampleSettings()  # type: ignore[call-arg]  # env-filled
+        if settings.graph_uri:
+            ensure_graph_constraints(
+                graph_config(
+                    uri=settings.graph_uri,
+                    database=settings.graph_database,
+                    username=settings.graph_username,
+                )
+            )
         return str(tenant.id)
     finally:
         await engine.dispose()
