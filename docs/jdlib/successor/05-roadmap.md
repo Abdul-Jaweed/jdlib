@@ -312,6 +312,57 @@ reading, which is the argument for having it.
 
 ---
 
+## §16 — Neo4j graph capability (L) — directive §8–§17
+
+Neo4j as a first-class data plane, not a driver wrapper: a `jdlib.graph` package following the
+`jdlib.storage` / `jdlib.data` idioms — a port, one verified adapter behind an optional extra, its
+own error taxonomy, tenant scoping built in exactly one place — with Cypher safety as a property of
+the *types* rather than of a sanitiser, and every external call inside the reliability primitives the
+library already owns (`CircuitBreaker`, `backoff_seconds`, `is_retryable_failure`) instead of a
+second reliability stack.
+
+The security model is the tenant plane's: the effective tenant comes from the authenticated context
+and never from a request parameter; every query binds it as a parameter; a label, relationship type
+or property key is a validated value, allowlisted at construction, so injection has no string to
+land in. Retries do not duplicate writes — a write is retried only where the correctness model
+permits it, and the audit record follows the committed outcome rather than the attempt.
+
+**Status: IN PROGRESS (started 2026-09-26).** Slices: config + errors → query and identifiers →
+client → tenant scoping and repository → transactions → reliability → observability and audit →
+harness and the adversarial suite → the capability page.
+
+Gate: Neo4j live in the infra harness (the suite skips cleanly without it); the injection suite
+(Cypher, label, relationship type, property key, arbitrary query, cross-tenant traversal,
+unrestricted delete); a test asserting the caller cannot supply the tenant parameter; the complete
+local gate green.
+
+## §17 — FastMCP integration (L) — directive §18–§28
+
+The MCP server is a *consumer* of the library's security model, not a second one: authentication
+resolves to the same `SecurityContext`, tenant resolution to the same `TenantContext`, authorization
+to the same PEP/PDP pair, and every tool call walks the same
+authentication → tenant → authorization → operation → audit → telemetry chain an HTTP route does.
+Tools are typed and bounded; arbitrary Cypher or arbitrary database access is not a tool — if it
+exists at all it is an explicitly privileged capability with authorization, audit and limits.
+
+**Status: NOT STARTED.** Depends on §16 for its graph tools and on §2–§12 for everything else.
+
+Gate: the same security, audit and observability assertions the HTTP path carries, run through the
+MCP entry point; a tool inventory test that fails when a tool is added without a declared capability.
+
+## §18 — Example application: minimal and enterprise (L) — the example-application directive
+
+Two runnable examples against the real library: a minimal one (FastAPI → JDLib → PostgreSQL, the
+smallest correct setup) and an enterprise one (gateway, Cerbos, PostgreSQL, Neo4j, MCP, audit,
+reliability, observability), with the feature matrix, the per-feature documentation template, the
+with/without-JDLib comparisons and the test matrix the directive asks for.
+
+**Status: NOT STARTED.** Depends on §16 and §17: an example may not document a capability the
+library does not have, and the directive's own rule is that the example must actually run.
+
+Gate: both examples run from the documented path on an empty lab; every documented command is
+executed at least once; the feature matrix cites `file:line`; no claim without an example and a test.
+
 ## Sequencing summary
 
 ```
@@ -319,6 +370,7 @@ reading, which is the argument for having it.
            → §6 connector framework → §7 connectors → §8 query → §9 storage
            → §10 integrations → §11 observability → §12 audit
            → §13 reference app → §14 red team + certification → §15 docs
+           → §16 Neo4j graph → §17 FastMCP → §18 example application → §19 certification
 ```
 
 Each arrow is a real dependency, not a preference: §4 resolves credentials (§2) and caches
