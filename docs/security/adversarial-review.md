@@ -123,9 +123,12 @@ occurs; the assertion is unchanged.
   (ship the trail to append-only storage, anchor a periodic digest, no
   `UPDATE`/`DELETE` for the application role) remain deployment work, and the
   residual risk stays recorded rather than papered over.
-* **Live Tyk verification.** Unchanged: stock Tyk 5.3.1 OSS ships no JavaScript
-  or coprocess runtime, so the Tyk harness is documented PARTIAL and its six
-  tests skip with the reason; Kong is the verified gateway.
+* **Live Tyk verification.** Resolved on 2026-09-25: the six Tyk harness tests
+  pass. The "no JavaScript runtime" note this bullet carried was wrong - the JSVM
+  is present, and the middleware never loaded because the harness named a driver
+  Tyk does not know (`javascript`; the JS driver is `otto`) and because the gateway
+  was hostname-bound. Both were fixture defects; `docs/security/gateway-hardening.md`
+  §6 carries the full list. Kong 3.6 and Tyk 5.3.1 are both verified end to end.
 
 ## 4. A test-level finding
 

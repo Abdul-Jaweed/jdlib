@@ -92,7 +92,10 @@ The adapter is implemented, unit-tested and satisfies the port; its default
 header conventions are `x-tyk-jdlib-{subject,tenant,scopes,issued-at,expires-at,
 gateway-secret,signature}`, and everything in §2 applies to it unchanged.
 
-## 6. Tyk live harness: provided, not verified (directive §19)
+## 6. Tyk live harness: verified (directive §19)
+
+**Corrected 2026-09-25 - the harness passes all six of its tests, and both
+observations recorded below turned out to be fixture defects, not gateway limits.**
 
 `tests/infra/tyk/` contains a complete, reproducible harness: an API definition
 (`apps/documents.json`) with key auth, rate limiting, `global_headers` and a
@@ -101,26 +104,36 @@ stamps a fresh validity window, a start script that provisions redis, the
 gateway and an API key, and `tests/infra/test_tyk_infra.py`, which asserts the
 same properties as the Kong suite and skips unless the stack is running.
 
-It was **not** executed successfully in this environment, and no part of it is
-claimed as verified. Two concrete observations from the attempt, so a follow-up
-does not start from zero:
+The two observations recorded during the failed attempt were both re-diagnosed, and
+each was a defect in *this harness* rather than in Tyk:
 
-1. **The blocker:** Tyk 5.3.1 OSS rejects a `javascript` custom-middleware
-   driver with *"Your API specifies a CP custom middleware, either Tyk wasn't
-   build with CP support or CP is not enabled in your Tyk configuration file!"*
-   — the stock image has no JSVM/coprocess plugin runtime. The validity window
-   therefore cannot be stamped by `global_headers` alone (they are static, and a
-   static window is correctly *rejected* by the adapter, which is the replay
-   protection working). A working harness needs a Tyk build with a rich-plugin
-   runtime (gRPC plugin server or the Python-enabled image) to stamp the window.
-2. **Secondary:** with the JS middleware present, the gateway loaded the API but
-   answered `404 Not Found` for `/documents/42`, i.e. the route did not match
-   under this configuration; that needs to be resolved before the harness can
-   pass even with a plugin runtime.
+1. *"Your API specifies a CP custom middleware"* did **not** mean the image lacks a
+   runtime. It is what Tyk logs when a middleware entry names a driver it does not
+   know: this harness wrote `"driver": "javascript"`, and Tyk's JavaScript driver is
+   **`otto`**. With the correct driver the JSVM loads the file
+   (`Loading JS File: ... prefix=jsvm`) and stamps the window per request.
+   `global_headers` alone would indeed be static - and therefore correctly refused -
+   so the middleware is genuinely needed; a rich-plugin (gRPC/Python) build is not.
+2. The `404 Not Found` was the real blocker and was also a harness defect: the start
+   script passed `TYK_GW_HOSTNAME=jdlib-tyk`, which Tyk uses as the *default domain*
+   for API definitions that declare none, so it routed only requests carrying
+   `Host: jdlib-tyk` - including Tyk's own shipped sample API - and answered 404 to
+   everything else. The test client sends no Host at all.
 
-Until then the honest status is: the *adapter* is verified by unit tests, the
-*deployment* is not verified against a live Tyk, and a Tyk deployment that sends
-a static validity window will be refused by the adapter (fail closed).
+Three further defects were fixed on the way: the rendered gateway config never
+substituted its own `__GATEWAY_SECRET__` placeholder, so every administrative call
+from the start script failed silently; the middleware's global was named
+`stampWindow` while the definition's entry is `stamp_window` (Tyk looks the entry's
+name up in the file, so the request failed with `ReferenceError`); and
+`strip_listen_path: false` with a path in `target_url` doubled the upstream path
+while `global_headers` sat at the top level of the definition, where Tyk ignores it
+instead of adding it to the version.
+
+The honest status now: the *adapter* is verified by unit tests **and** the
+*deployment* is verified against a live Tyk 5.3.1 - all six tests in
+`tests/infra/test_tyk_infra.py` pass with the harness up. The fail-closed property
+is unchanged and still unit-verified: a deployment that sends a *static* validity
+window is refused exactly as a replayed one is.
 
 ## 7. Deferred (explicitly not implemented)
 

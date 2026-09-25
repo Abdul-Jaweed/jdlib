@@ -79,36 +79,32 @@ The first-run masterkey must be exactly 32 characters, as required by ZITADEL;
 for local use the compose file falls back to an obvious placeholder. Never
 reuse it anywhere reachable from a network.
 
-## Known state of the Tyk harness (2026-09-25)
+## The Tyk harness
 
-The Tyk suite is the one part of this harness that is **not verified**, and it is recorded
-rather than left as a bare skip. With the harness up, one of its six tests passes and five
-fail: Tyk loads the API definition ("API Loaded api_id=documents"), reaches its Redis store
-once the config below is rendered, and then answers **404 for every proxy route** - `/`,
-`/documents`, `/documents/42` with the key the tests authenticate with, and with
-`Host: api.internal`, the host their own request model names.
+The suite is verified: with `bash tests/infra/tyk/start.sh` up, **all six tests pass**. Getting
+there meant fixing five fixture defects, each found by measurement rather than reading:
 
-Ruled out by measurement, not by reading:
+1. **`TYK_GW_HOSTNAME=jdlib-tyk` (the reason every route 404'd).** Tyk uses the configured
+   hostname as the *default domain* for API definitions that declare none, so the gateway
+   routed only requests carrying `Host: jdlib-tyk` and answered 404 - including for Tyk's own
+   shipped sample API - to everything else. The suite's own client sends no Host at all. The
+   gateway now runs with no hostname, so its APIs match any host.
+2. **The rendered config never rendered its secret.** `sed` replaced the Redis host but left
+   `__GATEWAY_SECRET__` in place; the gateway then used that 18-character placeholder as its
+   secret while `tyk-credentials.env` held the real one, so every administrative call from the
+   start script (`/tyk/keys/...`, `/tyk/reload/group`) failed silently and no session existed
+   for the key the tests use.
+3. **`"driver": "javascript"` is not a driver Tyk knows.** The JavaScript middleware was
+   therefore classified as coprocess, logged as `Your API specifies a CP custom middleware ...
+   CP is not enabled` next to `Rich plugins are disabled`, and never ran - which is why the
+   window it stamps was absent. The JSVM driver is **`otto`**.
+4. **The middleware's global was named `stampWindow`, the definition's entry `stamp_window`.**
+   Tyk's JSVM looks the entry's name up in the file, so every request failed with
+   `ReferenceError: 'stamp_window' is not defined` once the middleware was live.
+5. **Two schema mistakes:** `strip_listen_path: false` combined with a path in `target_url`
+   produced `/documents/documents/42` upstream, and `global_headers` sat at the top level of
+   the definition where Tyk ignores it - it belongs to the version, which is why the identity
+   headers never reached the upstream.
 
-- the auth header - the definition sets `auth_header_name: apikey`, the tests send `apikey`
-- `version_data.use_extended_paths` - true and false, both 404
-- the JavaScript middleware - `custom_middleware` removed from the loaded copy, still 404
-- the key store - the key is present in Redis and `hash_keys` is off in the rendered config
-- startup ordering - a clean `docker restart` of Tyk alone reproduces it
-- Redis reachability - a sidecar on the same network gets `PONG`, and Tyk logs no new Redis
-  errors since the config fix
-
-Two harness defects *were* found and fixed while establishing that:
-
-1. the script started Tyk without waiting for Redis (it waits now);
-2. both harnesses used the container name `jdlib-echo`, so stopping Tyk deleted Kong's
-   upstream and six Kong tests failed with connection errors. Tyk's upstream is
-   `jdlib-tyk-echo` now, and its app definition targets that;
-3. Tyk's `TYK_GW_STORAGE_*` overrides did not displace the image's own `tyk.conf`, whose
-   `storage.host` is `redis` - a name that resolves on no network here. The admin API
-   accepted the overridden secret while storage still failed, so the two disagreed about
-   which source won. The config is rendered from `tyk.conf.template` and mounted now, the
-   same way the app definition already was: seven startup Redis errors, then zero.
-
-Kong's suite is verified end to end and remains the gateway the adapter work was proven
-against; `docs/jdlib/connectors.md` and the capability page record it that way.
+The earlier note here - "stock Tyk 5.3.1 has no JavaScript runtime, so the plugin never loads" -
+was wrong twice over: this image ships JSVM, and the plugin not loading had five fixable causes.

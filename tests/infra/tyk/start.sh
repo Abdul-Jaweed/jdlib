@@ -28,7 +28,9 @@ sed -e "s/__GATEWAY_SECRET__/$SECRET/" "$HERE/apps/documents.json" > "$OUT/tyk-d
 # configured", seven times at startup) while the admin API happily answered with the
 # overridden secret, so the two disagreed about which source won. One source of truth
 # instead, the same way the app definition is handled.
-sed -e "s/__REDIS_HOST__/jdlib-tyk-redis/" "$HERE/tyk.conf.template" > "$OUT/tyk.conf"
+sed -e "s/__GATEWAY_SECRET__/$SECRET/" \
+    -e "s/__REDIS_HOST__/jdlib-tyk-redis/" \
+    "$HERE/tyk.conf.template" > "$OUT/tyk.conf"
 
 docker network inspect jdlib-infra >/dev/null 2>&1 || docker network create jdlib-infra
 
@@ -55,7 +57,6 @@ done
 
 docker rm -f jdlib-tyk >/dev/null 2>&1 || true
 docker run -d --name jdlib-tyk --network jdlib-infra \
-    -e TYK_GW_HOSTNAME=jdlib-tyk \
     -v "$OUT/tyk.conf:/opt/tyk-gateway/tyk.conf:ro" \
     -p 127.0.0.1:8081:8080 \
     -v "$OUT/tyk-documents.json:/opt/tyk-gateway/apps/documents.json:ro" \

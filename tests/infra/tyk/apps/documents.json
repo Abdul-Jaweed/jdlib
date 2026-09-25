@@ -14,7 +14,7 @@
   "proxy": {
     "listen_path": "/documents",
     "target_url": "http://jdlib-tyk-echo:8080/documents",
-    "strip_listen_path": false,
+    "strip_listen_path": true,
     "preserve_host_header": false
   },
   "active": true,
@@ -23,18 +23,18 @@
     "versions": {
       "Default": {
         "name": "Default",
-        "use_extended_paths": true
+        "use_extended_paths": true,
+        "global_headers": {
+          "x-tyk-jdlib-subject": "acme-service",
+          "x-tyk-jdlib-tenant": "acme",
+          "x-tyk-jdlib-scopes": "documents:read documents:write",
+          "x-tyk-jdlib-gateway-secret": "__GATEWAY_SECRET__"
+        }
       }
     }
   },
-  "global_headers": {
-    "x-tyk-jdlib-subject": "acme-service",
-    "x-tyk-jdlib-tenant": "acme",
-    "x-tyk-jdlib-scopes": "documents:read documents:write",
-    "x-tyk-jdlib-gateway-secret": "__GATEWAY_SECRET__"
-  },
   "custom_middleware": {
-    "driver": "javascript",
+    "driver": "otto",
     "pre": [
       {
         "name": "stamp_window",

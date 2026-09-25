@@ -91,43 +91,42 @@ To capture the report for a review, run `--json` and keep the payload: it
 contains the profile, the counts, `is_ready`, and per finding the control id,
 outcome, severity, reason and evidence summaries — never observation values.
 
-## 4. The six Tyk skips
+## 4. Tyk: verified, and why it used to be recorded as unavailable
 
-`tests/infra/test_tyk_infra.py` holds six tests that do not run here. They are
-**not** passes and **not** failures: they skip when the Tyk harness variables are
-not exported, and the live path they exercise cannot be verified against the
-stock image because Tyk 5.3.1 OSS ships no JavaScript/coprocess runtime — the
-middleware that stamps the validity window cannot execute, so the tests are
-recorded as skipped rather than passing
-([`docs/security/gateway-hardening.md`](../security/gateway-hardening.md) §6
-records the blocker and the second, unrelated routing observation from the
-attempt). The register records the consequence as `JDL-GW-02`, `partial`.
+`tests/infra/test_tyk_infra.py` holds six tests that run against the live harness
+(`bash tests/infra/tyk/start.sh`); **all six pass**. They skip only when the harness's
+variables are not exported, which is the rule every infrastructure layer here follows.
+
+The section that stood here recorded them as permanently skipping, on the finding that
+stock Tyk 5.3.1 OSS ships no JavaScript runtime. That finding was wrong - the image ships
+JSVM and loads the middleware file. What stood in the way were five defects in *this*
+harness: the gateway was hostname-bound (`TYK_GW_HOSTNAME` is used as an API's default
+domain, so only requests carrying that `Host` matched - even Tyk's own shipped sample API
+answered 404), the rendered config never substituted its own secret placeholder, the
+middleware named a driver Tyk does not know (`javascript`; the JS driver is `otto`), the
+middleware's global did not match the name the definition looks up, and two schema
+mistakes doubled the upstream path and put `global_headers` where Tyk ignores it.
+[`docs/security/gateway-hardening.md`](../security/gateway-hardening.md) §6 carries the
+full list.
 
 What that means operationally:
 
-* The **Tyk adapter's contract** is unit-verified and fails closed — a Tyk
-  deployment that sends a *static* validity window will be refused (the same
-  rule as a replayed window), so an unverified deployment fails safe rather than
-  trusting headers. **Kong 3.6** is the gateway verified end to end.
-* A Tyk deployment must run `tests/infra/test_tyk_infra.py` against **its own**
-  Tyk build (one with a plugin runtime) before trusting the integration; until
-  those six tests pass there, the live path is unverified for that gateway.
-* Never count the skips as coverage, and never "fix" them by weakening the
-  assertion or by removing the skip: the skip reason is the documented engine
-  limitation. With the local stack up and its environment variables exported —
-  as on the development host — these six are the only skips in the gate; the
-  phase documents record the full gate for this checkout as
-  `1215 passed, 6 skipped`
-  ([`docs/security/compliance-evidence.md`](../security/compliance-evidence.md) §6).
-  On a machine without the stack, the other infrastructure layers skip as well,
-  each naming the missing variable; that is designed behaviour rather than a
-  failure. A skip in a layer whose service *is* configured is a signal: the OTel
-  harness makes the rule explicit — a listed but unreachable collector is a
-  failure, not a skip.
-* Kong, Cerbos, ZITADEL and the OpenTelemetry collector skip too when their
-  environment variables are unset; that is how a machine without the local stack
-  stays green without pretending to have tested them
-  ([`tests/infra/README.md`](../../tests/infra/README.md)).
+* **Kong 3.6 and Tyk 5.3.1 are both verified end to end.** The Tyk adapter's contract is
+  unit-verified as well, and it fails closed: a deployment that sends a *static* validity
+  window is refused exactly as a replayed one is.
+* A Tyk deployment should still run `tests/infra/test_tyk_infra.py` against **its own**
+  build before trusting the integration, as with any gateway.
+* Counts on this page come from a run, and the run is named. With the whole stack up and
+  its environment variables exported - as on the development host - the complete local
+  gate was **1570 passed, 7 skipped** at this revision, and those seven are the
+  documentation parser's "no front-matter to check" cases. On a machine without the
+  stack, the other infrastructure layers skip as well, each naming the missing variable;
+  that is designed behaviour rather than a failure. A skip in a layer whose service *is*
+  configured is a signal: the OTel harness makes the rule explicit - a listed but
+  unreachable collector is a failure, not a skip.
+* Kong, Cerbos, ZITADEL, Tyk and the OpenTelemetry collector skip when their environment
+  variables are unset; that is how a machine without the local stack stays green without
+  pretending to have tested them ([`tests/infra/README.md`](../../tests/infra/README.md)).
 
 ## 5. CI security job and its artifacts
 

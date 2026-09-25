@@ -84,11 +84,12 @@ Recorded in the register, not omitted from it:
   alter history undetectably — is stated in
   [`docs/security/audit-hardening.md`](../security/audit-hardening.md) §7 and
   must be closed by the deployment.
-* **`JDL-GW-02` — gateway plugin verification: `partial`, verification method
-  `runtime`.** Kong 3.6 is verified end to end; the Tyk adapter is unit-verified
-  and its live harness is provided but not executed, because stock Tyk 5.3.1 OSS
-  has no JavaScript/coprocess runtime. The six tests in
-  `tests/infra/test_tyk_infra.py` skip with that reason rather than passing.
+* **`JDL-GW-02` — gateway plugin verification.** Kong 3.6 and Tyk 5.3.1 are both
+  verified end to end: the six tests in `tests/infra/test_tyk_infra.py` pass against
+  the live harness, which also refuted the earlier "no JavaScript runtime" note
+  (the JSVM exists; the middleware failed to load because the fixture named an
+  unknown driver and the gateway was hostname-bound - see
+  `docs/security/gateway-hardening.md` §6).
 * **`JDL-SUPPLY-01` — dependency and pipeline gates: `partial`, verification
   method `inspection`.** The register's status note was written when the
   test/lint/type gate was the whole of CI and describes the pipeline-security

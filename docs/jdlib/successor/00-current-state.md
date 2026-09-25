@@ -130,7 +130,7 @@ because the successor phases add optional integrations and would multiply the pa
 
 | # | Limitation | Where recorded |
 |---|---|---|
-| L1 | Tyk OSS 5.3.1 has no coprocess runtime; its harness tests always skip. Kong 3.6 is the verified gateway. | `docs/security/`, JDLib CI annotations |
+| L1 | ~~Tyk OSS 5.3.1 has no coprocess runtime; its harness tests always skip.~~ Resolved 2026-09-25: the six Tyk tests pass. The gateway's 404s were `TYK_GW_HOSTNAME` (Tyk's default domain), the middleware never loaded because the fixture named an unknown driver (`javascript` rather than `otto`). Kong 3.6 and Tyk 5.3.1 are both verified. | `docs/security/gateway-hardening.md` §6 |
 | L2 | The error-envelope gap (G10) is frozen by decision, not implemented. | security programme |
 | L3 | Integration-layer tests need live infrastructure (Cerbos, Kong, ZITADEL, collector) via `JDLIB_INFRA_*`; without them they skip. | `tests/infra/` |
 | L4 | No coverage measurement exists; the figure is unknown. | this document |
