@@ -356,8 +356,30 @@ authentication → tenant → authorization → operation → audit → telemetr
 Tools are typed and bounded; arbitrary Cypher or arbitrary database access is not a tool — if it
 exists at all it is an explicitly privileged capability with authorization, audit and limits.
 
-**Status: PLANNED (started 2026-09-26).** §16 landed 2026-09-26, so its graph tools exist; the MCP
-surface depends on §2–§12 for everything else.
+**Status: COMPLETE (2026-09-26).** Landed as `6a9e631` (registry), `f2190f4` (security boundary),
+`3cac36f` (invocation chain), `2c04dbe` (graph tools), `1a2655e` (resources), `6c1ee99`
+(concurrency gate in `jdlib.reliability`), `1e5581d` (drain, saturation and deadlines wired into
+the invocation), `239f65c` (observability and audit), `819b6a8` (server factory behind the optional
+`mcp` extra), `9e59db3` (adversarial suite). The phase close — the capability page and this line —
+is the commit that carries it.
+
+Ten slices, 8 modules, 16 public exports, 7 refusals, and 89 test functions across 9 files, all
+machine-checked by `tests/unit/test_successor_docs.py` against the tree rather than trusted. The
+capability page is `docs/jdlib/capabilities/mcp.md`.
+
+**Two defects were found and fixed inside the phase.** The adversarial slice found a resource URI
+that was not registered reaching `self._resources.get(uri)` and then an attribute access on the
+`None` it returned — a caller-supplied string producing a crash where the surface owes a refusal;
+it now raises `McpResourceDefinitionError`, the error the registry already raises for an unknown
+tool. And the server factory found that fastmcp 4.0.10 advertises a tool's `additionalProperties:
+false` schema without enforcing it, so the invocation chain enforces the declaration before
+authorization — an advertised contract the library does not keep is a lie told to every client.
+
+**Deliberately not claimed.** §26's metric names are not minted in the library: its observability
+seam is spans plus the audit trail, and metrics are the collector's derivation from those spans in
+the lab. Minting names with nothing to emit them is the vocabulary-with-no-producer the pin exists
+to catch. `mcp.dependency` is likewise not a second span — the dependency's own span is
+`graph.statement`.
 
 ### The reuse map — what the boundary composes rather than reimplements
 

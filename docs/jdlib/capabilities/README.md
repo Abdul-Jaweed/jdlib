@@ -13,6 +13,7 @@ and checked against the working tree rather than trusted.
 | [storage](storage.md) | `jdlib.storage` | Which storage backends exist, and how are keys scoped? |
 | [jobs](jobs.md) | `jdlib.tenancy` | What authority does a queued job carry, and when is it re-checked? |
 | [graph](graph.md) | `jdlib.graph` | How does a statement reach Neo4j with no text a caller controls, and no tenant but the context's? |
+| [mcp](mcp.md) | `jdlib.integrations.mcp` | What does an MCP client get, and what can it make the library do? |
 
 ## Every claim above is machine-checked
 

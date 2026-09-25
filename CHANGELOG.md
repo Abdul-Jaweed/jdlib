@@ -520,3 +520,49 @@ names the commit that fixed it.
   that the event is written *before* the refusal is raised.
 * **Found by** the graph plane's observability slice, which asked who a refusal
   belongs to rather than whether it was recorded.
+
+### The MCP surface — a second entry point into the same chain (directive §18–§28)
+
+* **What landed.** `jdlib.integrations.mcp`: a tool registry whose declarations cannot exist
+  without naming a capability (or saying `public=True`), a security boundary that reuses the HTTP
+  edge's own authentication, principal and tenant-resolution steps, an invocation chain
+  (declared arguments → authorization → handler → audit) that runs inside both scopes, seven graph
+  tools with no identity and no statement slot in any schema, read-only tenant/schema/health
+  resources, a bounded concurrency gate added to `jdlib.reliability`, and a server factory behind
+  a new optional `mcp` extra. Commits `6a9e631` … `9e59db3`.
+* **Why it is a capability, not a wrapper.** Every step of the chain is a collaborator the HTTP
+  surface already takes, handed to the same code — and a test asserts the reuse **by identity**
+  (the chain sees the provider's own principal object) rather than by resemblance.
+* **The rule the surface keeps.** A refusal is proven by non-execution: the handler's call count,
+  not the exception's type. The adversarial slice runs that as a table over seven refusal paths.
+* **Capability page:** `docs/jdlib/capabilities/mcp.md` — 8 modules, 16 exports, 7 refusals and 89
+  test functions, all machine-checked against the tree.
+
+### A tool's advertised schema was not the schema the library enforced — `819b6a8`
+
+* **Symptom.** A probe of fastmcp 4.0.10 built a tool with an explicit `parameters` schema and
+  called it with an argument the schema does not declare: the call reached the handler.
+* **Cause.** FastMCP advertises a `Tool`'s `parameters` and does not validate arguments against it,
+  so `additionalProperties: false` — the property the graph-tool declarations exist to state — was
+  decoration on the wire.
+* **Fix.** The invocation chain validates the arguments against the tool's own declaration before
+  authorization and before anything runs, records the refusal as `MCP_ERROR` by class name, and
+  raises `McpArgumentsRefusedError` (`integrations/mcp/invocation.py`).
+* **Now.** An undeclared argument — including an injected `tenant_id` on every one of the seven
+  tools — is refused with the handler's call count at zero.
+* **Found by** the server-factory slice, by probing the library's own dependency instead of
+  assuming the directive's "FastMCP validates tool schema" was already true.
+
+### An unregistered resource URI crashed where the surface owes a refusal — `9e59db3`
+
+* **Symptom.** Reading a resource whose URI nobody registered raised
+  `AttributeError: 'NoneType' object has no attribute 'capability'`.
+* **Cause.** The lookup was `self._resources.get(uri)` and the next line read an attribute off the
+  answer, which is `None` for an unknown URI — a caller-supplied string reaching an attribute
+  access rather than a refusal.
+* **Fix.** A named lookup raises `McpResourceDefinitionError`, the same error the registry already
+  raises for an unknown tool (`integrations/mcp/invocation.py`).
+* **Now.** An unknown URI fails the same way an unknown tool name does, and the RED run that found
+  it is the mutation evidence.
+* **Found by** the MCP adversarial slice, which attacks the resource path rather than only the
+  tool path.
