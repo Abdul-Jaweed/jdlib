@@ -27,6 +27,7 @@ which implementation it holds. One limit is inherited with it: a decision the en
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -34,8 +35,10 @@ from jdlib.authz.guards import tenant_target
 from jdlib.context import context_scope
 from jdlib.errors import JdlibError, PermissionDenied
 from jdlib.integrations.mcp.boundary import McpSecurityBoundary
-from jdlib.integrations.mcp.errors import McpToolExecutionError
+from jdlib.integrations.mcp.errors import McpTimeoutError, McpToolExecutionError
 from jdlib.integrations.mcp.tools import McpTool, McpToolRegistry
+from jdlib.reliability.concurrency import ConcurrencyGate
+from jdlib.reliability.lifecycle import ShutdownCoordinator
 from jdlib.security.audit.emitter import SecurityEventEmitter, emit_safely
 from jdlib.security.audit.events import (
     AuditOutcome,
@@ -65,6 +68,9 @@ class McpInvoker:
         uow_factory: Callable[[], Any] | None = None,
         emitter: SecurityEventEmitter | None = None,
         tracer: TracerLike | None = None,
+        gate: ConcurrencyGate | None = None,
+        timeout: float | None = None,
+        shutdown: ShutdownCoordinator | None = None,
     ) -> None:
         self._boundary = boundary
         self._registry = registry
@@ -72,6 +78,9 @@ class McpInvoker:
         self._uow_factory = uow_factory
         self._emitter = emitter
         self._tracer = tracer
+        self._gate = gate
+        self._timeout = timeout
+        self._shutdown = shutdown
 
     async def invoke(
         self, *, tool_name: str, arguments: Mapping[str, Any], request: RequestInfo
@@ -81,6 +90,33 @@ class McpInvoker:
         A tool the registry does not know is refused before anything is asked about it — an
         unknown name is not a permission problem and must not be reported as one.
         """
+        if self._shutdown is not None:
+            self._shutdown.admit()
+        if self._gate is not None:
+            async with self._gate:
+                return await self._bounded(
+                    tool_name=tool_name, arguments=arguments, request=request
+                )
+        return await self._bounded(tool_name=tool_name, arguments=arguments, request=request)
+
+    async def _bounded(
+        self, *, tool_name: str, arguments: Mapping[str, Any], request: RequestInfo
+    ) -> Any:
+        """The call under its deadline, if it has one."""
+        if self._timeout is None:
+            return await self._run(tool_name=tool_name, arguments=arguments, request=request)
+        try:
+            async with asyncio.timeout(self._timeout):
+                return await self._run(tool_name=tool_name, arguments=arguments, request=request)
+        except TimeoutError as exc:
+            raise McpTimeoutError(
+                "the call exceeded its deadline; the operation may or may not have completed"
+            ) from exc
+
+    async def _run(
+        self, *, tool_name: str, arguments: Mapping[str, Any], request: RequestInfo
+    ) -> Any:
+        """The chain itself: boundary, registry, scopes, decision, handler."""
         with security_span(
             self._tracer,
             "mcp.tool",

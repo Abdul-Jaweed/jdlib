@@ -43,3 +43,12 @@ class McpResourceDefinitionError(McpError):
     capability is a resource nobody authorized, and it cannot be constructed rather than being
     rejected later by a reviewer.
     """
+
+
+class McpTimeoutError(McpError):
+    """The call exceeded its deadline.
+
+    Deliberately not a `McpToolExecutionError`: the operation may or may not have completed, and
+    that difference is the one the graph's `UNCERTAIN` outcome exists to preserve. A caller must
+    not read this as "nothing happened, try again".
+    """
