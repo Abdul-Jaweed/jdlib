@@ -113,3 +113,20 @@ def test_the_config_is_frozen() -> None:
     config = GraphConfig("neo4j://graph.internal:7687")
     with pytest.raises(FrozenInstanceError):
         config.database = "other"  # type: ignore[misc]
+
+
+def test_a_username_is_carried_and_must_be_a_plain_name() -> None:
+    """Basic auth names a user. The name is not a secret, but it still reaches the driver."""
+    config = GraphConfig(
+        "neo4j+s://graph.internal:7687",
+        auth=SecretRef(handle="neo4j-app"),
+        username="graph-app",
+    )
+    assert config.username == "graph-app"
+    for hostile in ("", "with space", "with\nnewline", "with'quote", "with`tick"):
+        with pytest.raises(GraphValidationError):
+            GraphConfig("neo4j+s://graph.internal:7687", username=hostile)
+
+
+def test_a_username_is_optional_because_a_bearer_token_names_no_user() -> None:
+    assert GraphConfig("neo4j+s://graph.internal:7687").username is None

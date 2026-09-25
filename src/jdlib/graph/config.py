@@ -33,6 +33,10 @@ UNVERIFIED_SCHEMES = frozenset({"neo4j+ssc", "bolt+ssc"})
 #: the server's own rule on purpose - this value is not data, it is a selector.
 _DATABASE_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9._-]{0,62}\Z")
 
+#: Usernames reach the driver, not a statement, but they reach logs too: no whitespace, no
+#: quotes, nothing that could reflow a log line.
+_USERNAME_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
+
 _POSITIVE_TIMEOUTS = (
     "connection_acquisition_timeout",
     "max_connection_lifetime",
@@ -58,12 +62,16 @@ class GraphConfig:
     connection_timeout: float = 30.0
     max_transaction_retry_time: float = 30.0
     allow_unverified_certificates: bool = False
+    #: The user for basic auth. Not a secret, and not required: with no user the resolved
+    #: credential is presented as a bearer token, which is how a managed graph is reached.
+    username: str | None = None
 
     def __post_init__(self) -> None:
         self._validate_uri()
         self._validate_auth()
         self._validate_bounds()
         self._validate_database()
+        self._validate_username()
 
     def _validate_uri(self) -> None:
         # Credentials first, and the refusal does not render the URI: a message that echoes a
@@ -108,4 +116,12 @@ class GraphConfig:
             raise GraphValidationError(
                 "a database name must start with a letter and hold only letters, digits, "
                 "dot, dash or underscore"
+            )
+
+    def _validate_username(self) -> None:
+        if self.username is None:
+            return
+        if not _USERNAME_PATTERN.match(self.username):
+            raise GraphValidationError(
+                "a username must hold only letters, digits, dot, dash or underscore"
             )

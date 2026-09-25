@@ -9,6 +9,7 @@ beside them.
 The namespace is additive: nothing here moves the pinned public surface of ``jdlib`` itself.
 """
 
+from jdlib.graph.client import GraphClient, Neo4jClient, SecretResolver
 from jdlib.graph.config import GraphConfig
 from jdlib.graph.errors import (
     GraphAuthorizationError,
@@ -22,6 +23,7 @@ from jdlib.graph.errors import (
     GraphValidationError,
 )
 from jdlib.graph.models import GraphVocabulary, Label, PropertyKey, RelationshipType
+from jdlib.graph.policy import GraphPolicy
 from jdlib.graph.query import (
     GraphQuery,
     node_create,
@@ -35,10 +37,12 @@ from jdlib.graph.query import (
 
 __all__ = [
     "GraphAuthorizationError",
+    "GraphClient",
     "GraphConfig",
     "GraphConflictError",
     "GraphError",
     "GraphNotFoundError",
+    "GraphPolicy",
     "GraphQuery",
     "GraphQueryError",
     "GraphTenantViolationError",
@@ -47,8 +51,10 @@ __all__ = [
     "GraphValidationError",
     "GraphVocabulary",
     "Label",
+    "Neo4jClient",
     "PropertyKey",
     "RelationshipType",
+    "SecretResolver",
     "node_create",
     "node_delete",
     "node_match",

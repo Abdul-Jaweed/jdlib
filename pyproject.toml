@@ -50,6 +50,12 @@ dev = [
     "pytest-cov>=5.0",
     "build>=1.2",
 ]
+# The Neo4j driver is optional for the same reason as redis and s3: jdlib imports without it,
+# and the client says so clearly if it is missing. It is the verified graph backend.
+graph = [
+    "neo4j>=6.1.0",
+]
+
 # starlette is imported directly by src/jdlib/integrations/fastapi.py, so it is declared
 # here rather than inherited by luck from fastapi's own dependency list.
 fastapi = ["fastapi>=0.111", "starlette>=0.37"]
@@ -93,7 +99,7 @@ files = ["src/jdlib"]
 # that covers import-not-found is *unused* wherever the package resolves to typed stubs, and
 # warn_unused_ignores makes that a failure. Declaring the modules unknown answers the same way in
 # both environments - a claim about resolution rather than about a particular checkout.
-module = ["redis.*", "boto3.*", "botocore.*"]
+module = ["redis.*", "boto3.*", "botocore.*", "neo4j.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]
