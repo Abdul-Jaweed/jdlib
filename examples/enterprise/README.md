@@ -109,6 +109,45 @@ Mount the policy directory at a destination other than `/cerbos`: the image's en
 binary at that path, and a directory mounted there fails with `not a directory` before the container
 starts.
 
+## The tenant plane
+
+The layers below the API: `app/models/` are the tenant-routed tables, `app/repositories/` reads and
+writes them, `app/services/` is what a route calls, and `app/dataplane.py` owns the engines, the
+provisioning and the row-level policies. The library owns the schema, the policies and the write
+fence; the example owns the DSN, the engine's connect arguments and the privileges — the library
+deliberately grants none, because a role with no `SELECT` is not protected by a policy, it is locked
+out.
+
+**Two roles, and the split is a security property.** The application connects as `jdlib_app` — no
+superuser, no `BYPASSRLS`, no DDL — while the owner migrates, provisions and installs the policies.
+Row-level security does not constrain a superuser, and the library refuses to install policies for a
+role that can bypass them (`StrategyCapabilityError`), so a single-DSN lab would install policies
+that apply to nobody. The lab creates the second role when its volume is first initialised:
+
+```bash
+export JDLIB_ENTERPRISE_POSTGRES_PASSWORD=...   # the owner role
+export JDLIB_ENTERPRISE_APP_PASSWORD=...        # the runtime role
+docker compose -f docker/docker-compose.yml up -d
+```
+
+The owner's DSN is needed by the **operator step** and by nothing else: the request path reads the
+library's own `JDLIB_CONTROL_DSN`, which is the runtime role, and `JDLIB_EXAMPLE_MIGRATION_DSN` is
+optional in the settings. The bootstrap refuses, naming the variable, when it is absent.
+
+**Three controls, and each is measured on its own.** A query is scoped by the session's predicate
+(the tenant-bound session adds `tenant_id = ...`), by the policy (`app.tenant_id`, bound at connect
+time), and by the composite foreign key that refuses a cross-tenant reference even from a caller who
+reaches past both. The live tests say which one each is measuring — a mutation that disabled
+row-level security left the service-level test green, which is how the policy's own test came to
+exist.
+
+```bash
+export JDLIB_EXAMPLE_MIGRATION_DSN="postgresql://jdlib:${JDLIB_ENTERPRISE_POSTGRES_PASSWORD}@127.0.0.1:45432/jdlib_enterprise"
+export JDLIB_EXAMPLE_LIVE_DSN="postgresql://jdlib_app:${JDLIB_ENTERPRISE_APP_PASSWORD}@127.0.0.1:45432/jdlib_enterprise"
+python -m examples.enterprise.app.bootstrap --slug acme --name "Acme Inc"
+pytest examples/enterprise/tests/test_tenant_plane_live.py -q -W error
+```
+
 ## Tests
 
 ```bash
@@ -118,7 +157,11 @@ pytest examples/enterprise/tests -q -W error     # from the repository root
 The structural slice: the ops routes answer without credentials, every tenant route declares a
 permission, an unauthenticated request answers the canonical envelope, and a plaintext policy
 endpoint is refused. The authorization slice: the bridge's mapping (unit, no engine), and the
-engine's own answers — allow, deny, and an administrator of another tenant denied (live).
+engine's own answers — allow, deny, and an administrator of another tenant denied (live). The
+operator step: the settings a serving process needs (and the owner's DSN it must not need), and the
+refusals that name their variable. The tenant plane (live): read-back over a fresh connection,
+ordering, isolation at both layers, the composite foreign key, unscoped statements refused beside
+the scoped form, rollback, and a suspended tenant that cannot write.
 
-The behavioural matrix — denial non-execution, tenant isolation end to end, the whole chain through
-the gateway — arrives with the layers it tests.
+The behavioural matrix over HTTP — denial non-execution, tenant isolation end to end, the whole chain
+through the gateway — arrives with the layers it tests.

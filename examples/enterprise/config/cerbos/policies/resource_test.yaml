@@ -1,0 +1,75 @@
+# The resource policy's own tests, run by `cerbos compile` with the policy set.
+#
+# The tenant id the resource carries is the one the bridge sends -- the *context's* tenant, never a
+# caller's argument -- so the cross-tenant case here is a resource of another tenant, which the
+# bridge cannot produce and the policy still refuses.
+name: ResourcePolicy
+description: "A tenant's resources are readable by every granted role, writable by the operator's."
+principals:
+  admin_of_a:
+    id: "admin-a"
+    roles: ["admin"]
+    attr:
+      tenantId: "tenant-a"
+  operator_of_a:
+    id: "operator-a"
+    roles: ["operator"]
+    attr:
+      tenantId: "tenant-a"
+  support_of_a:
+    id: "support-a"
+    roles: ["support"]
+    attr:
+      tenantId: "tenant-a"
+  admin_of_b:
+    id: "admin-b"
+    roles: ["admin"]
+    attr:
+      tenantId: "tenant-b"
+
+resources:
+  resource_of_a:
+    kind: "resource"
+    id: "8f14e45f-ceea-467a-9575-1b1a2b3c4d5e"
+    attr:
+      tenantId: "tenant-a"
+  resource_of_b:
+    kind: "resource"
+    id: "9a14e45f-ceea-467a-9575-1b1a2b3c4d5f"
+    attr:
+      tenantId: "tenant-b"
+
+tests:
+  - name: "Reading is every granted role's; writing is the operator's and the administrator's"
+    input:
+      principals: ["admin_of_a", "operator_of_a", "support_of_a"]
+      resources: ["resource_of_a"]
+      actions: ["resource:read", "resource:write"]
+    expected:
+      - principal: "admin_of_a"
+        resource: "resource_of_a"
+        actions:
+          "resource:read": EFFECT_ALLOW
+          "resource:write": EFFECT_ALLOW
+      - principal: "operator_of_a"
+        resource: "resource_of_a"
+        actions:
+          "resource:read": EFFECT_ALLOW
+          "resource:write": EFFECT_ALLOW
+      - principal: "support_of_a"
+        resource: "resource_of_a"
+        actions:
+          "resource:read": EFFECT_ALLOW
+          "resource:write": EFFECT_DENY
+
+  - name: "A resource of another tenant is denied to its own administrator"
+    input:
+      principals: ["admin_of_a"]
+      resources: ["resource_of_b"]
+      actions: ["resource:read", "resource:write"]
+    expected:
+      - principal: "admin_of_a"
+        resource: "resource_of_b"
+        actions:
+          "resource:read": EFFECT_DENY
+          "resource:write": EFFECT_DENY

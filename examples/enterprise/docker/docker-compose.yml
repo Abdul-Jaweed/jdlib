@@ -1,7 +1,13 @@
 # The example's own lab: the two services a request needs beyond the process itself.
 #
 #   export JDLIB_ENTERPRISE_POSTGRES_PASSWORD="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+#   export JDLIB_ENTERPRISE_APP_PASSWORD="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
 #   docker compose -f docker/docker-compose.yml up -d
+#
+# Two roles, deliberately: the owner (`jdlib`, the image's own superuser) migrates and installs
+# policies, and `jdlib_app` -- created by `initdb/01-runtime-role.sh`, without superuser or BYPASSRLS
+# -- is what the application connects as. Row-level security does not apply to a superuser, so a
+# single-role lab would make every policy a comment.
 #
 # The password is required rather than defaulted: a lab that carries a usable credential in the
 # repository teaches the wrong habit, and `:?` makes the omission loud at parse time instead of at
@@ -19,6 +25,10 @@ services:
       POSTGRES_USER: jdlib
       POSTGRES_PASSWORD: ${JDLIB_ENTERPRISE_POSTGRES_PASSWORD:?export JDLIB_ENTERPRISE_POSTGRES_PASSWORD first (any value; this is a local lab)}
       POSTGRES_DB: jdlib_enterprise
+      JDLIB_ENTERPRISE_APP_PASSWORD: ${JDLIB_ENTERPRISE_APP_PASSWORD:?export JDLIB_ENTERPRISE_APP_PASSWORD first (any value; this is a local lab)}
+    volumes:
+      # Runs once, on a fresh volume: the runtime role must exist before the application connects.
+      - ./initdb:/docker-entrypoint-initdb.d:ro
     ports:
       - "127.0.0.1:45432:5432"
     healthcheck:

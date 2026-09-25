@@ -119,6 +119,10 @@ class CerbosEnforcer:
             # The caller is facing a denial, not an outage, so it is decided here and said plainly.
             raise PermissionDenied(f"{permission}: the caller has no roles in this tenant")
         query = query_for(permission, target, context=context, roles=roles)
+        # No `context=` argument: the library's tenant middleware does not bind a
+        # `SecurityContext`, so `current_security_context()` would fail closed here, and the check
+        # that argument enables (the query's tenant must be the request's) is already structural --
+        # `query_for` takes the tenant from the context and offers a route no way to name another.
         decision = await self._pep.require(query)
         # Reaching this line means the engine allowed it: `AuthorizationPEP.require` raises on a
         # denial and on a degraded decision, which is the whole reason to call it rather than

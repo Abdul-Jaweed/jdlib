@@ -13,6 +13,16 @@ Two configuration rules this module keeps, because both are security properties:
   enforces that, so the example cannot be configured into sending authorization questions in clear;
 * a timeout is bounded and positive, so a policy engine that stops answering degrades to a refusal
   rather than hanging a request thread.
+
+Two database roles, not one, and the split is a security property rather than a convention:
+row-level security does not apply to a superuser, and the library's `install_rls` **verifies**
+that the role it installs policies for cannot bypass them. A single superuser DSN -- which is what
+a lab's default `POSTGRES_USER` is -- would make every policy a comment. So:
+
+* `JDLIB_CONTROL_DSN` (the library's own name) is the **runtime** DSN: a role with no superuser, no
+  `BYPASSRLS`, and no DDL. Everything that serves a request uses it.
+* `JDLIB_EXAMPLE_MIGRATION_DSN` is the **operator's** DSN: it owns the schema and runs the
+  migrations, the provisioning and the policy installation. The request path never needs it.
 """
 
 from __future__ import annotations
@@ -40,6 +50,12 @@ class ExampleSettings(BaseSettings):
     service_name: str = "jdlib-enterprise-example"
     #: optional, non-secret -- an OTLP/HTTP endpoint; empty means "do not trace".
     otel_endpoint: str = ""
+    #: optional, SECRET -- the owner role's DSN: migrations, provisioning, policy installation.
+    #: Required by the *operator step* (`app/bootstrap.py`), never by the request path: the runtime
+    #: DSN is the library's own `JDLIB_CONTROL_DSN`, read by `TenancyConfig`, and a serving process
+    #: that also held the owner's credentials would be one compromise away from dropping its own
+    #: policies. Empty means "this process is not the operator", and the bootstrap refuses it.
+    migration_dsn: str = ""
 
     def cerbos_config(self) -> CerbosConfig:
         """The library's Cerbos coordinates, built from the example's values."""

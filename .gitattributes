@@ -1,0 +1,5 @@
+# Shell scripts are executed as they sit on disk: a CRLF shebang is "/bin/bash\r", which the kernel
+# reports as "required file not found" (the enterprise example's lab hit exactly that). Git's
+# autocrlf would hand a Windows checkout CRLF, so pin the line endings for the files that must not
+# have them.
+*.sh text eol=lf

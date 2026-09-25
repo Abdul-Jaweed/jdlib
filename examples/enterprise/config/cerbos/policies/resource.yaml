@@ -1,0 +1,27 @@
+# The tenant plane's data: a *resource*, which has an id, unlike the scope above.
+#
+# `resource_for` maps a `ResourceRef` to its own type as the kind and its id, so the resource the
+# engine is asked about is the row the route is about. The action names are the permissions the
+# routes declare; the roles are the control plane's, resolved per request.
+#
+# The tenant comparison is the same rule as the scope policy's, for the same reason: a role held in
+# one tenant must be useless in another, and the engine is the second place that is enforced -- the
+# session's binding is the first, and the composite foreign key is the third.
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: "default"
+  resource: "resource"
+  rules:
+    - actions: ["resource:read"]
+      effect: EFFECT_ALLOW
+      roles: ["support", "operator", "admin"]
+      condition:
+        match:
+          expr: has(request.principal.attr.tenantId) && request.principal.attr.tenantId == request.resource.attr.tenantId
+
+    - actions: ["resource:write"]
+      effect: EFFECT_ALLOW
+      roles: ["operator", "admin"]
+      condition:
+        match:
+          expr: has(request.principal.attr.tenantId) && request.principal.attr.tenantId == request.resource.attr.tenantId

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import sqlalchemy as sa
@@ -37,7 +38,19 @@ _TABLE_CHECK = sa.text(
 )
 
 
-def rls_eligible_tables(metadata: sa.MetaData) -> tuple[str, ...]:
+def rls_eligible_tables(
+    metadata: sa.MetaData, *, tables: Iterable[str] | None = None
+) -> tuple[str, ...]:
+    """The tenant-routed tables on ``metadata``, optionally narrowed to ``tables``.
+
+    The set comes from ``TenantRouted.__subclasses__()``, which is **process-global**: a test
+    double, a plugin or a second application imported into the same interpreter adds its tables to
+    every caller's eligible set. A caller whose database does not contain those tables cannot
+    install policies at all -- the DDL is emitted for each eligible table, and the verification then
+    refuses the ones that are not there -- so ``tables`` is how such a caller says which tables it
+    means. Names outside the eligible set are not invented, and an empty scope means *no* tables
+    rather than all of them.
+    """
     found: list[str] = []
 
     def walk(cls: type) -> None:
@@ -48,13 +61,21 @@ def rls_eligible_tables(metadata: sa.MetaData) -> tuple[str, ...]:
             walk(subclass)
 
     walk(TenantRouted)
-    return tuple(sorted(set(found)))
+    eligible = tuple(sorted(set(found)))
+    if tables is None:
+        return eligible
+    wanted = set(tables)
+    return tuple(name for name in eligible if name in wanted)
 
 
 def emit_rls_policies(
-    connection: sa.Connection, *, metadata: sa.MetaData, app_role: str | None = None
+    connection: sa.Connection,
+    *,
+    metadata: sa.MetaData,
+    app_role: str | None = None,
+    tables: Iterable[str] | None = None,
 ) -> None:
-    for name in rls_eligible_tables(metadata):
+    for name in rls_eligible_tables(metadata, tables=tables):
         quoted = connection.dialect.identifier_preparer.quote(name)
         connection.execute(sa.text(f"ALTER TABLE {quoted} ENABLE ROW LEVEL SECURITY"))
         connection.execute(sa.text(f"ALTER TABLE {quoted} FORCE ROW LEVEL SECURITY"))
@@ -76,7 +97,13 @@ def _retryable_ddl_error(exc: BaseException) -> bool:
     return bool(names & _RETRYABLE_DDL_ERRORS)
 
 
-async def install_rls(engine: AsyncEngine, *, metadata: sa.MetaData, app_role: str) -> None:
+async def install_rls(
+    engine: AsyncEngine,
+    *,
+    metadata: sa.MetaData,
+    app_role: str,
+    tables: Iterable[str] | None = None,
+) -> None:
     """Emit and verify RLS policies, retrying transient lock conflicts.
 
     The DDL takes ``ACCESS EXCLUSIVE`` locks; a live deployment or a lingering
@@ -88,6 +115,9 @@ async def install_rls(engine: AsyncEngine, *, metadata: sa.MetaData, app_role: s
     atomically, and the policy set is emitted idempotently (``DROP POLICY IF
     EXISTS`` + ``CREATE POLICY``), so a retry re-runs the whole emission
     without duplicating policies.
+
+    ``tables`` narrows the eligible set (see :func:`rls_eligible_tables`); the default keeps the
+    previous behaviour, which is every tenant-routed table the process knows about.
     """
     for attempt in range(_DDL_ATTEMPTS):
         try:
@@ -96,14 +126,16 @@ async def install_rls(engine: AsyncEngine, *, metadata: sa.MetaData, app_role: s
                     sa.text(f"SET LOCAL lock_timeout = '{_DDL_LOCK_TIMEOUT}'")
                 )
                 await connection.run_sync(
-                    lambda sync: emit_rls_policies(sync, metadata=metadata, app_role=app_role)
+                    lambda sync: emit_rls_policies(
+                        sync, metadata=metadata, app_role=app_role, tables=tables
+                    )
                 )
             break
         except Exception as exc:
             if attempt + 1 >= _DDL_ATTEMPTS or not _retryable_ddl_error(exc):
                 raise
             await asyncio.sleep(_DDL_RETRY_DELAY * (attempt + 1))
-    await verify_rls(engine, app_role, metadata=metadata)
+    await verify_rls(engine, app_role, metadata=metadata, tables=tables)
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,14 +166,16 @@ class RlsInspection:
         )
 
 
-async def inspect_rls(engine: AsyncEngine, *, metadata: sa.MetaData) -> RlsInspection:
+async def inspect_rls(
+    engine: AsyncEngine, *, metadata: sa.MetaData, tables: Iterable[str] | None = None
+) -> RlsInspection:
     """Inspect row-level security on the schema this engine is bound to.
 
     Neither role checks nor judgement: a table the engine cannot see is reported as
     unprovisioned, because for evidence that is an observation, and for a caller
     who asked for a schema it is a failure it can explain.
     """
-    eligible = rls_eligible_tables(metadata)
+    eligible = rls_eligible_tables(metadata, tables=tables)
     missing_rls: list[str] = []
     missing_force: list[str] = []
     missing_policy: list[str] = []
@@ -172,7 +206,13 @@ async def inspect_rls(engine: AsyncEngine, *, metadata: sa.MetaData) -> RlsInspe
     )
 
 
-async def verify_rls(engine: AsyncEngine, app_role: str, *, metadata: sa.MetaData) -> None:
+async def verify_rls(
+    engine: AsyncEngine,
+    app_role: str,
+    *,
+    metadata: sa.MetaData,
+    tables: Iterable[str] | None = None,
+) -> None:
     async with engine.connect() as connection:
         role = (
             await connection.execute(
@@ -185,7 +225,7 @@ async def verify_rls(engine: AsyncEngine, app_role: str, *, metadata: sa.MetaDat
         bypass, is_super = role
         if bypass or is_super:
             raise StrategyCapabilityError(f"RLS app role {app_role} can bypass row level security")
-    inspection = await inspect_rls(engine, metadata=metadata)
+    inspection = await inspect_rls(engine, metadata=metadata, tables=tables)
     for name in inspection.tables_unprovisioned:
         raise StrategyCapabilityError(
             f"RLS table missing or not visible: {name}; "

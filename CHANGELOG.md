@@ -621,6 +621,44 @@ names the commit that fixed it.
   "what does the whole thing look like, and which part is whose job" — including the adapters a
   deployment must write itself.
 
+### The example application — the tenant plane, against real PostgreSQL (directive §18)
+
+* **What landed.** `examples/enterprise/`: `app/models/`, `app/repositories/`, `app/services/` (the
+  tenant-routed tables and the service that owns them), `app/dataplane.py` (the per-tenant engines,
+  the provisioning, the RLS installation and the privilege grant), `app/api/resources.py` (the
+  resource routes, each declaring its permission), `app/asgi.py`, and `docker/initdb/` — the lab's
+  **second role**, without which every policy would apply to nobody. `tests/test_tenant_plane_live.py`
+  drives the service against a real database; `tests/test_bootstrap.py` covers the operator step
+  without one.
+* **Why it exists.** The layers above the API are where a tenant boundary is either real or
+  decorative, and only a live database can say which: the session's predicate, the row-level policy
+  and the composite foreign key are three separate controls, and a test that cannot tell them apart
+  is measuring one of them by accident.
+* **Evidence.** 11 live tests pass against the lab's PostgreSQL (`docker compose -f
+  examples/enterprise/docker/docker-compose.yml up -d`); 5 unit tests for the operator step; the
+  full example suite is 31 tests with both labs up. Mutations **3/3**: with the policy not installed
+  (installer disabled *and* the policy dropped, since the installer is idempotent and the database
+  keeps the previous run's policy) **9 of 11 fail**; with the composite foreign key dropped, exactly
+  the database-level test fails (`DID NOT RAISE IntegrityError`) while the session-level one still
+  passes; with the bootstrap's guard removed, its two refusal tests fail. With either DSN unset the
+  live file skips with the bring-up command as the reason (11 skipped).
+* **Found by** the live run: a **single superuser DSN cannot be the application role** — row-level
+  security does not constrain a superuser, and the library refuses to install policies for a role
+  that can bypass them (`StrategyCapabilityError`), so the example runs two roles and its lab creates
+  the second one.
+* **Found by** the mutation that did not bite: with row-level security disabled on the table, the
+  suite stayed green — the service-level isolation test was measuring the *session's* predicate, not
+  the policy. The policy now has its own test, on a statement the session never filtered, and both
+  layers are named in the tests that measure them.
+* **Found by** the first live caller of ordering: `TenantRepository.list`'s `order_by` annotation
+  accepted no idiomatic SQLAlchemy argument (`ColumnElement` rejects an `InstrumentedAttribute`;
+  `ColumnOperators` rejects `desc(...)`), so no caller in the library or in the reference
+  application had ever ordered a page. The parameter is now `Any` with the reason recorded at the
+  annotation, and the example's live test is the type-level proof the gate runs.
+* **Found by** the operator step's own imports: `bootstrap` referenced the settings class and the RLS
+  installer without importing either, and nothing called the function — a `NameError` that would have
+  surfaced in an operator's hands. Its new test calls the entry point, which is what exercises them.
+
 ### The example application — the authorization slice, verified against a live engine (directive §18)
 
 * **What landed.** `examples/enterprise/config/cerbos/policies/`: the policy set the bridge's

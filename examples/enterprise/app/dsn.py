@@ -28,6 +28,19 @@ def async_dsn(database_url: str) -> str:
     return url.render_as_string(hide_password=False)
 
 
+def sync_dsn(database_url: str) -> str:
+    """The same database over the synchronous driver DDL uses.
+
+    The library normalises this itself for the migration runner; this module needs a synchronous
+    engine of its own for the statements the library deliberately does not own — the privilege
+    grants, which a deployment's own role performs.
+    """
+    url = sa.engine.make_url(database_url)
+    if url.drivername.split("+")[0] in _POSTGRES:
+        url = url.set(drivername="postgresql+psycopg")
+    return url.render_as_string(hide_password=False)
+
+
 def control_dsn(config: TenancyConfig) -> str:
     """The control plane's DSN, with a missing one refused rather than dereferenced."""
     dsn = config.control_dsn

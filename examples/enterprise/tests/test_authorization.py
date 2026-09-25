@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 from examples.enterprise.app.security.authorization import query_for, resource_for
 from jdlib.authz.scopes import ResourceRef, ScopeRef
 from jdlib.context import Principal, PrincipalKind, TenantContext
@@ -91,3 +93,18 @@ def test_the_resource_tenant_is_the_contexts_even_when_the_principal_names_anoth
     )
     assert query.tenant_id == TENANT
     assert query.attributes["tenantId"] == str(TENANT)
+
+
+def test_a_shared_placement_cannot_be_provisioned_as_a_dedicated_schema() -> None:
+    """The distinction the bootstrap depends on, pinned so the mistake is not made twice.
+
+    `provision_tenant_schema` creates a schema, so the library validates the name against its tenant
+    pattern and refuses `public`. A shared placement's tables come from the registry's provisioning
+    instead -- `strategy.migrate` -> `upgrade_tenant`, which validates the *deployment* schema and
+    accepts it. The example called the wrong one first, and this test is what would have said so.
+    """
+    from jdlib.errors import ProvisioningError
+    from jdlib.migrations.runner import MigrationRunner
+
+    with pytest.raises(ProvisioningError):
+        MigrationRunner("postgresql://unused@127.0.0.1:1/unused").provision_tenant_schema("public")

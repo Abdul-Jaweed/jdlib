@@ -34,7 +34,14 @@ class TenantRepository[ModelT]:
     async def list(
         self,
         *criteria: sa.ColumnElement[bool],
-        order_by: sa.ColumnElement[Any] | None = None,
+        # Deliberately `Any`, and the only loose annotation in this class: the two
+        # idiomatic arguments (`Model.created_at`, `sa.desc(Model.created_at)`) are
+        # not related by any public SQLAlchemy name -- the ORM attribute descends
+        # from `SQLCoreOperations`, which the `sqlalchemy` namespace does not
+        # export, and `sa.desc(...)` is a `ColumnElement` -- so any narrower
+        # annotation here refuses one of them and hands every application a cast.
+        # The argument's real checker is `Select.order_by`, one line below.
+        order_by: Any = None,
         limit: int | None = None,
         offset: int | None = None,
     ) -> Sequence[ModelT]:
