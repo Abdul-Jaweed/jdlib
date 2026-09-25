@@ -24,6 +24,7 @@ harness up when this layer is what you are verifying.
 | --- | --- | --- | --- |
 | `postgres` | `postgres:16` | optional for `tests/integration` | an alternative to the testcontainers database, via `JDLIB_INFRA_POSTGRES_DSN` |
 | `cerbos` | `ghcr.io/cerbos/cerbos:0.37.0` | `test_cerbos_infra.py` | external authorization decisions (PDP) |
+| `neo4j` | `neo4j:5.26-community` | `test_neo4j_infra.py` | the graph engine `jdlib.graph` speaks bolt to; the driver arrives as the library's `graph` extra |
 | `redis` | `redis:7-alpine` | — | published for the cache and rate-limit URLs; the infra suites reach services by URL and need neither this nor Postgres |
 | `otel-collector` | `otel/opentelemetry-collector-contrib:0.110.0` (`JDLIB_INFRA_OTEL_IMAGE`) | `test_otel_infra.py` | what actually left the process: spans, metrics, and a secret that must not appear |
 | `zitadel` (+ `zitadel-db`) | `ghcr.io/zitadel/zitadel:latest` | `test_zitadel_infra.py` | a real identity provider; local-only, see below |
@@ -42,7 +43,7 @@ reproducible identity provider.
 
 ```bash
 # the compose services the infra suites talk to
-docker compose -f tests/infra/docker-compose.yml up -d cerbos otel-collector zitadel
+docker compose -f tests/infra/docker-compose.yml up -d cerbos neo4j otel-collector zitadel
 
 # the three standalone harnesses; each writes its credentials/env file under tests/infra/out/
 bash tests/infra/kong/start.sh && . tests/infra/out/kong-credentials.env
@@ -58,7 +59,7 @@ Two things that bite on a developer machine:
 * **Do not start the whole compose file.** It publishes 6379 and 5432, which are
   popular ports and are often already taken — the bring-up then fails on the bind
   and takes the rest of the stack with it. The infra suites reach their services
-  by URL and need neither, so name the services (`cerbos otel-collector zitadel`),
+  by URL and need neither, so name the services (`cerbos neo4j otel-collector zitadel`),
   which is also what `scripts/ci-local.sh` expects.
 * **The gateway ports are overridable.** Kong's harness prints the proxy URL it
   bound and takes `JDLIB_INFRA_KONG_PROXY_PORT` / `JDLIB_INFRA_KONG_ADMIN_PORT`
@@ -81,6 +82,7 @@ teardown beside them (`tests/infra/otel/stop.sh`).
 | `JDLIB_INFRA_KONG_PROXY_URL` (+ `_SECRET`, `_CLIENT_KEY`) | printed by `tests/infra/kong/start.sh`, written to `tests/infra/out/kong-credentials.env` | Kong proxy URL and the credentials its plugins verify |
 | `JDLIB_INFRA_KONG_PROXY_PORT` / `_ADMIN_PORT` | `8000` / `8001` | host ports for the Kong harness |
 | `JDLIB_INFRA_TYK_URL` (+ `_SECRET`, `_API_KEY`) | `http://127.0.0.1:8081`, written to `tests/infra/out/tyk-credentials.env` | Tyk gateway URL and credentials |
+| `JDLIB_INFRA_NEO4J_URL` (+ `_PASSWORD`, `_DATABASE`) | `bolt://127.0.0.1:7687`, `jdliblab`, `neo4j` | Neo4j endpoint; **unset means the Neo4j suite skips** |
 | `JDLIB_INFRA_ZITADEL_ISSUER` | `http://127.0.0.1:8080` | ZITADEL issuer; **unset means the ZITADEL suite skips** |
 | `TESTCONTAINERS_HOST_OVERRIDE` | — | `127.0.0.1` on Docker Desktop, where the container IP is not routable from the host |
 
