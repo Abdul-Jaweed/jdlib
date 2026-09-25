@@ -25,3 +25,12 @@ class McpToolDefinitionError(McpError):
     Raised while the surface is being assembled — never while a caller waits — so an incomplete
     tool fails at import or startup rather than becoming a request that quietly does nothing.
     """
+
+
+class McpToolExecutionError(McpError):
+    """A tool ran and did not complete.
+
+    The message is this surface's own, never the failure's: §24 keeps stack traces, SQL, Cypher,
+    connection strings and internal paths inside, where the log and the trace can see them. The
+    original travels as ``__cause__`` for whoever is diagnosing.
+    """
