@@ -37,10 +37,13 @@ from jdlib.graph import (
     GraphPolicy,
     GraphQuery,
     GraphQueryError,
+    GraphTenantViolationError,
     GraphVocabulary,
     Neo4jClient,
     node_create,
     node_match,
+    relationship_create,
+    relationship_match,
 )
 from jdlib.graph.query import TENANT_PARAMETER
 from jdlib.persistence.secrets import MemorySecretProvider
@@ -252,6 +255,103 @@ async def test_a_transaction_commits_and_a_rollback_leaves_nothing(
         context=graph_context(tenant_id=rolled_back),
     )
     assert found == []
+
+
+HOSTILE_VALUE = "x' OR 1=1 // ; MATCH (n) DETACH DELETE n"
+
+
+async def test_a_hostile_value_is_stored_as_data(open_client) -> None:
+    """The value never became Cypher: it comes back verbatim, and nothing else changed."""
+    tenant = uuid.uuid4()
+    context = graph_context(tenant_id=tenant)
+    client = await open_client(tenant)
+    await client.run(
+        query=node_create(
+            VOCABULARY.label("InfraUser"),
+            tenant=str(tenant),
+            node_id="hostile",
+            properties={VOCABULARY.property_key("name"): HOSTILE_VALUE},
+        ),
+        context=context,
+    )
+    rows = await client.run(
+        query=node_match(
+            VOCABULARY.label("InfraUser"), tenant=str(tenant), node_id="hostile"
+        ),
+        context=context,
+    )
+    assert [row["n"]["name"] for row in rows] == [HOSTILE_VALUE]
+    assert len(rows) == 1
+
+
+async def test_a_refused_statement_changed_nothing(open_client) -> None:
+    """The other tenant's node is still there after the refusal that named it."""
+    mine, theirs = uuid.uuid4(), uuid.uuid4()
+    their_client = await open_client(theirs)
+    await their_client.run(
+        query=node_create(
+            VOCABULARY.label("InfraUser"),
+            tenant=str(theirs),
+            node_id="theirs",
+            properties={VOCABULARY.property_key("name"): "Grace"},
+        ),
+        context=graph_context(tenant_id=theirs),
+    )
+    my_client = await open_client(mine)
+    with pytest.raises(GraphTenantViolationError):
+        await my_client.run(
+            query=node_match(
+                VOCABULARY.label("InfraUser"), tenant=str(theirs), node_id="theirs"
+            ),
+            context=graph_context(tenant_id=mine),
+        )
+    rows = await their_client.run(
+        query=node_match(
+            VOCABULARY.label("InfraUser"), tenant=str(theirs), node_id="theirs"
+        ),
+        context=graph_context(tenant_id=theirs),
+    )
+    assert [row["n"]["name"] for row in rows] == ["Grace"]
+
+
+async def test_a_cross_tenant_edge_has_no_endpoints(open_client) -> None:
+    """An edge whose second endpoint is another tenant's node simply has nothing to attach to."""
+    mine, theirs = uuid.uuid4(), uuid.uuid4()
+    for tenant, node_id in ((mine, "mine"), (theirs, "theirs")):
+        client = await open_client(tenant)
+        await client.run(
+            query=node_create(
+                VOCABULARY.label("InfraUser"),
+                tenant=str(tenant),
+                node_id=node_id,
+                properties={VOCABULARY.property_key("name"): "Ada"},
+            ),
+            context=graph_context(tenant_id=tenant),
+        )
+    my_client = await open_client(mine)
+    await my_client.run(
+        query=relationship_create(
+            VOCABULARY.relationship_type("INFRA_OWNS"),
+            tenant=str(mine),
+            from_label=VOCABULARY.label("InfraUser"),
+            from_id="mine",
+            to_label=VOCABULARY.label("InfraUser"),
+            to_id="theirs",
+        ),
+        context=graph_context(tenant_id=mine),
+    )
+    edges = await my_client.run(
+        query=relationship_match(
+            VOCABULARY.relationship_type("INFRA_OWNS"),
+            tenant=str(mine),
+            from_label=VOCABULARY.label("InfraUser"),
+            from_id="mine",
+            to_label=VOCABULARY.label("InfraUser"),
+            to_id="theirs",
+        ),
+        context=graph_context(tenant_id=mine),
+    )
+    assert edges == []
 
 
 async def test_a_health_probe_answers_against_the_real_server(open_client) -> None:

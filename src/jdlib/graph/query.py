@@ -47,6 +47,28 @@ class GraphQuery:
         return f"GraphQuery(text={self.text!r}, values=[REDACTED])"
 
 
+def _label(value: object) -> Label:
+    """A label that came through the vocabulary, or a refusal.
+
+    The annotation says `Label`; the annotation is not enforcement. A plain string in this
+    position is interpolated straight into the pattern, so `"User) DETACH DELETE n //"` would
+    become Cypher and comment out the tenant predicate that follows it. The type is checked at
+    the position, before any statement exists.
+    """
+    if not isinstance(value, Label):
+        raise GraphValidationError("node labels must be Label values obtained from the vocabulary")
+    return value
+
+
+def _relationship_type(value: object) -> RelationshipType:
+    """The relationship type sits inside the arrow, where a `>` closes the pattern."""
+    if not isinstance(value, RelationshipType):
+        raise GraphValidationError(
+            "relationship types must be RelationshipType values obtained from the vocabulary"
+        )
+    return value
+
+
 def _tenant(tenant: object) -> dict[str, object]:
     if not isinstance(tenant, str) or not tenant:
         raise GraphValidationError("a graph operation needs the authoritative tenant")
@@ -69,6 +91,7 @@ def _properties(properties: Mapping[PropertyKey, object] | None) -> dict[str, ob
 
 def node_match(label: Label, *, tenant: str, node_id: str) -> GraphQuery:
     """Select one node, by label and identity, inside the caller's tenant."""
+    label = _label(label)
     text = (
         f"MATCH (n:{label}) WHERE n.{TENANT_PROPERTY} = ${TENANT_PARAMETER} "
         f"AND n.{ID_PROPERTY} = ${_ID_PARAMETER} RETURN n"
@@ -84,6 +107,7 @@ def node_create(
     properties: Mapping[PropertyKey, object] | None = None,
 ) -> GraphQuery:
     """Create one node. The tenant and the identity are assigned last, and cannot be supplied."""
+    label = _label(label)
     text = (
         f"CREATE (n:{label}) SET n = ${_PROPERTIES_PARAMETER} "
         f"SET n.{TENANT_PROPERTY} = ${TENANT_PARAMETER}, "
@@ -103,6 +127,7 @@ def node_update(
     properties: Mapping[PropertyKey, object] | None = None,
 ) -> GraphQuery:
     """Merge properties into one node inside the caller's tenant. Identity is not touched."""
+    label = _label(label)
     text = (
         f"MATCH (n:{label}) WHERE n.{TENANT_PROPERTY} = ${TENANT_PARAMETER} "
         f"AND n.{ID_PROPERTY} = ${_ID_PARAMETER} SET n += ${_PROPERTIES_PARAMETER} RETURN n"
@@ -122,6 +147,7 @@ def node_delete(
     so removing a connected node is two deliberate operations rather than one that silently
     takes the edges with it. ``detach=True`` is the explicit way to ask for the other shape.
     """
+    label = _label(label)
     keyword = "DETACH DELETE" if detach else "DELETE"
     text = (
         f"MATCH (n:{label}) WHERE n.{TENANT_PROPERTY} = ${TENANT_PARAMETER} "
@@ -140,6 +166,9 @@ def relationship_match(
     to_id: str,
 ) -> GraphQuery:
     """Select one relationship, with *both* endpoints scoped to the caller's tenant."""
+    relationship = _relationship_type(relationship)
+    from_label = _label(from_label)
+    to_label = _label(to_label)
     text = (
         f"MATCH (a:{from_label})-[r:{relationship}]->(b:{to_label}) "
         f"WHERE a.{TENANT_PROPERTY} = ${TENANT_PARAMETER} AND a.{ID_PROPERTY} = ${_FROM_PARAMETER} "
@@ -168,6 +197,9 @@ def relationship_create(
     a retried write safe to repeat. Both endpoints must match under the *same* tenant parameter,
     so an edge that would cross a tenant boundary simply has no endpoints to attach to.
     """
+    relationship = _relationship_type(relationship)
+    from_label = _label(from_label)
+    to_label = _label(to_label)
     text = (
         f"MATCH (a:{from_label}), (b:{to_label}) "
         f"WHERE a.{TENANT_PROPERTY} = ${TENANT_PARAMETER} AND a.{ID_PROPERTY} = ${_FROM_PARAMETER} "
@@ -195,6 +227,9 @@ def relationship_delete(
     to_id: str,
 ) -> GraphQuery:
     """Delete one relationship, with both endpoints scoped to the caller's tenant."""
+    relationship = _relationship_type(relationship)
+    from_label = _label(from_label)
+    to_label = _label(to_label)
     text = (
         f"MATCH (a:{from_label})-[r:{relationship}]->(b:{to_label}) "
         f"WHERE a.{TENANT_PROPERTY} = ${TENANT_PARAMETER} AND a.{ID_PROPERTY} = ${_FROM_PARAMETER} "
