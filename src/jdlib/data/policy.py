@@ -9,6 +9,8 @@ from typing import Any, Protocol
 
 from jdlib.data.errors import CircuitOpenError, ConnectorError, ConnectorTimeoutError
 from jdlib.reliability import RetryBudget, RetryBudgetExhaustedError
+from jdlib.reliability.breaker import BreakerPolicy
+from jdlib.reliability.breaker import CircuitBreaker as SharedCircuitBreaker
 from jdlib.reliability.policy import backoff_seconds, is_retryable_failure
 from jdlib.security.context import current_security_context_or_none, security_context_scope
 
@@ -107,34 +109,27 @@ class ConnectionPolicy:
 
 
 class CircuitBreaker:
-    """Refuses calls while a dependency is failing, and probes it once the window has passed.
+    """The connector's view of the shared breaker: it decides *what* a refused call means.
 
-    Closed -> Open after ``failure_threshold`` consecutive failures. Open -> Half-open after
-    ``reset_after``, where exactly one call is allowed through: success closes the circuit,
-    failure opens it again. Without the half-open step a breaker either never recovers or
-    recovers into a dependency that is still down.
+    The states and their transitions live in `jdlib.reliability.breaker`, because the
+    reliability inventory's last open item was recovery outside this connector-shaped
+    policy - a job dispatcher gets the same state machine, not a second copy of the rules.
+    What stays here is the part that is genuinely about a connector: retries through
+    ``ConnectionPolicy``, and ``CircuitOpenError`` as the refusal a caller sees.
     """
 
     def __init__(self, *, policy: ConnectionPolicy, clock: Callable[[], datetime]) -> None:
         self._policy = policy
-        self._clock = clock
-        self._failures = 0
-        self._opened_at: datetime | None = None
-        self._half_open = False
+        self._state = SharedCircuitBreaker(
+            policy=BreakerPolicy(
+                failure_threshold=policy.failure_threshold, reset_after=policy.reset_after
+            ),
+            clock=clock,
+        )
 
     @property
     def is_open(self) -> bool:
-        return self._opened_at is not None and not self._half_open
-
-    def _half_open_allowed(self) -> bool:
-        if self._opened_at is None:
-            return True
-        if self._half_open:
-            return False
-        if self._clock() - self._opened_at >= self._policy.reset_after:
-            self._half_open = True
-            return True
-        return False
+        return self._state.is_open
 
     async def run(
         self,
@@ -144,7 +139,7 @@ class CircuitBreaker:
         sleeper: Callable[[float], Awaitable[None]] | None = None,
         params: tuple[Any, ...] = (),
     ) -> list[dict[str, Any]]:
-        if not self._half_open_allowed():
+        if not self._state.allow():
             raise CircuitOpenError(
                 "the circuit is open after repeated failures; refusing without attempting"
             )
@@ -153,12 +148,7 @@ class CircuitBreaker:
                 connector, statement=statement, sleeper=sleeper, params=params
             )
         except ConnectorError:
-            self._failures += 1
-            if self._half_open or self._failures >= self._policy.failure_threshold:
-                self._opened_at = self._clock()
-                self._half_open = False
+            self._state.record_failure()
             raise
-        self._failures = 0
-        self._opened_at = None
-        self._half_open = False
+        self._state.record_success()
         return result

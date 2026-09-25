@@ -95,10 +95,16 @@ the boundary's span and, where the boundary can name a tenant, as an audit event
 - **Snowflake, MongoDB, StarRocks, BigQuery, GCS and Azure Blob are not implemented and are not
   exported.** A provider or connector class in the public surface is a claim that it works, and
   a test asserts their absence rather than a comment promising future work.
-- **One of the seven reliability gaps the inventory recorded remains open**: half-open recovery
-  outside the connector policy. Circuit breaking landed in §6; the other five closed in
-  `src/jdlib/reliability/` and `src/jdlib/tenancy/` - a shared retry budget, job retries, dead
-  letters, the per-attempt revalidation that preserves a job's authority, and the shutdown path.
+- **All seven reliability gaps the inventory recorded are now closed.** Circuit breaking landed
+  with the connector in §6; the rest closed in `src/jdlib/reliability/` and `src/jdlib/tenancy/` -
+  a shared retry budget, job retries, dead letters, the per-attempt revalidation that preserves a
+  job's authority, and the shutdown path. The seventh, half-open recovery *outside* the connector
+  policy, is `jdlib.reliability.breaker`: the same state machine the connector now consults instead
+  of keeping its own, so a job dispatcher or a sink gets closed -> open -> half-open with exactly
+  one trial admitted, time injected, and no second copy of the rules to drift from the first.
+  What no non-connector caller has *adopted* yet is a separate question from what the library
+  provides; the capability is here, tested, and importable, and the connector's own tests are what
+  prove the extraction kept its behaviour.
   The inventory's ABSENT verdicts are left as they were written, because they are a measurement
   at a revision, not a status board; what has been built since is stated below it.
 - **Infrastructure-dependent layers are not all exercised on every machine.** The infra suite

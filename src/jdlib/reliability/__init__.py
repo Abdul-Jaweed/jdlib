@@ -6,6 +6,7 @@ the shutdown path. Both live in their own namespace so the pinned public surface
 itself does not move.
 """
 
+from jdlib.reliability.breaker import BreakerPolicy, BreakerState, CircuitBreaker
 from jdlib.reliability.budget import RetryBudget, RetryBudgetExhaustedError
 from jdlib.reliability.lifecycle import (
     DrainHook,
@@ -16,8 +17,11 @@ from jdlib.reliability.lifecycle import (
 from jdlib.reliability.policy import backoff_seconds, is_retryable_failure
 
 __all__ = [
-    "DrainHook",
     "backoff_seconds",
+    "BreakerPolicy",
+    "BreakerState",
+    "CircuitBreaker",
+    "DrainHook",
     "is_retryable_failure",
     "RetryBudget",
     "RetryBudgetExhaustedError",
