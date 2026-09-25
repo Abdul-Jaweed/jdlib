@@ -65,7 +65,12 @@ if [ "$FAST" -eq 0 ]; then
   done
 
   step "clean-environment install + import smoke"
-  SMOKE_DIR="$(mktemp -d)"
+  # A native interpreter must be handed a native path. On a host where MSYS path
+  # translation is disabled, mktemp's /tmp/... reaches Windows python as
+  # J:\tmp\... (relative to the current drive), the venv is created there, and
+  # the script then fails to find the interpreter it just made. `pwd -W` gives
+  # the Windows form; elsewhere it is absent and plain pwd is already right.
+  SMOKE_DIR="$(cd "$(mktemp -d)" && { pwd -W 2>/dev/null || pwd; })"
   trap 'rm -rf "$SMOKE_DIR"' EXIT
   "$VENV_PY" -m venv "$SMOKE_DIR/venv"
   SMOKE_PY="$SMOKE_DIR/venv/Scripts/python.exe"
