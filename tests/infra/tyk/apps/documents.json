@@ -13,7 +13,7 @@
   },
   "proxy": {
     "listen_path": "/documents",
-    "target_url": "http://jdlib-echo:8080/documents",
+    "target_url": "http://jdlib-tyk-echo:8080/documents",
     "strip_listen_path": false,
     "preserve_host_header": false
   },

@@ -78,3 +78,37 @@ real client credentials).
 The first-run masterkey must be exactly 32 characters, as required by ZITADEL;
 for local use the compose file falls back to an obvious placeholder. Never
 reuse it anywhere reachable from a network.
+
+## Known state of the Tyk harness (2026-09-25)
+
+The Tyk suite is the one part of this harness that is **not verified**, and it is recorded
+rather than left as a bare skip. With the harness up, one of its six tests passes and five
+fail: Tyk loads the API definition ("API Loaded api_id=documents"), reaches its Redis store
+once the config below is rendered, and then answers **404 for every proxy route** - `/`,
+`/documents`, `/documents/42` with the key the tests authenticate with, and with
+`Host: api.internal`, the host their own request model names.
+
+Ruled out by measurement, not by reading:
+
+- the auth header - the definition sets `auth_header_name: apikey`, the tests send `apikey`
+- `version_data.use_extended_paths` - true and false, both 404
+- the JavaScript middleware - `custom_middleware` removed from the loaded copy, still 404
+- the key store - the key is present in Redis and `hash_keys` is off in the rendered config
+- startup ordering - a clean `docker restart` of Tyk alone reproduces it
+- Redis reachability - a sidecar on the same network gets `PONG`, and Tyk logs no new Redis
+  errors since the config fix
+
+Two harness defects *were* found and fixed while establishing that:
+
+1. the script started Tyk without waiting for Redis (it waits now);
+2. both harnesses used the container name `jdlib-echo`, so stopping Tyk deleted Kong's
+   upstream and six Kong tests failed with connection errors. Tyk's upstream is
+   `jdlib-tyk-echo` now, and its app definition targets that;
+3. Tyk's `TYK_GW_STORAGE_*` overrides did not displace the image's own `tyk.conf`, whose
+   `storage.host` is `redis` - a name that resolves on no network here. The admin API
+   accepted the overridden secret while storage still failed, so the two disagreed about
+   which source won. The config is rendered from `tyk.conf.template` and mounted now, the
+   same way the app definition already was: seven startup Redis errors, then zero.
+
+Kong's suite is verified end to end and remains the gateway the adapter work was proven
+against; `docs/jdlib/connectors.md` and the capability page record it that way.

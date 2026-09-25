@@ -21,28 +21,42 @@ API_KEY="${JDLIB_INFRA_TYK_API_KEY:-$(python -c 'import secrets; print("tyk-" + 
 
 sed -e "s/__GATEWAY_SECRET__/$SECRET/" "$HERE/apps/documents.json" > "$OUT/tyk-documents.json"
 
+# The gateway config is rendered and mounted, not set through TYK_GW_* variables.
+# The image ships a tyk.conf whose storage host is "redis" - a name that exists on no
+# network here - and the STORAGE_* overrides did not displace it: the gateway kept
+# failing to reach its session/version store ("Redis is either down or was not
+# configured", seven times at startup) while the admin API happily answered with the
+# overridden secret, so the two disagreed about which source won. One source of truth
+# instead, the same way the app definition is handled.
+sed -e "s/__REDIS_HOST__/jdlib-tyk-redis/" "$HERE/tyk.conf.template" > "$OUT/tyk.conf"
+
 docker network inspect jdlib-infra >/dev/null 2>&1 || docker network create jdlib-infra
 
-docker rm -f jdlib-echo >/dev/null 2>&1 || true
-docker run -d --name jdlib-echo --network jdlib-infra mendhak/http-https-echo:31 >/dev/null
+# Its own name, not the shared `jdlib-echo`: the two harnesses collided on that name, so
+# stopping the Tyk harness removed the upstream Kong's own tests route to (six Kong tests
+# failed with `Connection refused` until it was restored).
+docker rm -f jdlib-tyk-echo >/dev/null 2>&1 || true
+docker run -d --name jdlib-tyk-echo --network jdlib-infra mendhak/http-https-echo:31 >/dev/null
 
 docker rm -f jdlib-tyk-redis >/dev/null 2>&1 || true
 docker run -d --name jdlib-tyk-redis --network jdlib-infra redis:7-alpine >/dev/null
 
+# Wait for redis before Tyk. Tyk builds its version store once, at startup, and does
+# not retry it: brought up before redis accepts connections it logs "Redis is either
+# down or was not configured", loads every route without its version data, and then
+# answers 404 for every path while its admin API reports the APIs as loaded - which
+# is exactly how this harness failed (five tests, non-JSON 404 bodies).
+for _ in $(seq 1 30); do
+    if docker exec jdlib-tyk-redis redis-cli ping 2>/dev/null | grep -q PONG; then
+        break
+    fi
+    sleep 1
+done
+
 docker rm -f jdlib-tyk >/dev/null 2>&1 || true
 docker run -d --name jdlib-tyk --network jdlib-infra \
-    -e TYK_GW_SECRET="$SECRET" \
-    -e TYK_GW_STORAGE_TYPE=redis \
-    -e TYK_GW_STORAGE_HOST=jdlib-tyk-redis \
-    -e TYK_GW_STORAGE_PORT=6379 \
-    -e TYK_GW_STORAGE_USESSL=false \
-    -e TYK_GW_HASHKEYS=false \
-    -e TYK_GW_ALLOWMASTERKEYS=true \
     -e TYK_GW_HOSTNAME=jdlib-tyk \
-    -e TYK_GW_LISTENPORT=8080 \
-    -e TYK_GW_ENABLEANALYTICS=false \
-    -e TYK_GW_ENABLEJSVM=true \
-    -e TYK_GW_MIDDLEWARE_JSVMPATH=/opt/tyk-gateway/middleware \
+    -v "$OUT/tyk.conf:/opt/tyk-gateway/tyk.conf:ro" \
     -p 127.0.0.1:8081:8080 \
     -v "$OUT/tyk-documents.json:/opt/tyk-gateway/apps/documents.json:ro" \
     -v "$HERE/middleware:/opt/tyk-gateway/middleware:ro" \
