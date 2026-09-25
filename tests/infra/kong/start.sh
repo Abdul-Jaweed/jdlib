@@ -25,6 +25,12 @@ printf 'export JDLIB_INFRA_KONG_SECRET=%s\nexport JDLIB_INFRA_KONG_CLIENT_KEY=%s
 
 docker network inspect jdlib-infra >/dev/null 2>&1 || docker network create jdlib-infra
 
+# Ports are overridable because this harness has to coexist with the reference application's
+# own lab on a developer machine: its Kong holds 8000/8001. Same shape as the Tyk harness,
+# which takes its URL from the environment.
+PROXY_PORT="${JDLIB_INFRA_KONG_PROXY_PORT:-8000}"
+ADMIN_PORT="${JDLIB_INFRA_KONG_ADMIN_PORT:-8001}"
+
 # upstream that reflects what the gateway forwarded
 docker rm -f jdlib-echo >/dev/null 2>&1 || true
 docker run -d --name jdlib-echo --network jdlib-infra mendhak/http-https-echo:31 >/dev/null
@@ -40,25 +46,25 @@ docker run -d --name jdlib-kong --network jdlib-infra \
     -e KONG_ADMIN_ACCESS_LOG=/dev/stdout \
     -e KONG_PROXY_ERROR_LOG=/dev/stderr \
     -e KONG_LOG_LEVEL=notice \
-    -p 127.0.0.1:8000:8000 \
-    -p 127.0.0.1:8001:8001 \
+    -p "127.0.0.1:${PROXY_PORT}:8000" \
+    -p "127.0.0.1:${ADMIN_PORT}:8001" \
     -v "$OUT/kong.yml:/kong/declarative/kong.yml:ro" \
     kong:3.6 >/dev/null
 
 echo "waiting for Kong (admin API + declarative config)..."
 for _ in $(seq 1 60); do
-    if curl -fsS -m 2 http://127.0.0.1:8001/status >/dev/null 2>&1 \
-        && curl -fsS -m 2 http://127.0.0.1:8001/routes >/dev/null 2>&1; then
+    if curl -fsS -m 2 "http://127.0.0.1:${ADMIN_PORT}/status" >/dev/null 2>&1 \
+        && curl -fsS -m 2 "http://127.0.0.1:${ADMIN_PORT}/routes" >/dev/null 2>&1; then
         echo "Kong is up."
         break
     fi
     sleep 2
 done
 
-curl -fsS -m 5 http://127.0.0.1:8001/routes >/dev/null || {
+curl -fsS -m 5 "http://127.0.0.1:${ADMIN_PORT}/routes" >/dev/null || {
     echo "Kong did not become ready; see: docker logs jdlib-kong" >&2
     exit 1
 }
 
 echo "gateway secret and client key written to $OUT/kong-credentials.env"
-echo "export JDLIB_INFRA_KONG_PROXY_URL=http://127.0.0.1:8000"
+echo "export JDLIB_INFRA_KONG_PROXY_URL=http://127.0.0.1:${PROXY_PORT}"
