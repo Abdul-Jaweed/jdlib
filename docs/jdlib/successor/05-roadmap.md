@@ -520,9 +520,21 @@ the thing this programme exists to remove, so each example is checked for exactl
 assert the example's routes are declared through `require(...)` and that no example module imports
 a driver, a raw session factory or a second envelope.
 
+### Status
+
+| Slice | State | Evidence |
+|---|---|---|
+| E1 — the minimal example | **landed** `47caeb6` | 11 tests in `examples/minimal/tests` (shape, envelope, readiness, startup refusal, the live operator step and the live denial with an allowing control); 9/9 mutations bit; two library defects found and fixed (`ConnectionError` → 503 on the async driver, and the guard's `jdlib_permission` declaration) |
+| E2 — configuration, security, api | **landed** | `examples/enterprise/`: settings marked required/optional, the Cerbos bridge, the operator directory, the audit sink, two guarded routes; 5 tests, 2/2 mutations |
+| E3 — services, repositories, graph, mcp, **and the Cerbos policy files + `docker/`** | next | the policy files move here from E2 so that every artifact ships having been run: a policy that has never been compiled against a live engine is a claim, not a control |
+| E4–E8 | next | as listed below |
+
+The examples are type-checked from E1 onwards (`mypy src/jdlib examples` in `scripts/ci-local.sh` and
+the workflow), and their tests are collected by the repository's own gate (`testpaths`).
+
 ### Slices
 
-1. **E1 — the minimal example.** `examples/minimal/`: a real FastAPI app that installs the
+1. **E1 — the minimal example.** *Landed* `47caeb6`: a real FastAPI app that installs the
    library, serves one tenant-scoped route through `require(...)`, and answers a denial; runnable
    with uvicorn and driven in-process by `httpx.ASGITransport` (the repository's own convention —
    no `TestClient`, which the suite's warning flags retire). README with the run commands.
