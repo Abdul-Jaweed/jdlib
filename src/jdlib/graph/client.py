@@ -28,12 +28,13 @@ from jdlib.graph.errors import (
     GraphConflictError,
     GraphError,
     GraphQueryError,
-    GraphTenantViolationError,
     GraphTimeoutError,
     GraphUnavailableError,
 )
 from jdlib.graph.policy import GraphPolicy
-from jdlib.graph.query import TENANT_PARAMETER, GraphQuery
+from jdlib.graph.query import GraphQuery
+from jdlib.graph.tenant import require_open_tenant, require_scope
+from jdlib.graph.transaction import GraphTransaction
 from jdlib.security.context import SecurityContext
 
 
@@ -44,18 +45,23 @@ class SecretResolver(Protocol):
 
 
 @runtime_checkable
-class GraphClient(Protocol):
-    """What a graph adapter must offer. Callers depend on this, not on the driver."""
+class GraphRunner(Protocol):
+    """What running a statement needs — a client, or a transaction inside one."""
+
+    async def run(
+        self, *, query: GraphQuery, context: SecurityContext
+    ) -> list[dict[str, Any]]: ...
+
+
+@runtime_checkable
+class GraphClient(GraphRunner, Protocol):
+    """A runner that can also be opened, closed and asked about its health."""
 
     async def open(self, *, context: SecurityContext) -> None: ...
 
     async def close(self) -> None: ...
 
     async def health(self) -> bool: ...
-
-    async def run(
-        self, *, query: GraphQuery, context: SecurityContext
-    ) -> list[dict[str, Any]]: ...
 
 
 def _named(module: Any, *names: str) -> tuple[type[BaseException], ...]:
@@ -121,6 +127,22 @@ class Neo4jClient:
         self._driver = factory(self._config.uri, auth=self._auth(), **self._bounds())
         self._tenant_id = str(tenant.tenant_id)
 
+    def begin(self, *, context: SecurityContext) -> GraphTransaction:
+        """Open an explicit transaction for this tenant.
+
+        The context is checked here as well as per statement: a client opened for one tenant does
+        not begin a transaction for another, and the transaction carries the tenant it was opened
+        with so its own statements are checked against it too.
+        """
+        if self._driver is None:
+            raise GraphError("graph client: begin before open")
+        require_open_tenant(context, self._tenant_id)
+        return GraphTransaction(
+            session=self._driver.session(database=self._config.database),
+            context=context,
+            policy=self._policy,
+        )
+
     @asynccontextmanager
     async def opened(self, *, context: SecurityContext) -> AsyncIterator[Neo4jClient]:
         await self.open(context=context)
@@ -149,15 +171,7 @@ class Neo4jClient:
     ) -> list[dict[str, Any]]:
         if self._driver is None:
             raise GraphError("graph client: run before open")
-        tenant = context.require_tenant()
-        if self._tenant_id is not None and str(tenant.tenant_id) != self._tenant_id:
-            raise GraphTenantViolationError(
-                "graph client: this client is open for another tenant"
-            )
-        if query.parameters.get(TENANT_PARAMETER) != str(tenant.tenant_id):
-            raise GraphTenantViolationError(
-                "graph client: the statement is not scoped to the authenticated tenant"
-            )
+        require_scope(query=query, context=context, tenant_id=self._tenant_id)
         try:
             return await asyncio.wait_for(
                 self._execute(query), timeout=self._policy.statement_timeout

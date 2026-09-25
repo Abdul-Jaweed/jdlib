@@ -16,7 +16,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from jdlib.graph.client import GraphClient
+from jdlib.graph.client import GraphRunner
 from jdlib.graph.errors import GraphValidationError
 from jdlib.graph.models import GraphVocabulary, PropertyKey
 from jdlib.graph.query import (
@@ -60,16 +60,21 @@ def _edge_of(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 class GraphRepository:
-    """Tenant-scoped node and relationship operations over a :class:`GraphClient`.
+    """Tenant-scoped node and relationship operations over a :class:`GraphRunner`.
 
     The repository is the recommended surface for an application: it takes plain strings for
     labels and property keys, resolves them against the vocabulary it was given, and derives the
-    tenant from the context of each call.
+    tenant from the context of each call. Because a transaction is a runner too, the same
+    operations run inside one through :meth:`within`.
     """
 
-    def __init__(self, *, client: GraphClient, vocabulary: GraphVocabulary) -> None:
+    def __init__(self, *, client: GraphRunner, vocabulary: GraphVocabulary) -> None:
         self._client = client
         self._vocabulary = vocabulary
+
+    def within(self, runner: GraphRunner) -> GraphRepository:
+        """The same operations and vocabulary, over a transaction instead of the client."""
+        return GraphRepository(client=runner, vocabulary=self._vocabulary)
 
     # -- Nodes --------------------------------------------------------------
 
