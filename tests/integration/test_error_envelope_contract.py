@@ -210,3 +210,20 @@ async def test_dependency_failures_are_503_not_500(error: Exception) -> None:
     assert body["code"] == "DEPENDENCY_UNAVAILABLE"
     assert "the pool is exhausted" not in response.text
     assert "spent" not in response.text
+
+@pytest.mark.asyncio
+async def test_a_driver_raw_connection_failure_is_503_not_an_unhandled_500() -> None:
+    """The driver's own refusal reaches the edge unwrapped -- asyncpg's does exactly that.
+
+    SQLAlchemy wraps a failure *inside* a statement, but a pool connect the database refuses
+    surfaces as the driver's own ``ConnectionRefusedError``: an ``OSError``, not a ``DBAPIError``.
+    A table that lists only SQLAlchemy's wrappers therefore answers a database that is *down* with
+    an unhandled 500 -- and every request path and every readiness probe depends on this row.
+    """
+    response = await _get(ConnectionRefusedError("connect to db.internal:5432 refused"))
+
+    assert response.status_code == 503
+    body = response.json()
+    assert set(body) == CANONICAL_KEYS
+    assert body["code"] == "DEPENDENCY_UNAVAILABLE"
+    assert "db.internal" not in response.text

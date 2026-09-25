@@ -80,7 +80,9 @@ packages = ["src/jdlib"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+# The examples' tests are part of the gate on purpose: a documented example whose tests nothing
+# runs is an example whose claims nothing checks.
+testpaths = ["tests", "examples"]
 markers = [
     "unit: fast, isolated tests with no external infrastructure",
     "integration: tests over real infrastructure (HTTP, PostgreSQL, Cerbos)",

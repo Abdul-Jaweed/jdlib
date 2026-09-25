@@ -474,3 +474,93 @@ resolved handles (§3); §7 needs the framework (§6); §14 attacks what §4–�
    framework is engine-agnostic, so the answer changes a small amount of work.
 3. **`jdlib_reference`-style extraction**: whether JDLib should eventually ship a consumer-facing
    scaffold — not required by any phase, noted so the question is not lost.
+
+---
+
+## §18 — Example application and developer documentation (L) — directive §1–§32
+
+The directive asks for two runnable examples, a documentation set that follows one template per
+feature, a "with and without JDLib" comparison, a test matrix, a security review of the example
+itself, and a final report — with the examples, the docs and the tests kept consistent with each
+other, and with the documentation *tested* rather than assumed (§27).
+
+**Where the artefacts live, and why.** The directive offers a tree and then says to adapt it to the
+repository's own conventions, so:
+
+| Directive | Here | Why |
+|---|---|---|
+| `examples/minimal`, `examples/enterprise` | same, at the repo root | no existing convention to follow, and `packages = ["src/jdlib"]` keeps them out of the distribution |
+| `docs/examples/` | `docs/jdlib/examples/` | `docs/jdlib/` is where the library's own docs live |
+| `docs/features/` | `docs/jdlib/features/` | the template-shaped developer guides |
+| `docs/architecture/` | `docs/jdlib/architecture/` | beside the existing `docs/jdlib/architecture.md`, which links to them |
+
+The existing `docs/jdlib/*.md` pages (`authentication.md`, `authorization.md`, `tenancy.md`,
+`privileged-access.md`, `credentials.md`, `connectors.md`, `query-system.md`,
+`resource-management.md`, `security-model.md`) are the **design authority** for their topics. The
+new `features/` guides are the developer-facing shape of the same material and link to them rather
+than restating them: two authorities for one topic is how documentation starts lying.
+
+### The reuse map — what the examples compose rather than reimplement
+
+| Step | Seam the example uses |
+|---|---|
+| installer, middleware, error envelope | `jdlib.integrations.fastapi.install` (`fastapi.py:57`) and `install_error_envelope` (`:127`) |
+| request-scoped collaborators | `JdlibContainer` (`fastapi.py:49`), `get_context` (`:77`), `get_uow` (`:82`) |
+| per-route authorization | `require(permission)` (`fastapi.py:87`) |
+| authentication, principal, tenant resolution | `build_authenticator` (`authn/wiring.py:30`), the `PrincipalProvider` and `ResolverChain` seams |
+| graph access | `jdlib.graph.GraphRepository` and its `GraphQuery` builders — never a driver |
+| MCP surface | `jdlib.integrations.mcp.build_mcp_server` (`mcp/server.py`), `graph_tools`, the resources |
+| audit | `SecurityEventEmitter` + the `SecurityEventType` vocabulary |
+| telemetry | the `TracerLike` span seam (`security/tracing.py`) |
+| reliability | `jdlib.reliability` — breaker, budget, policy, `ConcurrencyGate`, `ShutdownCoordinator` |
+| errors | `jdlib.security.responses` — the one canonical envelope |
+
+An example that reached a driver, minted its own error body or wrote its own tenant check would be
+the thing this programme exists to remove, so each example is checked for exactly that: the tests
+assert the example's routes are declared through `require(...)` and that no example module imports
+a driver, a raw session factory or a second envelope.
+
+### Slices
+
+1. **E1 — the minimal example.** `examples/minimal/`: a real FastAPI app that installs the
+   library, serves one tenant-scoped route through `require(...)`, and answers a denial; runnable
+   with uvicorn and driven in-process by `httpx.ASGITransport` (the repository's own convention —
+   no `TestClient`, which the suite's warning flags retire). README with the run commands.
+2. **E2 — the enterprise example: configuration, security, api.** `examples/enterprise/app/`
+   skeleton: `configuration/` (settings from env, no secrets in files), `security/` (authenticator,
+   principal provider, resolver chain, container), `api/` (routers with `require(...)`), plus
+   `config/`, `docker/` and the README.
+3. **E3 — the enterprise example: services, repositories, graph, mcp.** The layers below the API,
+   including a graph repository use and an MCP surface built by `build_mcp_server`.
+4. **E4 — the enterprise example's tests.** `tests/{unit,integration,security,e2e}` in the example:
+   unit (no services), integration (Postgres via the harness), security (tenant isolation, denial
+   non-execution, no error leakage), e2e (a request through the whole chain).
+5. **E5 — feature documentation.** The 14 guides under `docs/jdlib/features/`, each with the
+   directive's headings (what / why / when / when not / how / architecture / example / security /
+   reliability / observability / audit / configuration / testing / common mistakes / production),
+   each linking to its design-authority page.
+6. **E6 — architecture and flows, and the example docs.** `docs/jdlib/architecture/`
+   (example-architecture, security-flow, tenant-flow, neo4j-flow, mcp-flow, observability-flow)
+   and `docs/jdlib/examples/` (overview, minimal-example, enterprise-example, with-and-without,
+   developer-journey).
+7. **E7 — the documentation is tested (§27) and the matrix is derived (§28).**
+   `tests/unit/test_example_docs.py`: every guide carries every template heading, every cited path
+   exists, every documented command is one the repository can run, the matrices' rows cite test
+   files that exist and hold tests, and the examples import. A register that lies fails its own
+   test — the same treatment the capability pages already get.
+8. **E8 — security review, final validation, final report (§29–§32).** The example's own security
+   review with evidence per check, the complete gate at the end of the phase, and the report with
+   the directive's fields.
+
+### What the directive forbids, restated as constraints
+
+* **No deliberately vulnerable code** for the without-JDLib comparison (§25): those examples are
+  illustrative snippets, marked as such, never runnable production paths.
+* **No unsupported claims** in the comparison: every "with JDLib" cell names the seam that does it.
+* **Fast validation during development** (§30): the layered gate per slice; the complete
+  container-backed suite at the phase boundary rather than after every edit.
+* **Do not weaken tests to achieve green, do not convert failures into skips** (§30) — and a
+  documented command that does not work is fixed, not removed (§27).
+
+**Status: IN PROGRESS (started 2026-09-26).** §17's MCP surface and §16's graph plane both landed,
+which is what the enterprise example composes.

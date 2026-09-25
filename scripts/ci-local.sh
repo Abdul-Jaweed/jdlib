@@ -4,7 +4,7 @@
 # than this script).
 #
 # What this reproduces, and from where:
-#   .github/workflows/ci.yml  job "test"      -> ruff check .; mypy src/jdlib; pytest -q
+#   .github/workflows/ci.yml  job "test"      -> ruff check .; mypy src/jdlib examples; pytest -q
 #   .github/workflows/ci.yml  job "security"  -> python -m build; clean-venv install + import
 #                                                smoke; (pip-audit / gitleaks / bandit / SBOM
 #                                                are NOT run here — see "not reproduced" below)
@@ -42,8 +42,8 @@ git diff --check
 step "ruff check ."
 "$VENV_PY" -m ruff check .
 
-step "mypy src/jdlib"
-"$VENV_PY" -m mypy src/jdlib
+step "mypy src/jdlib examples"
+"$VENV_PY" -m mypy src/jdlib examples
 
 step "pytest -q (with coverage; integration skips cleanly without Docker)"
 set +e

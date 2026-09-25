@@ -566,3 +566,44 @@ names the commit that fixed it.
   it is the mutation evidence.
 * **Found by** the MCP adversarial slice, which attacks the resource path rather than only the
   tool path.
+### The example application — the minimal example (directive §18)
+
+* **What landed.** `examples/minimal/`: a real FastAPI application that installs the library and
+  serves one tenant-scoped route through `require(...)`. Two ASGI applications, deliberately — the
+  ops routes answer `/healthz` and `/readyz` without credentials, and the tenant plane is mounted
+  at `/api`, where nothing is reachable without a verified principal and a resolved tenant. It has
+  no configuration of its own: the library's `JDLIB_*` contract is the whole surface, and the
+  resolver order is the operator's (`build_chain`), not a hand-listed resolver.
+* **Why it exists.** A library's claims are only as good as a consumer's first run: this one found
+  two defects (below) before it served a single request, and its route walk is the check a reader
+  copies — every route under the mount must declare a permission.
+* **Evidence.** `examples/minimal/tests`: 11 tests over three files, including the operator step
+  and the denial path against a real PostgreSQL (lab URL or a throwaway container, skipped with a
+  reason when neither is available). The tests are part of the repository's own gate.
+
+### A database that is down answered 500 over the async driver
+
+* **Symptom.** Readiness against an unreachable database answered an unhandled 500 — and the same
+  outage over `psycopg` answered 503 `DEPENDENCY_UNAVAILABLE`.
+* **Cause.** The edge's descriptor table maps SQLAlchemy's connection-level errors
+  (`OperationalError`, `InterfaceError`, `TimeoutError`), but a pool connect the database *refuses*
+  arrives as the driver's own `ConnectionRefusedError` — an `OSError`, never wrapped — which is
+  exactly the asyncpg path the library's consumers run on.
+* **Fix.** One row, `ConnectionError`, in `integrations/fastapi.py`. A database that is down is now
+  the 503 that invites a retry, whichever driver is installed; a statement the database *rejected*
+  keeps the 500 that says it is a defect here.
+* **Found by** the minimal example's readiness probe, whose first version passed for the wrong
+  reason: it was asserting the psycopg error, not an unreachable database.
+
+### A guard could not say what it enforced
+
+* **Symptom.** An application walking its own routes could not tell a guarded route from an
+  unguarded one: deleting `require(...)` from a route left the test green.
+* **Cause.** `require(...)` returned a closure with no marker, and `get_context` — the context
+  accessor — lives in the same module, so "the dependency came from `jdlib.integrations.fastapi`"
+  was true of both.
+* **Fix.** The returned callable carries `jdlib_permission`, the requirement it enforces. The
+  example's walk asserts every tenant route declares one, and the mutation that previously escaped
+  now fails it.
+* **Found by** a mutation check of the example's own guard test — the RED that proved the test was
+  decoration.

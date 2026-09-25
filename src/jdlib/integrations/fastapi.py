@@ -95,6 +95,11 @@ def require(
         async with container.uow_factory() as session:
             await container.enforcer.require(permission, target, session=session)
 
+    #: The requirement this dependency enforces, readable by whoever walks an application's own
+    #: routes: `get_context` and `require(...)` both live in this module, so "the dependency came
+    #: from jdlib" cannot tell a guarded route from an unguarded one. Set on the callable rather
+    #: than wrapped in an object, because FastAPI holds the callable itself.
+    setattr(dependency, "jdlib_permission", permission)  # noqa: B010 - a function attribute
     return dependency
 
 
@@ -121,6 +126,12 @@ _CAPABILITY_DESCRIPTORS: tuple[tuple[type[Exception], SecurityDescriptor], ...] 
     (SqlAlchemyOperationalError, DEPENDENCY_UNAVAILABLE_DESCRIPTOR),
     (SqlAlchemyInterfaceError, DEPENDENCY_UNAVAILABLE_DESCRIPTOR),
     (SqlAlchemyTimeoutError, DEPENDENCY_UNAVAILABLE_DESCRIPTOR),
+    # The driver's own refusal, which arrives *unwrapped*: SQLAlchemy wraps a failure inside a
+    # statement, but a pool connect the database refuses surfaces as the driver's `OSError`
+    # (`ConnectionRefusedError` for asyncpg, whose async path this library's consumers run on).
+    # Without this row a database that is *down* -- the exact case a readiness probe exists for --
+    # is answered by an unhandled 500, while the same outage over psycopg is a 503.
+    (ConnectionError, DEPENDENCY_UNAVAILABLE_DESCRIPTOR),
 )
 
 
