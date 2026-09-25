@@ -481,3 +481,42 @@ names the commit that fixed it.
   the INSERT and the gateway's response: three independent records of one request.
 * **Found by** the reference application asking what its own audit trail looks like
   from the database's side.
+
+### A string in an identifier position was Cypher — `afd71d7`
+
+* **Symptom.** None, until the graph plane's adversarial pass wrote the attack: the
+  suite's first run failed 106 of 111 cases against a tree that every gate called green.
+* **Cause.** The query builders annotated their identifiers as `Label`,
+  `RelationshipType` and `PropertyKey`, and those types validate at construction — but
+  an annotation enforces nothing. A plain string in that position was interpolated
+  straight into the statement, so
+  `node_match("User) DETACH DELETE n //", tenant=..., node_id=...)` produced
+  `MATCH (n:User) DETACH DELETE n //) WHERE n.tenant_id = $jdlib_scope_tenant ...`:
+  caller text as Cypher, the trailing comment swallowing the tenant predicate, and
+  every tenant check passing because the parameters and the scope predicate were all
+  present in the text.
+* **Fix.** `_label` and `_relationship_type` check the type at each interpolated
+  position, and all seven builders route their label, relationship type and both
+  endpoint labels through them (`graph/query.py`).
+* **Now.** Each identifier position is attacked with twelve hostile spellings (a
+  backtick, a second label, a label expression, a variable-length marker, a property
+  map, a trailing space, a newline, a NUL, a homoglyph, the wrong case, the empty
+  string, a whole statement) in `tests/unit/test_graph_adversarial.py`.
+* **Found by** the graph plane's own red-team slice, which exists because the same
+  programme's earlier phases kept finding that a validated *type* is not a validated
+  *call site*.
+
+### A refusal was recorded without the actor who made it — `f174849`
+
+* **Symptom.** The graph tenant refusal emitted its audit event with `principal_id`
+  and `tenant_id` empty — a record of a refused cross-tenant statement that named
+  nobody.
+* **Cause.** The refusal helper ran before the call established the security context
+  scope, and the event fills its actor from the ambient context by design.
+* **Fix.** `run`, `begin` and the transaction's `run` establish the scope first, so
+  anything written on that path is attributed to the caller (`graph/client.py`,
+  `graph/transaction.py`).
+* **Now.** A test asserts the refusal event's actor is the caller's principal, and
+  that the event is written *before* the refusal is raised.
+* **Found by** the graph plane's observability slice, which asked who a refusal
+  belongs to rather than whether it was recorded.

@@ -327,9 +327,20 @@ or property key is a validated value, allowlisted at construction, so injection 
 land in. Retries do not duplicate writes — a write is retried only where the correctness model
 permits it, and the audit record follows the committed outcome rather than the attempt.
 
-**Status: IN PROGRESS (started 2026-09-26).** Slices: config + errors → query and identifiers →
-client → tenant scoping and repository → transactions → reliability → observability and audit →
-harness and the adversarial suite → the capability page.
+**Status: COMPLETE (2026-09-26).** Landed as `b80f419` (config + errors), `327a6ad` (identifiers
+and query builders), `a9f7d90` (client + policy), `209bc88` (tenant scoping + repository),
+`adf071a` (transactions), `9b5c442` (reliability), `f174849` (observability + audit), `4ddd65b`
+(harness + live suite), `afd71d7` (adversarial suite + the identifier-position fix). The capability
+page is `docs/jdlib/capabilities/graph.md`.
+
+Two defects were found and fixed inside the phase, both by writing tests that could fail:
+a refusal emitted outside the context scope (an event with no actor is not evidence), and a
+plain string in an identifier position interpolating into the statement — a cross-tenant mass
+delete that every tenant check passed. The second is the reason the adversarial slice exists.
+
+Limits, stated in the capability page: schema DDL has no path through the client (an operator
+declares constraints out of band), and `GraphQuery` is a trusted low-level seam that cannot run
+unscoped but is not vocabulary-checked.
 
 Gate: Neo4j live in the infra harness (the suite skips cleanly without it); the injection suite
 (Cypher, label, relationship type, property key, arbitrary query, cross-tenant traversal,
@@ -345,7 +356,7 @@ authentication → tenant → authorization → operation → audit → telemetr
 Tools are typed and bounded; arbitrary Cypher or arbitrary database access is not a tool — if it
 exists at all it is an explicitly privileged capability with authorization, audit and limits.
 
-**Status: NOT STARTED.** Depends on §16 for its graph tools and on §2–§12 for everything else.
+**Status: NOT STARTED.** §16 landed 2026-09-26, so its graph tools now exist; it still depends on §2–§12 for everything else.
 
 Gate: the same security, audit and observability assertions the HTTP path carries, run through the
 MCP entry point; a tool inventory test that fails when a tool is added without a declared capability.
