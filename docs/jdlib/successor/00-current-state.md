@@ -131,10 +131,10 @@ because the successor phases add optional integrations and would multiply the pa
 | # | Limitation | Where recorded |
 |---|---|---|
 | L1 | ~~Tyk OSS 5.3.1 has no coprocess runtime; its harness tests always skip.~~ Resolved 2026-09-25: the six Tyk tests pass. The gateway's 404s were `TYK_GW_HOSTNAME` (Tyk's default domain), the middleware never loaded because the fixture named an unknown driver (`javascript` rather than `otto`). Kong 3.6 and Tyk 5.3.1 are both verified. | `docs/security/gateway-hardening.md` §6 |
-| L2 | The error-envelope gap (G10) is frozen by decision, not implemented. | security programme |
+| L2 | ~~The error-envelope gap (G10) is frozen by decision, not implemented.~~ Resolved 2026-09-25: both HTTP edges answer the documented envelope (`code`, `message`, `request_id`, `correlation_id`, plus the RFC 6750 challenge on a 401), a 5xx no longer echoes its own text, and the mapping the reference application carried itself moved into the library. | `docs/security/error-responses.md` |
 | L3 | Integration-layer tests need live infrastructure (Cerbos, Kong, ZITADEL, collector) via `JDLIB_INFRA_*`; without them they skip. | `tests/infra/` |
 | L4 | No coverage measurement exists; the figure is unknown. | this document |
-| L5 | `starlette` is imported but undeclared (§6). | this document |
+| L5 | ~~`starlette` is imported but undeclared.~~ Resolved: declared in the `fastapi` extra (`fastapi = ["fastapi>=0.111", "starlette>=0.37"]`), because `integrations/fastapi.py` imports it directly. | `pyproject.toml` |
 | L6 | `tests/integration` has no infrastructure skip guard: without Docker the fixtures raise rather than skip. | `.recon/current-state.md` |
 
 ## 9. What this programme must not redo
