@@ -30,6 +30,7 @@ from pydantic import ValidationError
 
 from jdlib.security.authz.decision import AuthorizationDecision, AuthorizationQuery
 from jdlib.security.authz.interfaces import PolicyDecisionPoint
+from jdlib.security.context import RequestIds, SecurityContext, security_context_scope
 from jdlib.security.errors import SecurityConfigurationError
 
 CERBOS_URL = "http://localhost:3592"
@@ -353,3 +354,83 @@ async def test_a_principal_with_no_roles_is_denied_without_being_sent() -> None:
     assert decision.degraded is False
     assert decision.reason == "no_roles"
     assert decision.decided_at == NOW
+
+
+# --------------------------------------------------------------------------- #
+# The hop's trace context: what the engine can record about *this* request
+# --------------------------------------------------------------------------- #
+# `docs/observability-validation.md` §6.2 measured this hop and found two gaps: the transport
+# was called with an empty header dict, so no trace context left the process, and `requestId`
+# fell back to a fresh uuid whenever the query carried none - so Cerbos' own access log and
+# audit store held a value that no other signal in the system carried, and the hop could not
+# be joined to the request at all. What the ambient security context already knows is what
+# fixes both: the ids go out as `requestId` and as `metadata` (which Cerbos records in its
+# audit entries), and the trace id goes out as a W3C `traceparent`.
+
+
+def _ids(
+    *,
+    request_id: str = "req-1",
+    correlation_id: str | None = "corr-1",
+    trace_id: str | None = "a" * 32,
+) -> RequestIds:
+    return RequestIds(request_id=request_id, correlation_id=correlation_id, trace_id=trace_id)
+
+
+def test_the_request_id_the_engine_receives_is_the_ambient_correlation_id() -> None:
+    transport = Transport(_response({"read": "EFFECT_ALLOW"}))
+    with security_context_scope(SecurityContext.anonymous(request_ids=_ids())):
+        asyncio.run(_pdp(transport).decide(_query()))
+
+    assert transport.payload["requestId"] == "corr-1"
+
+
+def test_no_metadata_field_is_sent_because_cerbos_has_none() -> None:
+    """A regression guard on a measured fact: Cerbos 0.54 rejects a request carrying
+    `metadata` with `proto: unknown field "metadata"` (400), which the adapter reports as a
+    degraded decision - a 503 on every authorized request. The ids travel as `requestId`,
+    which the engine does record, so nothing else needs to be invented for them."""
+    transport = Transport(_response({"read": "EFFECT_ALLOW"}))
+    with security_context_scope(SecurityContext.anonymous(request_ids=_ids())):
+        asyncio.run(_pdp(transport).decide(_query()))
+
+    assert "metadata" not in transport.payload
+
+
+def test_the_trace_context_leaves_as_a_w3c_traceparent() -> None:
+    transport = Transport(_response({"read": "EFFECT_ALLOW"}))
+    with security_context_scope(SecurityContext.anonymous(request_ids=_ids())):
+        asyncio.run(_pdp(transport).decide(_query()))
+
+    traceparent = transport.calls[-1][2]["traceparent"]
+    version, trace_id, parent_id, flags = traceparent.split("-")
+    assert (version, trace_id, flags) == ("00", "a" * 32, "01")
+    assert len(parent_id) == 16 and all(char in "0123456789abcdef" for char in parent_id)
+
+
+def test_a_query_that_names_its_own_request_id_keeps_it() -> None:
+    transport = Transport(_response({"read": "EFFECT_ALLOW"}))
+    query = AuthorizationQuery(
+        principal_id="user-1",
+        tenant_id=TENANT_ID,
+        resource_kind="document",
+        resource_id="doc-42",
+        actions=("read",),
+        roles=frozenset({"editor"}),
+        request_id="req-from-the-caller",
+    )
+    with security_context_scope(SecurityContext.anonymous(request_ids=_ids())):
+        asyncio.run(_pdp(transport).decide(query))
+
+    assert transport.payload["requestId"] == "req-from-the-caller"
+
+
+def test_without_a_context_the_wire_is_unchanged() -> None:
+    """The old shape stays the shape when there is nothing to say: an id of its own, no
+    metadata, no headers. A library call outside a request must not acquire a context."""
+    transport = Transport(_response({"read": "EFFECT_ALLOW"}))
+    asyncio.run(_pdp(transport).decide(_query()))
+
+    assert transport.payload["requestId"] != "corr-1"
+    assert "metadata" not in transport.payload
+    assert transport.calls[-1][2] == {}

@@ -23,7 +23,9 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from jdlib.context import Clock, SystemClock
 from jdlib.security.authz.decision import AuthorizationDecision, AuthorizationQuery
+from jdlib.security.context import RequestIds, current_security_context_or_none
 from jdlib.security.errors import SecurityConfigurationError
+from jdlib.security.tracing import TRACEPARENT_HEADER, TraceContext, format_traceparent
 
 #: A transport performs one HTTP call and returns the parsed JSON body.
 CerbosTransport = Callable[
@@ -35,6 +37,52 @@ _ALLOW = "EFFECT_ALLOW"
 _CHECK_RESOURCES_PATH = "/api/check/resources"
 _LOCAL_PREFIXES = ("http://localhost", "http://127.0.0.1")
 _TENANT_ATTRIBUTE = "tenantId"
+
+
+def _ambient_ids() -> RequestIds | None:
+    """The ids of the request being authorized, when there is a request to speak of.
+
+    Read from the security context rather than passed in: `decide` is called from the
+    authorization seam, inside the request, and a parameter would push the same argument
+    through every caller for no gain. A call outside a request (a job, a script, a test)
+    gets `None` and the previous wire shape.
+    """
+    context = current_security_context_or_none()
+    return None if context is None else context.request_ids
+
+
+def _request_id_for(query: AuthorizationQuery, ids: RequestIds | None) -> str:
+    """What to send as Cerbos' `requestId` - the field the engine records.
+
+    The caller's own id wins; then the ambient correlation id, which is the value every other
+    signal in the system carries, so the engine's own log line and audit entry can be joined
+    to the request; then - only when there is no request at all - a fresh id, which is what
+    made the hop unjoinable: Cerbos recorded a value nothing else had
+    (observability-validation §6.2).
+
+    There is no `metadata` field to put ids in: Cerbos 0.54 answers one with
+    `unknown field "metadata"` (measured, not assumed), and it records neither a
+    `request_id` header nor any of the other spellings tried. `requestId` is the field that
+    reaches its log line and its audit store, and it is verified live.
+    """
+    if query.request_id:
+        return query.request_id
+    if ids is not None:
+        return ids.correlation_id or ids.request_id
+    return uuid.uuid4().hex
+
+
+def _outbound_headers(ids: RequestIds | None) -> dict[str, str]:
+    """The W3C trace context the engine can record, when there is a trace id to send.
+
+    A new span id, not the caller's: the library parses the incoming `traceparent` for its
+    trace id only and deliberately does not retain the caller's span id, so this hop opens a
+    child span of the same trace rather than pretending to continue the caller's.
+    """
+    if ids is None or not ids.trace_id:
+        return {}
+    context = TraceContext(trace_id=ids.trace_id, parent_id=uuid.uuid4().hex[:16])
+    return {TRACEPARENT_HEADER: format_traceparent(context)}
 
 
 class CerbosConfig(BaseModel):
@@ -106,8 +154,11 @@ class CerbosPDP:
                 decided_at=decided_at,
                 denied_actions=tuple(query.actions),
             )
-        payload = self._payload(query)
-        call = self._transport(self._config.check_resources_url(), payload, {})
+        ids = _ambient_ids()
+        payload = self._payload(query, ids)
+        call = self._transport(
+            self._config.check_resources_url(), payload, _outbound_headers(ids)
+        )
         try:
             response = await asyncio.wait_for(
                 call, timeout=self._config.timeout.total_seconds()
@@ -122,11 +173,13 @@ class CerbosPDP:
     # -- mapping -----------------------------------------------------------
 
     @staticmethod
-    def _payload(query: AuthorizationQuery) -> dict[str, object]:
+    def _payload(
+        query: AuthorizationQuery, ids: RequestIds | None = None
+    ) -> dict[str, object]:
         principal_attributes: dict[str, object] = {_TENANT_ATTRIBUTE: str(query.tenant_id)}
         principal_attributes.update(query.principal_attributes)
-        return {
-            "requestId": query.request_id or uuid.uuid4().hex,
+        payload: dict[str, object] = {
+            "requestId": _request_id_for(query, ids),
             "includeMeta": True,
             "principal": {
                 "id": query.principal_id,
@@ -144,6 +197,7 @@ class CerbosPDP:
                 }
             ],
         }
+        return payload
 
     def _map(
         self,
