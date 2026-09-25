@@ -14,7 +14,6 @@ Three properties are this adapter's own, and each is here because it can regress
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import subprocess
 import sys
@@ -24,9 +23,7 @@ from typing import Any
 
 import pytest
 
-from jdlib.context import Principal, PrincipalKind, TenantContext
-from jdlib.control.enums import PlacementStrategy
-from jdlib.credentials import ResolvedSecret, SecretRef, SecretVersion
+from jdlib.credentials import SecretRef
 from jdlib.errors import MissingTenantContext
 from jdlib.graph import (
     GraphConfig,
@@ -42,31 +39,23 @@ from jdlib.graph import (
 from jdlib.graph.client import GraphClient, Neo4jClient
 from jdlib.graph.policy import GraphPolicy
 from jdlib.graph.query import GraphQuery
-from jdlib.security.context import AuthMethod, SecurityContext
+from jdlib.security.context import SecurityContext
+from tests.support.graph_fakes import (
+    OTHER_TENANT_ID,
+    RESOLVED,
+    TENANT_ID,
+    DriverFactory,
+    FakeDriver,
+    RecordingProvider,
+    graph_context,
+)
 
-TENANT_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
-OTHER_TENANT_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
-RESOLVED = "placeholder-for-tests"
 URI = "neo4j+s://graph.internal:7687"
 VOCABULARY = GraphVocabulary(
     labels=frozenset({"User"}),
     relationship_types=frozenset({"OWNS"}),
     property_keys=frozenset({"id", "name"}),
 )
-
-
-def _context(tenant_id: uuid.UUID = TENANT_ID) -> SecurityContext:
-    principal = Principal(kind=PrincipalKind.USER, id=uuid.uuid4())
-    tenant = TenantContext(
-        tenant_id=tenant_id,
-        tenant_slug="acme",
-        strategy=PlacementStrategy.SHARED,
-        principal=principal,
-        request_id="req-1",
-        correlation_id="corr-1",
-        trace_id=None,
-    )
-    return SecurityContext.from_tenant_context(tenant=tenant, auth_method=AuthMethod.SERVICE)
 
 
 def _config(**overrides: Any) -> GraphConfig:
@@ -79,97 +68,14 @@ def _scoped(tenant: uuid.UUID = TENANT_ID) -> GraphQuery:
     return node_match(VOCABULARY.label("User"), tenant=str(tenant), node_id="u1")
 
 
-class _Provider:
-    """The credential chain's shape: a reference in, a resolved value out."""
-
-    def __init__(self) -> None:
-        self.refs: list[SecretRef] = []
-
-    def resolve(self, ref: SecretRef) -> ResolvedSecret:
-        self.refs.append(ref)
-        return ResolvedSecret(ref=ref, version=SecretVersion("1"), value=RESOLVED)
-
-
-class _Result:
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
-        self._rows = rows
-
-    async def data(self) -> list[dict[str, Any]]:
-        return list(self._rows)
-
-
-class _Session:
-    def __init__(self, driver: _Driver) -> None:
-        self._driver = driver
-
-    async def __aenter__(self) -> _Session:
-        return self
-
-    async def __aexit__(self, *exc: object) -> bool:
-        return False
-
-    async def run(
-        self, text: str, parameters: dict[str, Any] | None = None, **kwargs: Any
-    ) -> _Result:
-        self._driver.calls.append((text, dict(parameters or {}), kwargs))
-        if self._driver.delay:
-            await asyncio.sleep(self._driver.delay)
-        if self._driver.error is not None:
-            raise self._driver.error
-        return _Result(self._driver.rows)
-
-
-class _Driver:
-    """Shaped like the async driver: session() is an async context manager, run() awaits."""
-
-    def __init__(
-        self,
-        *,
-        rows: list[dict[str, Any]] | None = None,
-        error: BaseException | None = None,
-        delay: float = 0.0,
-        reachable: bool = True,
-    ) -> None:
-        self.rows = rows if rows is not None else [{"id": "u1"}]
-        self.error = error
-        self.delay = delay
-        self.reachable = reachable
-        self.calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
-        self.closed = False
-        self.database: str | None = None
-
-    def session(self, *, database: str | None = None) -> _Session:
-        self.database = database
-        return _Session(self)
-
-    async def verify_connectivity(self) -> None:
-        if not self.reachable:
-            raise RuntimeError("the server did not answer")
-
-    async def close(self) -> None:
-        self.closed = True
-
-
-class _Factory:
-    def __init__(self, driver: _Driver) -> None:
-        self.driver = driver
-        self.uri: str | None = None
-        self.kwargs: dict[str, Any] = {}
-
-    def __call__(self, uri: str, **kwargs: Any) -> _Driver:
-        self.uri = uri
-        self.kwargs = kwargs
-        return self.driver
-
-
 def _client(
     config: GraphConfig | None = None,
     *,
-    driver: _Driver | None = None,
+    driver: FakeDriver | None = None,
     policy: GraphPolicy | None = None,
-) -> tuple[Neo4jClient, _Provider, _Factory]:
-    provider = _Provider()
-    factory = _Factory(driver or _Driver())
+) -> tuple[Neo4jClient, RecordingProvider, DriverFactory]:
+    provider = RecordingProvider()
+    factory = DriverFactory(driver or FakeDriver())
     client = Neo4jClient(
         config or _config(), provider=provider, policy=policy, driver_factory=factory
     )
@@ -193,7 +99,7 @@ def test_the_adapter_satisfies_the_protocol_and_is_asynchronous() -> None:
 
 async def test_open_resolves_the_secret_and_hands_it_to_the_driver() -> None:
     client, provider, factory = _client()
-    await client.open(context=_context())
+    await client.open(context=graph_context())
     assert provider.refs == [SecretRef(handle="neo4j-app")]
     assert factory.uri == URI
     assert factory.kwargs["auth"] == ("bearer", RESOLVED)
@@ -202,7 +108,7 @@ async def test_open_resolves_the_secret_and_hands_it_to_the_driver() -> None:
 
 async def test_open_uses_basic_auth_when_the_config_names_a_user() -> None:
     client, _, factory = _client(_config(username="graph-app"))
-    await client.open(context=_context())
+    await client.open(context=graph_context())
     assert factory.kwargs["auth"] == ("graph-app", RESOLVED)
     await client.close()
 
@@ -216,7 +122,7 @@ async def test_the_config_maps_to_the_drivers_own_bounds() -> None:
         max_transaction_retry_time=3.0,
     )
     client, _, factory = _client(config)
-    await client.open(context=_context())
+    await client.open(context=graph_context())
     assert factory.kwargs["max_connection_pool_size"] == 7
     assert factory.kwargs["connection_acquisition_timeout"] == 1.5
     assert factory.kwargs["max_connection_lifetime"] == 60.0
@@ -233,10 +139,10 @@ async def test_open_refuses_without_an_authenticated_tenant() -> None:
 
 
 async def test_run_sends_the_statement_with_its_parameters_and_the_database() -> None:
-    driver = _Driver(rows=[{"id": "u1", "name": "A"}])
+    driver = FakeDriver(rows=[{"id": "u1", "name": "A"}])
     client, _, _ = _client(driver=driver)
-    await client.open(context=_context())
-    rows = await client.run(query=_scoped(), context=_context())
+    await client.open(context=graph_context())
+    rows = await client.run(query=_scoped(), context=graph_context())
     assert rows == [{"id": "u1", "name": "A"}]
     text, parameters, kwargs = driver.calls[0]
     assert parameters["jdlib_scope_tenant"] == str(TENANT_ID)
@@ -247,60 +153,60 @@ async def test_run_sends_the_statement_with_its_parameters_and_the_database() ->
 
 
 async def test_run_refuses_a_statement_scoped_to_another_tenant() -> None:
-    driver = _Driver()
+    driver = FakeDriver()
     client, _, _ = _client(driver=driver)
-    await client.open(context=_context())
+    await client.open(context=graph_context())
     with pytest.raises(GraphTenantViolationError):
-        await client.run(query=_scoped(OTHER_TENANT_ID), context=_context())
+        await client.run(query=_scoped(OTHER_TENANT_ID), context=graph_context())
     assert driver.calls == []
 
 
 async def test_run_refuses_a_context_for_another_tenant_than_the_open() -> None:
-    driver = _Driver()
+    driver = FakeDriver()
     client, _, _ = _client(driver=driver)
-    await client.open(context=_context(TENANT_ID))
+    await client.open(context=graph_context(TENANT_ID))
     with pytest.raises(GraphTenantViolationError):
-        await client.run(query=_scoped(OTHER_TENANT_ID), context=_context(OTHER_TENANT_ID))
+        await client.run(query=_scoped(OTHER_TENANT_ID), context=graph_context(OTHER_TENANT_ID))
     assert driver.calls == []
 
 
 async def test_run_before_open_is_refused() -> None:
     client, _, _ = _client()
     with pytest.raises(GraphError):
-        await client.run(query=_scoped(), context=_context())
+        await client.run(query=_scoped(), context=graph_context())
 
 
 async def test_a_statement_that_exceeds_the_policy_timeout_is_a_graph_timeout() -> None:
-    client, _, _ = _client(driver=_Driver(delay=0.5), policy=GraphPolicy(statement_timeout=0.05))
-    await client.open(context=_context())
+    client, _, _ = _client(driver=FakeDriver(delay=0.5), policy=GraphPolicy(statement_timeout=0.05))
+    await client.open(context=graph_context())
     with pytest.raises(GraphTimeoutError):
-        await client.run(query=_scoped(), context=_context())
+        await client.run(query=_scoped(), context=graph_context())
 
 
 async def test_health_is_false_before_open_and_follows_the_driver() -> None:
-    driver = _Driver(reachable=False)
+    driver = FakeDriver(reachable=False)
     client, _, _ = _client(driver=driver)
     assert await client.health() is False
-    await client.open(context=_context())
+    await client.open(context=graph_context())
     assert await client.health() is False
     driver.reachable = True
     assert await client.health() is True
 
 
 async def test_close_closes_the_driver_and_is_safe_twice() -> None:
-    driver = _Driver()
+    driver = FakeDriver()
     client, _, _ = _client(driver=driver)
-    await client.open(context=_context())
+    await client.open(context=graph_context())
     await client.close()
     assert driver.closed is True
     await client.close()
     with pytest.raises(GraphError):
-        await client.run(query=_scoped(), context=_context())
+        await client.run(query=_scoped(), context=graph_context())
 
 
 async def test_the_client_never_renders_the_resolved_secret() -> None:
     client, _, _ = _client()
-    await client.open(context=_context())
+    await client.open(context=graph_context())
     assert RESOLVED not in repr(client)
     await client.close()
 
@@ -359,10 +265,10 @@ def driver_errors(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
 
 
 async def _run_with(driver_errors: types.ModuleType, error: BaseException) -> GraphError:
-    client, _, _ = _client(driver=_Driver(error=error))
-    await client.open(context=_context())
+    client, _, _ = _client(driver=FakeDriver(error=error))
+    await client.open(context=graph_context())
     with pytest.raises(GraphError) as caught:
-        await client.run(query=_scoped(), context=_context())
+        await client.run(query=_scoped(), context=graph_context())
     return caught.value
 
 
