@@ -23,7 +23,7 @@ whose job".
 | `tests/test_authorization.py`, `tests/test_authorization_live.py` — the bridge's mapping, and the engine's answers over the wire | **here** — 5 unit, 4 live |
 | `app/services/`, `app/repositories/` — the tenant plane | **here** |
 | `app/graph.py` — the tenant-bound graph plane and the projection | **here** — 7 live tests against Neo4j |
-| `app/mcp/` — the MCP surface | next |
+| `app/mcp/` — the MCP surface (tools, the boundary over the same collaborators, the graph runner) | **here** — 8 unit, 6 live |
 | `tests/{integration,security,e2e}` — the matrix the directive asks for | next |
 
 The order is deliberate and dependency-forced: the policy files and the container lab land with the
@@ -187,6 +187,38 @@ export JDLIB_EXAMPLE_GRAPH_URI=bolt://127.0.0.1:7688
 pytest examples/enterprise/tests/test_graph_live.py -q -W error
 ```
 
+## The MCP surface
+
+`app/mcp/` is the same application over a second protocol. Nothing about the security model is
+restated: `build_collaborators` builds the collaborators **once**, `create_app` and
+`build_example_mcp_server` are both handed them, and the unit tests assert the *identity* of those
+objects — an MCP surface that built its own authenticator, resolver chain or enforcer would be a
+second place for a decision to drift, and no test would notice.
+
+Three properties are the surface's own, and each is checked:
+
+**The inventory is the declarations.** No tool exists that is not declared, every declaration
+carries the capability its authorization is asked against (the registry refuses one that does not),
+and no schema has a slot for an identity or a statement — checked by walking the properties, because
+"there is no `tenant_id` in the schema" is exactly the claim a reader gets wrong.
+
+**The chain is the HTTP path's, and it runs live.** A bearer API key is minted by the test and
+hashed into the control plane; the library's own authenticator verifies it, the resolver chain
+decides the tenant, the context factory checks the service account is active and entitled, and the
+capability is put to the live policy engine before any handler runs. A forged key is refused, which
+is the negative control that stops every other assertion from passing on a boundary that
+authenticated nothing.
+
+**The graph tools get a runner, not a client.** A graph client *is* a tenant binding, so a surface
+serving every tenant cannot hold one: `TenantGraphRunner` opens the calling tenant's client per
+statement, and the tenant still comes from the context.
+
+```bash
+python -m examples.enterprise.app.mcp.asgi       # MCP over streamable HTTP
+pytest examples/enterprise/tests/test_mcp_surface.py -q -W error    # no lab needed
+pytest examples/enterprise/tests/test_mcp_live.py -q -W error       # with the lab up
+```
+
 ## Tests
 
 ```bash
@@ -205,6 +237,11 @@ the scoped form, rollback, and a suspended tenant that cannot write.
 The graph plane (live): a projected node read back over a fresh client, the upsert, cross-tenant
 invisibility, the client's refusal of another tenant's statement, the closed vocabulary, and the
 identity constraint the operator step declares.
+
+The MCP surface: the inventory, the capabilities, the closed schemas and the identity of the
+collaborators (unit, no engine); and through the whole chain — authentication by a real key, tenant
+resolution, the live policy engine's answer, a denial measured at the data, an undeclared argument
+refused, cross-tenant invisibility, and the graph tools over the real Neo4j (live).
 
 The behavioural matrix over HTTP — denial non-execution, tenant isolation end to end, the whole chain
 through the gateway — arrives with the layers it tests.

@@ -717,3 +717,49 @@ names the commit that fixed it.
   (`monkeypatch.delenv`), because a test whose premise the environment can supply is not measuring the
   code — and it had passed before only because every earlier run of this file happened to be on a bare
   environment.
+
+### The example application — the MCP surface, over the same chain (directive §18)
+
+* **What landed.** `examples/enterprise/app/mcp/`: `tools.py` (three declarations — `resource_get`,
+  `resource_list`, `resource_archive` — each carrying the capability the HTTP routes declare and a
+  closed schema with no slot for an identity or a statement), `server.py` (the registry, the
+  library's `McpSecurityBoundary` built from the *HTTP path's own collaborators*, the per-tenant
+  graph runner, the library's async-sink emitter) and `asgi.py`
+  (`python -m examples.enterprise.app.mcp.asgi`). `main.py` gained `Collaborators` and
+  `build_collaborators` so both surfaces are one composition, and `dataplane.py` gained
+  `grant_control_privileges`. Tests: `tests/test_mcp_surface.py` (8, no lab) and
+  `tests/test_mcp_live.py` (6, against the lab).
+* **Why it exists.** A second surface is where a security model is either reused or quietly
+  re-implemented. Every collaborator here is the object `create_app` built — asserted by *identity*,
+  not by shape — so the chain that authenticates an HTTP request authenticates a tool call.
+* **Evidence.** 8 unit tests (the inventory, the capabilities, the closed schemas, the identity of
+  the collaborators, and the enforcer's tenant source). 6 live tests through the whole chain: a
+  bearer API key minted in the test and hashed into the control plane is authenticated by the
+  library's own authenticator, the tenant is resolved, the context factory's checks run, the
+  capability is put to the **live policy engine**, and only then does the handler reach the service
+  and PostgreSQL — plus `graph_get` through the surface to the real Neo4j. The denial is measured at
+  the data (the row is still `active`), the refusal's *reason* is asserted (`authorization denied`,
+  not merely "some `ToolError`"), and a forged key is refused as the negative control. Mutations
+  **2/2**: with the archive tool declaring the read capability, the denial test and the capability
+  test fail; with the enforcer reading a context the MCP invocation does not bind, the MCP-shape test
+  fails.
+* **Found by** the first live call: **the runtime role could not reach the control plane at all.**
+  The operator step granted privileges inside the tenant schema and nowhere else, so a serving
+  process failed its first request with `permission denied for schema jd_control` — it authenticates,
+  resolves a tenant, reads roles and writes the audit trail, and every one of those is a control-plane
+  row. `grant_control_privileges` now grants exactly what the request path reads and appends:
+  `SELECT`, `INSERT` on the audit trail, and — measured rather than guessed — `UPDATE` on the key's
+  own `last_used_at`, which the authenticator writes and whose refusal the library reports as "no
+  credentials presented", an authentication failure wearing a denial's clothes.
+* **Found by** the live authorization answer: **the MCP chain asks about the tenant scope.** A tool
+  declares a capability and the invocation puts it to the engine with the caller's *tenant* as the
+  target — a tool call has no resource id to be asked about before it runs — so a policy set written
+  only against route targets answered `no_allow` for every tool. The scope policy now carries the
+  capabilities (`resource:read`, `graph:read`, `resource:write`, `graph:write`), the engine's own
+  tests grew to **44** (from 29), and the tenant comparison is the same one the route rules use.
+* **Corrected** a suspicion this slice started with: the MCP boundary was assumed to bind only a
+  security context, which would have made the enforcer's `current_tenant()` read fail closed on every
+  MCP call, and the enforcer was changed for it. A probe through the live path showed the invocation
+  binds **both** scopes (`jdlib/integrations/mcp/invocation.py`), so the change was reverted and the
+  probe kept as a test: a claim about which context is bound is measured here, not read off the
+  source and trusted.

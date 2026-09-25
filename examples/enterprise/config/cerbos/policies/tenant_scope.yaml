@@ -22,6 +22,25 @@ resourcePolicy:
         match:
           expr: has(request.principal.attr.tenantId) && request.principal.attr.tenantId == request.resource.attr.tenantId
 
+    # The MCP surface's own questions. A tool declares a *capability* (`resource:read`,
+    # `graph:write`, ...) and the invocation chain puts it to the engine with the caller's tenant
+    # scope as the target: a tool call has no resource id to be asked about before it runs, so the
+    # question is "may this principal do this in this tenant at all". Same rule as the line above —
+    # the role must be held *here* — and the same capability strings the HTTP routes declare.
+    - actions: ["resource:read", "graph:read"]
+      effect: EFFECT_ALLOW
+      roles: ["support", "operator", "admin"]
+      condition:
+        match:
+          expr: has(request.principal.attr.tenantId) && request.principal.attr.tenantId == request.resource.attr.tenantId
+
+    - actions: ["resource:write", "graph:write"]
+      effect: EFFECT_ALLOW
+      roles: ["operator", "admin"]
+      condition:
+        match:
+          expr: has(request.principal.attr.tenantId) && request.principal.attr.tenantId == request.resource.attr.tenantId
+
     # Changing a tenant's lifecycle: the administrative role, and only in its own tenant.
     - actions: ["tenant:suspend", "tenant:archive"]
       effect: EFFECT_ALLOW

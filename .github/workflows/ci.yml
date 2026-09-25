@@ -15,9 +15,12 @@ jobs:
         with:
           python-version: "3.12"
       # The optional extras are installed on purpose: the S3 and Redis integration suites need
+  # them, and the examples import the graph (neo4j) and mcp (fastmcp) extras directly -- an
+  # example that needed an extra the gate does not install fails collection, which is how
+  # the enterprise example's graph plane broke this job once.
       # their client libraries, and a suite that skips on the runner is not evidence. Docker is
       # present here, so these tests can run rather than report SKIPPED.
-      - run: python -m pip install -e ".[dev,s3,redis]"
+      - run: python -m pip install -e ".[dev,s3,redis,graph,mcp]"
       - run: python -m ruff check .
       - run: python -m mypy src/jdlib examples
       - run: python -m pytest -q
@@ -47,7 +50,7 @@ jobs:
           python -m pip install --upgrade pip
           # Including the extras: what they pull in is what ships to a deployment that enables
           # them, so it belongs in the set pip-audit checks.
-          python -m pip install -e ".[dev,s3,redis]"
+          python -m pip install -e ".[dev,s3,redis,graph,mcp]"
           python -m pip freeze --exclude-editable > "$RUNNER_TEMP/requirements-lock.txt"
           wc -l "$RUNNER_TEMP/requirements-lock.txt"
 

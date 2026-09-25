@@ -128,3 +128,44 @@ tests:
         resource: "scope_of_a"
         actions:
           "tenant:read": EFFECT_DENY
+
+  - name: "The MCP surface asks about the tenant scope: a tool's capability, in the caller's tenant"
+    input:
+      principals: ["support_of_a", "operator_of_a", "admin_of_a"]
+      resources: ["scope_of_a"]
+      actions: ["resource:read", "graph:read", "resource:write", "graph:write"]
+    expected:
+      - principal: "support_of_a"
+        resource: "scope_of_a"
+        actions:
+          "resource:read": EFFECT_ALLOW
+          "graph:read": EFFECT_ALLOW
+          "resource:write": EFFECT_DENY
+          "graph:write": EFFECT_DENY
+      - principal: "operator_of_a"
+        resource: "scope_of_a"
+        actions:
+          "resource:read": EFFECT_ALLOW
+          "graph:read": EFFECT_ALLOW
+          "resource:write": EFFECT_ALLOW
+          "graph:write": EFFECT_ALLOW
+      - principal: "admin_of_a"
+        resource: "scope_of_a"
+        actions:
+          "resource:read": EFFECT_ALLOW
+          "graph:read": EFFECT_ALLOW
+          "resource:write": EFFECT_ALLOW
+          "graph:write": EFFECT_ALLOW
+
+  - name: "A tool's capability held in one tenant is not held in another"
+    input:
+      principals: ["admin_of_b"]
+      resources: ["scope_of_a"]
+      actions: ["resource:read", "resource:write", "graph:write"]
+    expected:
+      - principal: "admin_of_b"
+        resource: "scope_of_a"
+        actions:
+          "resource:read": EFFECT_DENY
+          "resource:write": EFFECT_DENY
+          "graph:write": EFFECT_DENY

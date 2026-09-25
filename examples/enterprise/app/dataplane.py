@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import (
 from examples.enterprise.app import models as _app_models  # noqa: F401
 from examples.enterprise.app.dsn import async_dsn, sync_dsn
 from jdlib.context import TenantContext
+from jdlib.control.base import CONTROL_SCHEMA
 from jdlib.migrations.runner import MigrationRunner
 
 # Imported for their side effect: the library's tenant tables and this application's join
@@ -55,6 +56,7 @@ __all__ = [
     "TENANT_SCHEMA",
     "TenantPlane",
     "app_metadata",
+    "grant_control_privileges",
     "grant_tenant_privileges",
     "install_tenant_rls",
     "inspect_tenant_rls",
@@ -164,13 +166,21 @@ def scoped_tables(present: tuple[str, ...]) -> tuple[str, ...]:
 
 
 async def install_tenant_rls(database_url: str, schema: str, *, app_role: str) -> RlsInspection:
-    """Install the policies, grant what makes them reachable, and read back what landed."""
+    """Install the policies, grant what makes them reachable, and read back what landed.
+
+    "Reachable" includes the *control* plane: a request is authenticated, its tenant resolved and
+    its roles read before a tenant-bound session exists, and every one of those is a row the runtime
+    role must be able to see. A deployment that installed only the tenant schema's policies would
+    serve nothing at all — the first request would fail on a permission error in `jd_control`, which
+    is how this grant came to exist.
+    """
     present = await tables_in_schema(database_url, schema)
     scope = scoped_tables(present)
     engine = create_async_engine(async_dsn(database_url))
     try:
         await install_rls(engine, metadata=app_metadata(), app_role=app_role, tables=scope)
         await grant_tenant_privileges(database_url, schema, app_role)
+        grant_control_privileges(database_url, app_role=app_role)
         return await inspect_rls(engine, metadata=app_metadata(), tables=scope)
     finally:
         await engine.dispose()
@@ -201,6 +211,41 @@ async def grant_tenant_privileges(database_url: str, schema: str, app_role: str)
         f"ALTER DEFAULT PRIVILEGES IN SCHEMA {tenant} "
         f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {role}",
         f"ALTER DEFAULT PRIVILEGES IN SCHEMA {tenant} GRANT USAGE, SELECT ON SEQUENCES TO {role}",
+    )
+    engine = sa.create_engine(sync_dsn(database_url), future=True)
+    try:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(sa.text(statement))
+    finally:
+        engine.dispose()
+
+
+def grant_control_privileges(
+    database_url: str, *, app_role: str, schema: str = CONTROL_SCHEMA
+) -> None:
+    """Grant the runtime role what the request path needs in the control plane's schema.
+
+    Reading, appending to the audit trail, and one narrow update — and the narrow one is named
+    because it was *measured*: authenticating an API key records `last_used_at` on the key's row,
+    so a role with `SELECT` alone fails the first request with a permission error that the
+    authenticator reports as "no credentials presented". Every other write is refused: no `INSERT`
+    on anything but the audit trail, no `UPDATE` on anything but the key's own timestamp, and no
+    `DELETE` anywhere. The library grants none of this itself, because a role with no `SELECT` is
+    not protected by a policy — it is locked out — and the shape of what an application needs is
+    the application's to state.
+
+    A deployment that turns on OIDC adds the writes its identity linking performs; the example's lab
+    runs the API-key path, and this is the list that path needs.
+    """
+    control = _quote(schema, _SCHEMA_RE)
+    role = _quote(app_role, _ROLE_RE)
+    statements = (
+        f"GRANT USAGE ON SCHEMA {control} TO {role}",
+        f"GRANT SELECT ON ALL TABLES IN SCHEMA {control} TO {role}",
+        f"GRANT INSERT ON {control}.platform_audit_events TO {role}",
+        f"GRANT UPDATE (last_used_at) ON {control}.api_keys TO {role}",
+        f"ALTER DEFAULT PRIVILEGES IN SCHEMA {control} GRANT SELECT ON TABLES TO {role}",
     )
     engine = sa.create_engine(sync_dsn(database_url), future=True)
     try:

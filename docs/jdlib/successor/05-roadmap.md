@@ -529,7 +529,7 @@ a driver, a raw session factory or a second envelope.
 | E3a — the Cerbos policy set, the lab, and the authorization verification | **landed** | `config/cerbos/policies/` with 21 tests executed by `cerbos compile`; `docker/docker-compose.yml`; 5 unit tests for the bridge's mapping and 4 live tests answered by the engine (allow, deny, cross-tenant deny); 2/2 mutations bit |
 | E3b — the tenant plane: models, repositories, services, api | **landed** | `examples/enterprise/app/{models,repositories,services}/`, `app/dataplane.py`, `app/api/resources.py`, `app/asgi.py`; the two-role lab (`docker/initdb/`); **11 live tests** against real PostgreSQL (read-back over a fresh connection, ordering, cross-tenant invisibility at both layers, the composite foreign key, unscoped statements refused with the scoped form beside them, rollback, suspend/resume) and 5 unit tests for the operator step; **3/3 mutations bit** (the installer's policy, the composite FK, the bootstrap's guard) |
 | E3c-i — the graph plane | **landed** | `examples/enterprise/app/graph.py` (a client per tenant, the closed `VOCABULARY`, the projection as an upsert in one transaction, `ensure_graph_constraints` as the operator step's schema declaration) and `tests/test_graph_live.py` — **7 live tests** against the example's own Neo4j (`docker/docker-compose.yml`, bolt 7688): read-back over a fresh client, the upsert, cross-tenant invisibility, the client refusing another tenant's well-formed statement, an undeclared label refused before any statement, the row's own id, and the identity constraint; **2/2 mutations bit**. Found: the lab had no identity constraint, so "project twice" was a second node rather than an update — the mutation that turned the upsert into a create succeeded at the database |
-| E3c-ii — the MCP surface | next | the second protocol over the same chain: a server from `build_mcp_server`, the example's own tools beside `graph_tools`, and the refusal that is measured before a handler runs |
+| E3c-ii — the MCP surface | **landed** | `examples/enterprise/app/mcp/` (`tools.py`, `server.py`, `asgi.py`), `main.Collaborators`/`build_collaborators` (one composition, two surfaces), `dataplane.grant_control_privileges`; **8 unit + 6 live tests**. The live file drives the whole chain — a real API key hashed into the control plane, the library's authenticator, the resolver chain, the context factory, the live policy engine, the service, and `graph_get` over real Neo4j — and the denial is measured at the data. **2/2 mutations bit.** Found: the runtime role could not reach `jd_control` at all (the operator step granted only inside the tenant schema); the MCP chain asks its question about the *tenant scope*, so the policy set needed the tool capabilities (engine tests 29 → 44). Corrected: a suspected context-binding defect that a probe disproved, with the probe kept as a test |
 | E4–E8 | next | as listed below |
 
 The examples are type-checked from E1 onwards (`mypy src/jdlib examples` in `scripts/ci-local.sh` and
@@ -549,10 +549,11 @@ the workflow), and their tests are collected by the repository's own gate (`test
    policy set and its live verification; **E3b** landed the tenant plane (models, repositories,
    services, the resource routes, the two-role lab); **E3c-i** landed the graph plane (the
    tenant-bound client, the closed vocabulary, the projection, the operator step's schema
-   declaration, and its own Neo4j in the lab); **E3c-ii** is the MCP surface, built on what E3b and
-   E3c-i wired. The splits are recorded rather than silent: E3b's lab is what the graph slice needs
-   before it can be tested against anything real, and the graph's repository is what the MCP
-   surface's tools take.
+   declaration, and its own Neo4j in the lab); **E3c-ii** landed the MCP surface — the tools, the
+   boundary over the same collaborators, the per-tenant graph runner, and the policy rules the MCP
+   chain's tenant-scoped question needs. The splits are recorded rather than silent: E3b's lab is
+   what the graph slice needs before it can be tested against anything real, and the graph's
+   repository is what the MCP surface's tools take.
 4. **E4 — the enterprise example's tests.** `tests/{unit,integration,security,e2e}` in the example:
    unit (no services), integration (Postgres via the harness), security (tenant isolation, denial
    non-execution, no error leakage), e2e (a request through the whole chain).

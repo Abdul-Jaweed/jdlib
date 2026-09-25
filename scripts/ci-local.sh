@@ -45,6 +45,22 @@ step "ruff check ."
 step "mypy src/jdlib examples"
 "$VENV_PY" -m mypy src/jdlib examples
 
+step "the extras the examples import are installed"
+# The examples import `neo4j` and `fastmcp` at module level, so a venv without them fails
+# *collection* rather than skipping. The runner installs them (see ci.yml); this step is what
+# makes the local gate say so too, instead of passing here and failing there.
+"$VENV_PY" - <<'PY'
+import importlib.util
+import sys
+
+missing = [name for name in ("neo4j", "fastmcp") if importlib.util.find_spec(name) is None]
+if missing:
+    print(f"FAIL: the examples import {', '.join(missing)}, and this venv does not have them")
+    print('install with: python -m pip install -e ".[dev,s3,redis,graph,mcp]"')
+    sys.exit(1)
+print("extras present: neo4j, fastmcp")
+PY
+
 step "pytest -q (with coverage; integration skips cleanly without Docker)"
 set +e
 "$VENV_PY" -m pytest -q -W error --cov=jdlib --cov-report=term:skip-covered 2>&1 | tail -40

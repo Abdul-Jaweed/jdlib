@@ -119,10 +119,13 @@ class CerbosEnforcer:
             # The caller is facing a denial, not an outage, so it is decided here and said plainly.
             raise PermissionDenied(f"{permission}: the caller has no roles in this tenant")
         query = query_for(permission, target, context=context, roles=roles)
-        # No `context=` argument: the library's tenant middleware does not bind a
-        # `SecurityContext`, so `current_security_context()` would fail closed here, and the check
-        # that argument enables (the query's tenant must be the request's) is already structural --
-        # `query_for` takes the tenant from the context and offers a route no way to name another.
+        # No `context=` argument on `self._pep.require`: both surfaces bind the *tenant* context
+        # this read comes from -- the HTTP middleware directly (`jdlib/tenancy/middleware.py`), the
+        # MCP invocation beside its security context
+        # (`jdlib/integrations/mcp/invocation.py`) -- so one enforcer serves both, and the check the
+        # argument enables (the query's tenant must be the request's) is already structural:
+        # `query_for` takes the tenant from `current_tenant()` and offers a caller no way to name
+        # another.
         decision = await self._pep.require(query)
         # Reaching this line means the engine allowed it: `AuthorizationPEP.require` raises on a
         # denial and on a degraded decision, which is the whole reason to call it rather than
