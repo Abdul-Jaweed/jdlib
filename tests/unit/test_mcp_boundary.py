@@ -118,7 +118,7 @@ def _boundary(
 
 async def test_a_credential_becomes_the_context_the_chain_resolved() -> None:
     boundary, provider, chain, factory = _boundary()
-    context = await boundary.establish(request=_request(authorization="Bearer token-value"))
+    context = await boundary.establish(request=_request(authorization="Bearer fixture-marker"))
     assert context.tenant is not None
     assert str(context.tenant.tenant_id) == str(TENANT_ID)
     assert context.principal.id == PRINCIPAL_ID
@@ -135,7 +135,7 @@ async def test_the_boundary_is_the_http_edges_own_chain_by_identity() -> None:
     boundary = McpSecurityBoundary(
         principal_provider=provider, chain=chain, factory=factory
     )
-    await boundary.establish(request=_request(authorization="Bearer token-value"))
+    await boundary.establish(request=_request(authorization="Bearer fixture-marker"))
     assert chain.seen[0][1] is provider.principal
     assert factory.calls[0]["principal"] is provider.principal
     assert factory.calls[0]["tenant_ref"].id == chain.tenant_id
@@ -152,7 +152,7 @@ async def test_no_credential_is_an_authentication_failure_and_stops_there() -> N
 async def test_an_unresolvable_tenant_stops_before_the_context_is_built() -> None:
     boundary, _, _, factory = _boundary(chain=_Chain(tenant_id=None))
     with pytest.raises(TenantNotFound):
-        await boundary.establish(request=_request(authorization="Bearer token-value"))
+        await boundary.establish(request=_request(authorization="Bearer fixture-marker"))
     assert factory.calls == []
 
 
@@ -162,7 +162,7 @@ async def test_a_request_cannot_name_its_own_tenant_or_actor() -> None:
     context = await boundary.establish(
         request=RequestInfo(
             headers={
-                "authorization": "Bearer token-value",
+                "authorization": "Bearer fixture-marker",
                 "x-tenant-id": "22222222-2222-2222-2222-222222222222",
                 "x-user-id": "11111111-1111-1111-1111-111111111111",
             },
@@ -181,7 +181,7 @@ async def test_the_request_id_is_minted_and_the_callers_correlation_id_is_honour
     """The middleware's own policy, reused rather than re-decided at a second edge."""
     boundary, _, _, factory = _boundary()
     context = await boundary.establish(
-        request=_request(authorization="Bearer token-value", x_correlation_id="corr-from-caller")
+        request=_request(authorization="Bearer fixture-marker", x_correlation_id="corr-from-caller")
     )
     call = factory.calls[0]
     assert call["request_id"]
@@ -195,7 +195,7 @@ async def test_a_malformed_trace_context_contributes_nothing() -> None:
     rather than a guessed one — and it does not fail the request either."""
     boundary, _, chain, factory = _boundary()
     await boundary.establish(
-        request=_request(authorization="Bearer token-value", traceparent="not-a-traceparent")
+        request=_request(authorization="Bearer fixture-marker", traceparent="not-a-traceparent")
     )
     assert factory.calls[0]["trace_id"] is None
     assert len(chain.seen) == 1
@@ -206,7 +206,7 @@ async def test_a_well_formed_trace_context_is_carried_into_the_context() -> None
     trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
     await boundary.establish(
         request=_request(
-            authorization="Bearer token-value",
+            authorization="Bearer fixture-marker",
             traceparent=f"00-{trace_id}-00f067aa0ba902b7-01",
         )
     )

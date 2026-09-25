@@ -115,7 +115,7 @@ assumption.
 ## 3. Gate 2 — Secret scanning (`gitleaks`)
 
 **Covers.** Every commit in the repository's history (not just the working
-tree): all 155 commits / ~2.97 MB today. History scanning is deliberate — a
+tree): all 244 commits / ~4.14 MB at the phase-17 MCP work (155 commits / ~2.97 MB when this section was first written). History scanning is deliberate — a
 secret that was committed and later deleted is still exposed and still fails
 the gate. The checkout uses `fetch-depth: 0` so the full history is present.
 
@@ -148,6 +148,14 @@ INF scanned ~2965511 bytes (2.97 MB)
 INF no leaks found                       # exit 0
 ```
 
+Re-measured at the phase-17 MCP work, after the entry below was added:
+
+```text
+INF 244 commits scanned.
+INF scanned ~4143443 bytes (4.14 MB)
+INF no leaks found                       # exit 0
+```
+
 Negative test in both directions, using a scratch probe repository that
 contains (a) the reviewed fixture from `tests/unit/security/test_telemetry.py`
 and (b) a new, unreviewed GitHub-PAT-shaped value:
@@ -164,9 +172,17 @@ This proves the allowlist entries are *value-* and *path*-pinned: they do not
 disable a rule, a directory or a file, and a new secret anywhere — including
 inside an allowlisted file — still fails the gate.
 
-**Documented exceptions (§6):** 10 allowlist entries, all synthetic test
-fixtures, each pinned by exact path **and** exact value with
-`condition = "AND"`.
+**Documented exceptions:** 13 allowlist entries, counted from `.gitleaks.toml`
+at the phase-17 MCP work (the section previously said 10, which was already
+stale — two phase-9 historical fixtures had been added without updating it), each
+pinned by exact path **and** exact value with `condition = "AND"`. The newest
+(phase 17) is a *false positive* rather than a credential-shaped fixture — a two-argument fixture call
+(`authorization="Bearer …", x_correlation_id="…"`) whose matched span was the
+tail of the call, `x_correlation_id="`, which `generic-api-key` read as a value.
+The fixture itself was rewritten in the working tree to remove the
+credential-adjacent word; the entry pins the historical value, so the finding is
+allowlisted rather than the rule relaxed — a new value in that file, or that
+value anywhere else, is still reported.
 
 **Rejected alternative:** scanning the working tree (`gitleaks dir`). Measured
 locally: 35 findings, of which 25 come from `.venv/`, `__pycache__/` and

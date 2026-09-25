@@ -84,12 +84,19 @@ paths = ['''^tests/unit/security/test_telemetry\.py$''']
 regexTarget = "secret"
 regexes = ['''^abcdef1234567890$''']
 
-# Historical synthetic fixtures: these two values were committed (phase 9) as
+# Historical synthetic fixtures: these values were committed as
 # deliberately credential-shaped test data and have since been replaced in the
 # working tree by non-secret-shaped markers. The commits remain in history, so
 # the entries stay to keep the full-history scan honest about what they are.
 # Both pin the path AND the exact value: a different value in the same file, or
 # the same value anywhere else, is still reported.
+[[allowlists]]
+description = "synthetic fixture in tests/unit/test_mcp_boundary.py:184 (phase 17, rule: generic-api-key)"
+condition = "AND"
+paths = ['''^tests/unit/test_mcp_boundary\\.py$''']
+regexTarget = "secret"
+regexes = ['''^x_correlation_id="$''']
+
 [[allowlists]]
 description = "synthetic fixture in tests/unit/security/test_compliance_posture.py (phase 9, rule: github-pat)"
 condition = "AND"
