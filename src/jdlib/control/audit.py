@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jdlib.context import Principal, PrivilegeKind, current_tenant
@@ -128,6 +129,16 @@ class DatabaseAuditSink:
         correlation_id = correlation_id or ambient_correlation
         trace_id = trace_id or ambient_trace
         try:
+            if correlation_id:
+                # PostgreSQL's own record of this statement should name the request it is
+                # storing the evidence for. `set_config(..., true)` is the parameterised,
+                # transaction-scoped form of `SET LOCAL`: the log line, and a
+                # `pg_stat_activity` row while the write is in flight, carry the correlation
+                # id rather than the default client name (observability-validation §6.3).
+                await control.execute(
+                    text("SELECT set_config('application_name', :name, true)"),
+                    {"name": correlation_id},
+                )
             control.add(
                 PlatformAuditEvent(
                     action=action,

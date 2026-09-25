@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import sqlalchemy as sa
@@ -28,8 +29,12 @@ class ControlPlaneSession:
     async def flush(self) -> None:
         await self._session.flush()
 
-    async def execute(self, statement: sa.Executable) -> sa.Result[Any]:
-        return await self._session.execute(statement)
+    async def execute(
+        self, statement: sa.Executable, parameters: Mapping[str, Any] | None = None
+    ) -> sa.Result[Any]:
+        # Parameters are optional so every existing call keeps its shape; the audit sink is
+        # the caller that needs them (`set_config` for the transaction's `application_name`).
+        return await self._session.execute(statement, parameters or {})
 
     async def get(self, model: type[Any], entity_id: Any) -> Any | None:
         return await self._session.get(model, entity_id)

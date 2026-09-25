@@ -27,9 +27,13 @@ class _FakeSession:
     def __init__(self) -> None:
         self.added: list[object] = []
         self.committed = False
+        self.statements: list[tuple[str, dict[str, object]]] = []
 
     def add(self, obj: object) -> None:
         self.added.append(obj)
+
+    async def execute(self, statement: object, parameters: dict[str, object] | None = None) -> None:
+        self.statements.append((str(statement), dict(parameters or {})))
 
     async def flush(self) -> None:
         return None
@@ -39,6 +43,42 @@ class _FakeSession:
 
     async def close(self) -> None:
         return None
+
+
+async def test_database_sink_names_the_request_on_the_session_it_writes_from():
+    """The statement that writes a request's evidence names the request.
+
+    `observability-validation.md` §6.3 measured that nothing about the statement identified
+    the request: the pool carried the default client name, so PostgreSQL's own log line and
+    `pg_stat_activity` said nothing about who asked. The sink sets `application_name` for its
+    own transaction - `set_config(..., true)`, which is the parameterised, transaction-scoped
+    form of `SET LOCAL` - so the INSERT that stores the row carries the correlation id.
+    """
+    session = _FakeSession()
+    sink = DatabaseAuditSink(lambda: session)  # type: ignore[arg-type,return-value]
+
+    await sink.record(
+        action="security.AUTHZ_ALLOW",
+        tenant_id=None,
+        actor_id=uuid.uuid4(),
+        correlation_id="corr-1",
+    )
+
+    assert len(session.statements) == 1
+    statement, parameters = session.statements[0]
+    assert "set_config('application_name'" in statement
+    assert parameters == {"name": "corr-1"}
+
+
+async def test_database_sink_sets_no_session_name_without_a_request_id():
+    """A write with no request behind it (startup, a script) leaves the session name alone:
+    an invented id in PostgreSQL's log would be worse than none."""
+    session = _FakeSession()
+    sink = DatabaseAuditSink(lambda: session)  # type: ignore[arg-type,return-value]
+
+    await sink.record(action="tenant.created", tenant_id=None, actor_id=uuid.uuid4())
+
+    assert session.statements == []
 
 
 async def test_database_sink_infers_actor_type_from_actor_id():
