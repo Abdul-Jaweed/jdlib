@@ -37,6 +37,7 @@ from jdlib.errors import JdlibError, PermissionDenied
 from jdlib.integrations.mcp.boundary import McpSecurityBoundary
 from jdlib.integrations.mcp.errors import (
     McpArgumentsRefusedError,
+    McpResourceDefinitionError,
     McpTimeoutError,
     McpToolExecutionError,
 )
@@ -227,7 +228,7 @@ class McpInvoker:
             attributes={"security.operation": "mcp.resource"},
         ) as span:
             context = await self._boundary.establish(request=request)
-            resource: McpResource = self._resources.get(uri)
+            resource = self._registered_resource(uri)
             with security_context_scope(context), context_scope(context.require_tenant()):
                 if resource.capability:
                     await self._ask_resource(resource, span)
@@ -235,6 +236,20 @@ class McpInvoker:
                 self._record_resource(resource)
                 span.set_attribute("security.result", "ok")
                 return result
+
+    def _registered_resource(self, uri: str) -> McpResource:
+        """The resource at `uri`, or a named refusal.
+
+        The lookup answers `None` for an unknown URI, and reading an attribute off that is a
+        caller-supplied string reaching a crash rather than a refusal — the shape this surface
+        exists to refuse. `McpResourceDefinitionError` is the same error the registry raises for
+        an unknown tool, so one call and one resource fail the same way.
+        """
+        registry = self._resources if self._resources is not None else {}
+        resource: McpResource | None = registry.get(uri)
+        if resource is None:
+            raise McpResourceDefinitionError(f"no resource is registered at {uri}")
+        return resource
 
     async def _ask_resource(self, resource: McpResource, span: SecuritySpan) -> None:
         try:
