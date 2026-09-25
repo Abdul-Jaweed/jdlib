@@ -177,8 +177,8 @@ at the phase-17 MCP work (the section previously said 10, which was already
 stale — two phase-9 historical fixtures had been added without updating it), each
 pinned by exact path **and** exact value with `condition = "AND"`. The newest
 (phase 17) is a *false positive* rather than a credential-shaped fixture — a two-argument fixture call
-(`authorization="Bearer …", x_correlation_id="…"`) whose matched span was the
-tail of the call, `x_correlation_id="`, which `generic-api-key` read as a value.
+(`authorization="Bearer …", x_correlation_id="…"`) whose captured secret was the
+tail of the call, `x_correlation_id=`, which `generic-api-key` read as a value.
 The fixture itself was rewritten in the working tree to remove the
 credential-adjacent word; the entry pins the historical value, so the finding is
 allowlisted rather than the rule relaxed — a new value in that file, or that

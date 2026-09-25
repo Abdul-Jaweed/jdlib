@@ -93,9 +93,9 @@ regexes = ['''^abcdef1234567890$''']
 [[allowlists]]
 description = "synthetic fixture in tests/unit/test_mcp_boundary.py:184 (phase 17, rule: generic-api-key)"
 condition = "AND"
-paths = ['''^tests/unit/test_mcp_boundary\\.py$''']
+paths = ['''^tests/unit/test_mcp_boundary\.py$''']
 regexTarget = "secret"
-regexes = ['''^x_correlation_id="$''']
+regexes = ['''^x_correlation_id=$''']
 
 [[allowlists]]
 description = "synthetic fixture in tests/unit/security/test_compliance_posture.py (phase 9, rule: github-pat)"
