@@ -907,7 +907,7 @@ names the commit that fixed it.
 
 ### The documentation portal — the site builds, and the audit says what is missing (documentation directive §2–§5)
 
-Commit: `PENDING` (`docs(portal): the site builds, and the audit says what is missing`)
+Commit: `4a82eca` (`docs(portal): the site builds, and the audit says what is missing`)
 
 * **The site exists.** `mkdocs.yml` puts MkDocs Material over the existing `docs/` tree: search,
   Mermaid through `pymdownx.superfences`, admonitions, tabbed code and permalinked headings, with
@@ -949,4 +949,30 @@ Commit: `PENDING` (`docs(portal): the site builds, and the audit says what is mi
   from the repository root became docs-relative, two directory links became links to the file they
   resolve to, and the long-form reference's own table-of-contents anchor carried a double hyphen
   where the real slug collapses it.
+
+### The documentation portal — the architecture and integration sections (documentation directive §6–§8)
+
+Commit: `c9a0e4c` (`docs(portal): the architecture and the edges, in eighteen pages`)
+
+* **`docs/architecture/`** — eight pages over the existing flow pages: an overview that states the
+  four planes and the dependency rule, a high-level view (the request path, the stores, the operator
+  path) as a Mermaid flowchart, a component view that names every module in every package, a request
+  lifecycle with two sequence diagrams (HTTP and MCP) and the steps that *stop*, and four
+  plane-specific pages: data (control / placement / tenant / derived), security (the trust
+  boundaries and the enforcement points), reliability (the failure domains and the primitives) and
+  observability (the signals and the allow-list).
+* **`docs/integrations/`** — ten pages for the edges and the stores: FastAPI, MCP, the CLI, the pytest
+  kit, PostgreSQL, Neo4j, Redis, S3 and Cerbos, plus an overview that states the rule every
+  integration follows (it composes, it does not decide).
+* **The CLI page documents the surface that exists**, not the part of it the README mentions:
+  `tenant create|provision|list`, `db upgrade-control|upgrade-tenants`, `rls install|verify` and
+  `schema lint`, each with the command's own docstring behind the description.
+* **The claims are grounded.** The configuration table is `TenancyConfig` at this commit, the module
+  lists are the tree, the CLI table is the Typer commands, and the class names
+  (`PostgresConnector`, `S3ObjectStorage`, `RedisCache`, `CerbosPDP`, `Neo4jClient`, `GraphRepository`,
+  `RetryBudget`, `ConcurrencyGate`, `ShutdownCoordinator`, `SecurityMetrics`, `SecuritySpan`) are the
+  names in the source.
+* **`tests/unit/test_docs_portal.py` is now 329 checks**, and `mkdocs build --strict` passes with zero
+  warnings over the enlarged tree — the navigation, the links, the Mermaid fence types and the
+  regenerated inventory all hold.
 
