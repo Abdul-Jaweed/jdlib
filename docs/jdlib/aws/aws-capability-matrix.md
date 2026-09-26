@@ -24,14 +24,14 @@ with the reason recorded. `REJECT` — would duplicate or weaken an existing gua
 | --- | --- | --- | --- | --- | --- | --- |
 | Authentication | `Authenticator` (`authn/base.py`), `JwtTokenValidator` (`security/authn/jwt.py`) | ZITADEL (`security/authn/zitadel.py`) | Amazon Cognito | **ADAPTER** | P0 | **Implemented** — `security/authn/cognito.py` |
 | Application authorization | `PolicyDecisionPoint` (`authz/pdp.py`), `security/authz/interfaces.py` | Cerbos (`security/authz/cerbos.py`), `DefaultPDP` | Amazon Verified Permissions (Cedar) | **ADAPTER** | P0 | **Implemented** — `security/authz/verified_permissions.py` |
-| Secret resolution | `SecretProvider.resolve()` (`persistence/secrets.py`) | `MemorySecretProvider`, `EnvSecretProvider` | AWS Secrets Manager | **ADAPTER** | P0 | Planned — `persistence/secrets_manager.py` |
+| Secret resolution | `SecretProvider.resolve()` (`persistence/secrets.py`) | `MemorySecretProvider`, `EnvSecretProvider` | AWS Secrets Manager | **ADAPTER** | P0 | **Implemented** — `persistence/secrets_manager.py` |
 | Application audit sink | `SecurityEventSink` (`security/audit/`) | Postgres-backed sink | CloudWatch Logs | **OPTIONAL** | P2 | Planned — `security/audit/cloudwatch.py` |
 | Relational data | `persistence/` + isolation strategies | PostgreSQL (verified against containers and a live lab) | RDS for PostgreSQL, Aurora PostgreSQL | **ADOPT** | P1 | Documented — deployment target, no adapter |
 | Cache | `CacheProvider` (`caching/protocol.py`) | Redis (`caching/redis.py`) | ElastiCache (Valkey / Redis OSS) | **ADOPT** | P1 | Documented — same adapter, two caveats |
 | Object storage | `ObjectStorageProvider` (`storage/provider.py`) | S3 (`storage/s3.py`, verified against MinIO) | Amazon S3 | **ADOPT** | P1 | Documented — drop `endpoint_url`, keep prefix isolation |
 | Observability | `security/tracing.py`, `security/telemetry.py` (OpenTelemetry) | OTel collector | CloudWatch, X-Ray via ADOT | **ADOPT** | P1 | Documented — OTLP first, no AWS calls in core |
 | Graph | `GraphClient` / `GraphRunner` (`graph/client.py`) | Neo4j over Bolt | Amazon Neptune (Bolt + openCypher subset) | **DEFER** | P2 | Evaluated — capability differences documented, adapter not justified |
-| Configuration | *(none — only `TenancyConfig`, pydantic-settings)* | environment variables | SSM Parameter Store | **DEFER** | P2 | No `ConfigurationProvider` abstraction exists; section 29 forbids inventing one |
+| Configuration | *(none — only `TenancyConfig`, pydantic-settings)* | environment variables | SSM Parameter Store | **DEFER** | P2 | No `ConfigurationProvider` abstraction exists and section 29 forbids inventing one — [the verdict](parameter-store.md) records why, and why it is not smuggled in as a `SecretProvider` |
 | Edge gateway | `security/gateway/adapters.py` | Kong, Tyk | Amazon API Gateway | **INFRASTRUCTURE_ONLY** | P1 | Documented — edge control, not the application boundary |
 | Messaging | *(none)* | *(none)* | SQS, SNS, EventBridge | **NOT_APPLICABLE** | — | JDLib has no queue or publisher capability to adapt |
 | AWS resource authorization | *(none)* | *(none)* | IAM | **INFRASTRUCTURE_ONLY** | P1 | Documented boundary — IAM authorizes AWS resources, not application data |

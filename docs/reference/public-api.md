@@ -145,6 +145,16 @@ surface per namespace, with the test files that hold it.
 | `request_from_http` | `request_from_http() -> 'RequestInfo'` | The request the chain authenticates, read from the HTTP request fastmcp is serving. |
 | `tenant_resource` | `tenant_resource() -> 'McpResource'` | The caller's own tenancy, described from the ambient context and nowhere else. |
 
+## `jdlib.persistence`
+
+per-module surface
+
+| Name | Signature | Summary |
+|---|---|---|
+| `secrets_manager.SecretsManagerClient` | `SecretsManagerClient(*args, **kwargs)` | The one client method this adapter needs, so any duck-typed client works. |
+| `secrets_manager.SecretsManagerConfig` | `SecretsManagerConfig(/, **data: 'Any') -> 'None'` | Secrets Manager settings (AWS directive §11). |
+| `secrets_manager.SecretsManagerSecretProvider` | `SecretsManagerSecretProvider(*, client: 'SecretsManagerClient', config: 'SecretsManagerConfig | None' = None, clock: 'Clock | None' = None) -> 'None'` | Resolves secrets from AWS Secrets Manager, with a bounded cache. |
+
 ## `jdlib.query`
 
 `__all__` (21 names) · documented in [query](../jdlib/capabilities/query.md)
