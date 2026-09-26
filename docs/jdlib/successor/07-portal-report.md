@@ -70,13 +70,21 @@ Getting Started -> Concepts -> Architecture -> Features -> Integrations -> Guide
 
 ## What is open, and where it is recorded
 
-* **One matrix cell is empty.** No test file names `jdlib.observability`; the signals are covered
-  through `jdlib.security.telemetry` and `jdlib.security.tracing`. The
-  [matrix](../../development/documentation-test-matrix.md) prints the gap and its explanation instead of
-  a tick.
-* **Mermaid syntax is not validated by the build.** Fences are checked for balance, type and
-  content; a syntax error inside a valid fence renders in the browser, not in the gate. Recorded in
+* **The matrix has no empty cell left.** Every area earns its validated tick. The observability row
+  named `jdlib.observability`, a module that never existed, which held the cell empty and hid the
+  test that does assert the span allow-list; the namespace is now `jdlib.security.tracing`, earned
+  by `tests/unit/test_boundary_spans.py` and `tests/infra/test_otel_infra.py`.
+* **Mermaid syntax is checked structurally, not parsed.** Fences are checked for balance, type,
+  content, and for a sequence keyword in a flowchart or an unclosed `subgraph`; a full parse is not
+  run, so a diagram can still be wrong in a way only the renderer sees. Recorded in
   [how the portal is validated](../../development/portal-validation.md).
+* **A rare resource warning, not reproduced.** Running the whole suite against every live lab
+  (example and infra) failed once in nine runs on an unraisable `ResourceWarning`: an asyncpg
+  connection to the example database collected while it was still open, which `-W error` turns into
+  a failure. It has not reproduced since -- not in three further all-live gates, not in a forced
+  `gc.collect()` at session end over each layer, and not in the e2e harness, which already closes
+  the subprocess pipe deliberately. The asyncio-debug traceback (which names the connection's
+  origin) is the next step if it returns; it is recorded here rather than left as a mystery flake.
 * **The rendered site is not screenshotted.** The gate proves it builds and the links resolve; it
   does not judge appearance.
 * **`knowledge_base/` stays archived.** It is a snapshot of an earlier commit and is deliberately

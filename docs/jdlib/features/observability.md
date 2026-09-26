@@ -25,6 +25,7 @@ exports:
 example:
   - examples/enterprise/app/main.py
 test_files:
+  - tests/unit/test_boundary_spans.py
   - tests/unit/test_reliability_breaker.py
   - tests/unit/test_reliability_concurrency.py
   - tests/unit/test_graph_observability.py

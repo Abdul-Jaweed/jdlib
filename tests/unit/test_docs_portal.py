@@ -187,6 +187,44 @@ def test_every_mermaid_fence_is_a_type_the_renderer_draws(page: Path) -> None:
     assert not empty, f"{where} has an empty Mermaid fence"
 
 
+@pytest.mark.parametrize("page", _published_pages(), ids=lambda p: p.relative_to(DOCS).as_posix())
+def test_mermaid_bodies_do_not_contradict_their_diagram_type(page: Path) -> None:
+    """Structural checks on the body, where a mismatch renders as a broken diagram.
+
+    This is not a Mermaid parser: it catches the two mistakes that survive review because the
+    fence and the first line look right -- sequence keywords in a flowchart (and the reverse),
+    and a `subgraph` that is never closed. Anything subtler still renders in a browser, not here.
+    """
+
+    text = page.read_text(encoding="utf-8")
+    where = page.relative_to(DOCS).as_posix()
+    problems: list[str] = []
+
+    for block in MERMAID.findall(text):
+        lines = [line.strip() for line in block.strip().splitlines()]
+        if not lines:
+            continue
+        kind = lines[0].split()[0]
+        body = lines[1:]
+
+        if kind == "sequenceDiagram":
+            stray = [line for line in body if line.startswith("subgraph")]
+            if stray:
+                problems.append(f"sequence diagram with a subgraph: {stray[0][:30]}")
+        else:
+            stray = [line for line in body if line.split(" ")[0] in {"participant", "actor"}]
+            if stray:
+                problems.append(f"{kind} with a sequence keyword: {stray[0][:30]}")
+
+        if kind in {"graph", "flowchart"}:
+            opened = sum(1 for line in body if line.startswith("subgraph"))
+            closed = sum(1 for line in body if line == "end")
+            if opened != closed:
+                problems.append(f"{opened} subgraph(s) but {closed} end(s)")
+
+    assert not problems, f"{where} has diagrams that will not render: {problems}"
+
+
 def _inventory_module():
     generator = ROOT / "scripts" / "docs-inventory.py"
     spec = importlib.util.spec_from_file_location("docs_inventory", generator)

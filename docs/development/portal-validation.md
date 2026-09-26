@@ -26,7 +26,7 @@ The strict build is not a formality. It caught nineteen real problems the first 
 |---|---|---|
 | `scripts/api-reference.py --check` | the generated reference against the live public surface: 24 namespaces, 257 exported names, their signatures and their own docstrings | both gates, plus two unit tests |
 | `scripts/docs-inventory.py --check` | the audit page against the tree: 34 namespaces, their surface, their pages, their tests | both gates, plus the documentation test |
-| `scripts/docs-matrix.py --check` | the documentation test matrix against the tree: 14 areas, 55 of 56 cells earned | both gates, plus the documentation test |
+| `scripts/docs-matrix.py --check` | the documentation test matrix against the tree: 14 areas, 56 of 56 cells earned | both gates, plus the documentation test |
 | `scripts/feature-matrix.py --check` | the feature and coverage matrices against the example's source | both gates |
 | `tests/unit/test_example_docs.py` | every `file:line` and every symbol a page cites exists at that line | the unit layer |
 | `tests/unit/test_docs_portal.py` | navigation, links, page inventory, Mermaid fences, and the generated pages | the unit layer |
@@ -50,9 +50,11 @@ check, not by reading the output:
 
 ## What is deliberately not checked
 
-* **Mermaid syntax beyond the opening keyword.** The fences are checked for balance, for a known
-  diagram type, and for content; a syntax error inside a valid fence is rendered by the browser,
-  not caught by the build. A diagram that renders wrongly is a documentation bug a reviewer catches.
+* **Mermaid syntax, line by line.** The fences are checked for balance, for a known diagram type,
+  for content, and for the two structural mistakes that survive review -- a sequence keyword in a
+  flowchart (or a `subgraph` in a sequence diagram) and an unclosed `subgraph`. That is not a
+  parser: a diagram can still be wrong in a way only the renderer sees, so a diagram that renders
+  wrongly remains a documentation bug a reviewer catches.
 * **The rendered appearance.** The gate proves the site builds and the links resolve; it does not
   take a screenshot. Typography and theme regressions are visible in review, not in CI.
 * **Prose accuracy.** A sentence can be wrong and still pass every check above. The citation checks

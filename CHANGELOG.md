@@ -1037,3 +1037,37 @@ Commit: `8af98b0` (`docs(portal): the matrix, the review, and the report`)
 * **`scripts/docs-matrix.py --check` runs in both gates**, and the Mermaid check now also fails on
   an unclosed or empty fence rather than only on an unknown diagram type.
 
+### The last empty cell, the diagram bodies, and the live labs (documentation directive §34–§40, closed)
+
+Commit: `HEAD` (`docs(portal): the matrix's last cell, and the checks behind it`)
+
+* **The matrix's empty cell was a wrong namespace, not a missing test.** `Observability`'s row named
+  `jdlib.observability`, a module that has never existed in this tree; that held the validated column
+  empty and hid the test that does assert the span allow-list. The area's real surface is
+  `jdlib.security.tracing` (with `jdlib.security.telemetry` and `reliability/` beside it), which
+  `tests/unit/test_boundary_spans.py` imports and asserts `FORBIDDEN_SPAN_ATTRIBUTES` against, and
+  which `tests/infra/test_otel_infra.py` exercises against a live collector. The row is corrected,
+  the page's front-matter now lists the test that asserts its own security claim, and the matrix
+  reads **14 areas, 56 of 56 cells earned** — no dash, no note explaining a dash.
+* **Mermaid bodies are now checked, not only their fences.** A second documentation test fails on
+  the two mistakes that survive review because the fence and the first line look right: a sequence
+  keyword (`participant`, `actor`) in a flowchart or a `subgraph` in a sequence diagram, and a
+  `subgraph` that is never closed. It is a structural check, not a parser, and
+  `docs/development/portal-validation.md` says exactly that.
+* **The infrastructure layer runs live: 44 tests, no skips.** `docker compose -f
+  tests/infra/docker-compose.yml up -d cerbos neo4j otel-collector zitadel`, then the runbook's
+  environment (`tests/infra/README.md`). The ZITADEL service advertises `localhost` as its
+  ExternalDomain, so `JDLIB_INFRA_ZITADEL_ISSUER=http://localhost:8080` — pointing the suite at a
+  ZITADEL that advertises something else fails two of the four tests, correctly, because the
+  discovery document and the derived endpoints disagree.
+* **The whole suite against every lab at once: 2704 passed, 8 skipped.** The remaining skips are by
+  design: the e2e shutdown assertion that only runs on POSIX (Windows has no `SIGTERM`, so the exit
+  status says nothing about the shutdown path) and the no-op front-matter parametrisations. The
+  service-driven skips are gone because the services are up.
+* **One flake recorded rather than hidden.** That all-live run failed once (of nine) on an unraisable
+  `ResourceWarning` — an asyncpg connection to the example database collected while still open, which
+  the gate's `-W error` turns into a failure. It has not reproduced since: not in three further
+  all-live gates, not in a forced `gc.collect()` at session end over the example, infra, integration
+  and e2e layers separately or together. The asyncio-debug traceback is the next step if it returns,
+  and `docs/jdlib/successor/07-portal-report.md` records it in those words.
+

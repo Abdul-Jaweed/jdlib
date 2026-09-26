@@ -89,8 +89,13 @@ AREAS: dict[str, tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]] 
         ("architecture/reliability-architecture.md",),
     ),
     "Observability": (
-        "jdlib.observability",
-        ("jdlib.observability", "telemetry", "tracing"),
+        # The feature is documented as one area but implemented across `security/tracing.py`
+        # (spans, ids, the allow-list), `security/telemetry.py` (the emitter seam) and
+        # `reliability/`. `jdlib.observability` was never a module: naming it here made the
+        # validated column permanently empty and hid the test that does assert the allow-list
+        # (`tests/unit/test_boundary_spans.py`, which imports this namespace).
+        "jdlib.security.tracing",
+        ("jdlib.security.tracing", "telemetry", "tracing"),
         ("jdlib/features/observability.md", "observability/overview.md"),
         ("architecture/observability-architecture.md",),
     ),
@@ -116,12 +121,8 @@ AREAS: dict[str, tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]] 
 
 
 #: Where a column is honestly empty, say what stands in its place rather than leaving a bare dash.
-NOTES: dict[str, str] = {
-    "Observability": (
-        "no test file names `jdlib.observability`; the signals are covered through "
-        "`jdlib.security.telemetry` and `jdlib.security.tracing`, which do have tests"
-    ),
-}
+#: (No column is empty today; the mechanism stays so the next honest gap can be recorded, not hidden.)
+NOTES: dict[str, str] = {}
 
 
 def first_existing(candidates: tuple[str, ...]) -> str | None:

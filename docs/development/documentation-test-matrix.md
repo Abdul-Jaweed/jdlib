@@ -25,7 +25,7 @@ name the file each tick stands on, so a row can be audited without trusting a sc
 | MCP | ✓ | ✓ | ✓ | ✓ |
 | Audit | ✓ | ✓ | ✓ | ✓ |
 | Reliability | ✓ | ✓ | ✓ | ✓ |
-| Observability | ✓ | ✓ | ✓ | - |
+| Observability | ✓ | ✓ | ✓ | ✓ |
 | Errors | ✓ | ✓ | ✓ | ✓ |
 | Health | ✓ | ✓ | ✓ | ✓ |
 | Operations | ✓ | ✓ | ✓ | ✓ |
@@ -42,7 +42,7 @@ name the file each tick stands on, so a row can be audited without trusting a sc
 * **MCP** - `jdlib.integrations.mcp` - documentation: jdlib/features/mcp.md; example: examples/enterprise/app/mcp/server.py; diagram: jdlib/features/mcp.md; validated: tests/unit/test_mcp_adversarial.py (+ the documentation test).
 * **Audit** - `jdlib.security.audit` - documentation: jdlib/features/audit.md; example: examples/enterprise/app/mcp/server.py; diagram: architecture/security-architecture.md; validated: tests/integration/test_audit_isolation_export.py (+ the documentation test).
 * **Reliability** - `jdlib.reliability` - documentation: reliability/overview.md; example: examples/enterprise/app/configuration/settings.py; diagram: architecture/reliability-architecture.md; validated: tests/integration/test_error_envelope_contract.py (+ the documentation test).
-* **Observability** - `jdlib.observability` - documentation: jdlib/features/observability.md; example: examples/enterprise/README.md; diagram: architecture/observability-architecture.md; validated: no test - no test file names `jdlib.observability`; the signals are covered through `jdlib.security.telemetry` and `jdlib.security.tracing`, which do have tests.
+* **Observability** - `jdlib.security.tracing` - documentation: jdlib/features/observability.md; example: examples/enterprise/README.md; diagram: architecture/observability-architecture.md; validated: tests/infra/test_otel_infra.py (+ the documentation test).
 * **Errors** - `jdlib.security.errors` - documentation: reference/error-codes.md; example: examples/enterprise/tests/unit/test_app.py; diagram: architecture/request-lifecycle.md; validated: tests/unit/security/test_authz_pep.py (+ the documentation test).
 * **Health** - `jdlib.integrations.fastapi` - documentation: operations/health-and-readiness.md; example: examples/enterprise/README.md; diagram: architecture/request-lifecycle.md; validated: tests/integration/test_error_envelope_contract.py (+ the documentation test).
 * **Operations** - `jdlib.integrations.cli` - documentation: operations/deployment.md; example: examples/enterprise/README.md; diagram: operations/deployment.md; validated: tests/integration/test_cli_integration.py (+ the documentation test).
