@@ -121,7 +121,8 @@ AREAS: dict[str, tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]] 
 
 
 #: Where a column is honestly empty, say what stands in its place rather than leaving a bare dash.
-#: (No column is empty today; the mechanism stays so the next honest gap can be recorded, not hidden.)
+#: (No column is empty today; the mechanism stays so the next honest gap can be recorded, not
+#: hidden.)
 NOTES: dict[str, str] = {}
 
 
