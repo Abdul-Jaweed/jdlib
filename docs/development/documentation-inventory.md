@@ -23,7 +23,7 @@ rather than inferred from a grep.
 
 | Namespace | Public surface | Classification | Where it is documented | Test files |
 |---|---|---|---|---:|
-| `jdlib` | `__all__` (13) | DOCUMENTED | `docs/jdlib/architecture.md`, `docs/getting-started/configuration.md`, `docs/jdlib/security-model.md` | 160 |
+| `jdlib` | `__all__` (13) | DOCUMENTED | `docs/jdlib/architecture.md`, `docs/getting-started/configuration.md`, `docs/jdlib/security-model.md` | 161 |
 | `jdlib.authn` | no declared exports | DOCUMENTED | `docs/jdlib/authentication.md`, `docs/jdlib/features/authentication.md` | 15 |
 | `jdlib.authz` | no declared exports | DOCUMENTED | `docs/jdlib/authorization.md`, `docs/jdlib/features/authorization.md` | 15 |
 | `jdlib.caching` | `__all__` (11) | DOCUMENTED | `docs/jdlib/capabilities/caching.md`, `docs/jdlib/features/caching.md` | 6 |
@@ -38,8 +38,8 @@ rather than inferred from a grep.
 | `jdlib.query` | `__all__` (21) | DOCUMENTED | `docs/jdlib/capabilities/query.md` | 4 |
 | `jdlib.reliability` | `__all__` (11) | DOCUMENTED | `docs/reliability/overview.md`, `docs/reliability/circuit-breakers.md`, `docs/reliability/failure-modes.md` | 11 |
 | `jdlib.resources` | `__all__` (4) | DOCUMENTED | `docs/jdlib/capabilities/resources.md` | 6 |
-| `jdlib.security` | `__all__` (38) | DOCUMENTED | `docs/jdlib/security-model.md`, `docs/security/security-core.md` | 65 |
-| `jdlib.security.audit` | `__all__` (26) | DOCUMENTED | `docs/jdlib/features/audit.md` | 16 |
+| `jdlib.security` | `__all__` (38) | DOCUMENTED | `docs/jdlib/security-model.md`, `docs/security/security-core.md` | 66 |
+| `jdlib.security.audit` | `__all__` (26) | DOCUMENTED | `docs/jdlib/features/audit.md` | 17 |
 | `jdlib.security.authn` | `__all__` (16) | DOCUMENTED | `docs/security/authentication-hardening.md` | 9 |
 | `jdlib.security.authz` | `__all__` (8) | DOCUMENTED | `docs/security/authorization-hardening.md` | 8 |
 | `jdlib.security.compliance` | `__all__` (22) | DOCUMENTED | `docs/compliance/README.md` | 4 |

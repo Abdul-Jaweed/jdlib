@@ -195,6 +195,11 @@ nav:
           - Cache (ElastiCache): jdlib/aws/elasticache.md
           - Object storage (S3): jdlib/aws/s3.md
           - Messaging (SQS / SNS / EventBridge): jdlib/aws/messaging.md
+          - Audit (CloudWatch Logs): jdlib/aws/audit.md
+          - Observability: jdlib/aws/observability.md
+          - Health and dependency checks: jdlib/aws/health.md
+          - The IAM boundary: jdlib/aws/iam.md
+          - The AWS security model: jdlib/aws/security-model.md
           - Research sources: jdlib/aws/research-sources.md
       - Request and security flows:
           - The security flow, step by step: jdlib/architecture/security-flow.md

@@ -25,21 +25,21 @@ with the reason recorded. `REJECT` — would duplicate or weaken an existing gua
 | Authentication | `Authenticator` (`authn/base.py`), `JwtTokenValidator` (`security/authn/jwt.py`) | ZITADEL (`security/authn/zitadel.py`) | Amazon Cognito | **ADAPTER** | P0 | **Implemented** — `security/authn/cognito.py` |
 | Application authorization | `PolicyDecisionPoint` (`authz/pdp.py`), `security/authz/interfaces.py` | Cerbos (`security/authz/cerbos.py`), `DefaultPDP` | Amazon Verified Permissions (Cedar) | **ADAPTER** | P0 | **Implemented** — `security/authz/verified_permissions.py` |
 | Secret resolution | `SecretProvider.resolve()` (`persistence/secrets.py`) | `MemorySecretProvider`, `EnvSecretProvider` | AWS Secrets Manager | **ADAPTER** | P0 | **Implemented** — `persistence/secrets_manager.py` |
-| Application audit sink | `SecurityEventSink` (`security/audit/`) | Postgres-backed sink | CloudWatch Logs | **OPTIONAL** | P2 | Planned — `security/audit/cloudwatch.py` |
+| Application audit sink | `SecurityEventSink` (`security/audit/`) | Postgres-backed sink | CloudWatch Logs | **OPTIONAL** | P2 | **Implemented** — `security/audit/cloudwatch.py`; CloudTrail is not this, and [the page](audit.md) says why |
 | Relational data | `persistence/` + isolation strategies | PostgreSQL (verified against containers and a live lab) | RDS for PostgreSQL, Aurora PostgreSQL | **ADOPT** | P1 | **Documented** — [the deployment story](rds-aurora.md); the existing PostgreSQL support is the adapter |
 | Cache | `CacheProvider` (`caching/protocol.py`) | Redis (`caching/redis.py`) | ElastiCache (Valkey / Redis OSS) | **ADOPT** | P1 | **Documented** — [adopt as-is](elasticache.md), with two named limits: cluster mode and IAM authentication |
 | Object storage | `ObjectStorageProvider` (`storage/provider.py`) | S3 (`storage/s3.py`, verified against MinIO) | Amazon S3 | **ADOPT** | P1 | **Documented** — [adopt as-is](s3.md); omit `endpoint_url`, and know that a tenant prefix is a convention, not a control |
-| Observability | `security/tracing.py`, `security/telemetry.py` (OpenTelemetry) | OTel collector | CloudWatch, X-Ray via ADOT | **ADOPT** | P1 | Documented — OTLP first, no AWS calls in core |
+| Observability | `security/tracing.py`, `security/telemetry.py` (OpenTelemetry) | OTel collector | CloudWatch, X-Ray via ADOT | **ADOPT** | P1 | **Documented** — [OTLP first](observability.md), AWS through the collector; no AWS SDK calls in core |
 | Graph | `GraphClient` / `GraphRunner` (`graph/client.py`) | Neo4j over Bolt | Amazon Neptune (Bolt + openCypher subset) | **DEFER** | P2 | **Evaluated** — [capability differences and the DEFER reason](neptune.md); the tenancy model does not block it, the Cypher subset does |
 | Configuration | *(none — only `TenancyConfig`, pydantic-settings)* | environment variables | SSM Parameter Store | **DEFER** | P2 | No `ConfigurationProvider` abstraction exists and section 29 forbids inventing one — [the verdict](parameter-store.md) records why, and why it is not smuggled in as a `SecretProvider` |
 | Edge gateway | `security/gateway/adapters.py` | Kong, Tyk | Amazon API Gateway | **INFRASTRUCTURE_ONLY** | P1 | **Documented** — [the edge page](api-gateway.md) and [the comparison](gateway-comparison.md); no adapter, because API Gateway signs no identity envelope a backend can verify |
 | Messaging | *(none)* | *(none)* | SQS, SNS, EventBridge | **NOT_APPLICABLE** | — | **Documented** — [why it is not applicable](messaging.md), and what a deployment must handle itself |
-| AWS resource authorization | *(none)* | *(none)* | IAM | **INFRASTRUCTURE_ONLY** | P1 | Documented boundary — IAM authorizes AWS resources, not application data |
+| AWS resource authorization | *(none)* | *(none)* | IAM | **INFRASTRUCTURE_ONLY** | P1 | **Documented** — [the boundary](iam.md); an IAM policy is not a tenant permission model |
 | MCP gateway | `integrations/mcp/` (FastMCP) | FastMCP, local | Bedrock AgentCore Gateway, API Gateway stages | **OPTIONAL** | P2 | Documented — AgentCore "authenticate only" keeps JDLib the decision point |
 | Hosting and edge | *(none)* | *(none)* | ECS/Fargate, ECR, Lambda, CloudFront, WAF | **INFRASTRUCTURE_ONLY** | — | Deployment topology; never a JDLib contract |
 | Control-plane audit | *(none)* | *(none)* | AWS CloudTrail | **INFRASTRUCTURE_ONLY** | — | Complements the application audit trail; never replaces it |
 | Session and token state | *(none)* | *(none)* | Amazon DynamoDB | **INFRASTRUCTURE_ONLY** | — | Part of the AWS reference MCP architecture's auth service |
-| Health and readiness | `/readyz` composition (`integrations/fastapi`) | — | all of the above | **ADOPT** | P2 | Documented — liveness must not depend on every dependency |
+| Health and readiness | `/readyz` composition (`integrations/fastapi`) | — | all of the above | **ADOPT** | P2 | **Documented** — [liveness versus readiness](health.md); a PDP outage denies, it does not unready the fleet |
 
 ## Why the two `ADAPTER` rows are the only ones
 
