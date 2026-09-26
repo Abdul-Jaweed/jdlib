@@ -1039,7 +1039,7 @@ Commit: `8af98b0` (`docs(portal): the matrix, the review, and the report`)
 
 ### The last empty cell, the diagram bodies, and the live labs (documentation directive §34–§40, closed)
 
-Commit: `HEAD` (`docs(portal): the matrix's last cell, and the checks behind it`)
+Commit: `6696430` (`docs(portal): the matrix's last cell, and the checks behind it`)
 
 * **The matrix's empty cell was a wrong namespace, not a missing test.** `Observability`'s row named
   `jdlib.observability`, a module that has never existed in this tree; that held the validated column
