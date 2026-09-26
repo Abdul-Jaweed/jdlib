@@ -59,6 +59,33 @@ A `McpTool` declares its name, schema, capability and handler; `McpToolRegistry`
 
 ## Architecture
 
+The chain, in the order the sentences above happen:
+
+```mermaid
+sequenceDiagram
+    participant Client as MCP client
+    participant Server as build_mcp_server
+    participant Boundary as McpSecurityBoundary
+    participant Invoker as McpInvoker
+    participant Tool as the declared handler
+    participant Audit as the audit emitter
+
+    Client->>Server: tools/call { name, arguments }
+    Server->>Boundary: authenticate the request
+    Boundary->>Boundary: resolve the tenant, build the SecurityContext
+    Boundary->>Invoker: invoke(name, arguments, context)
+    Invoker->>Invoker: authorize the declared capability
+    alt the capability is not granted, or an argument names an identity
+        Invoker->>Audit: the refusal, as a decision
+        Invoker-->>Client: refused, with nothing about the resource
+    else granted
+        Invoker->>Tool: run inside the context scope
+        Tool-->>Invoker: the result
+        Invoker->>Audit: the outcome
+        Invoker-->>Client: the result
+    end
+```
+
 `integrations/mcp/tools.py` (declaration and registry), `boundary.py` (identity), `invocation.py` (the chain), `server.py` (`build_mcp_server`), `graph_tools.py` and the resources (the library's own tools). The application supplies the collaborators, not the policy.
 
 ## Example

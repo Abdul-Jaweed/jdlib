@@ -162,12 +162,22 @@ def test_a_pages_relative_links_resolve(page: Path) -> None:
 @pytest.mark.parametrize("page", _published_pages(), ids=lambda p: p.relative_to(DOCS).as_posix())
 def test_every_mermaid_fence_is_a_type_the_renderer_draws(page: Path) -> None:
     text = page.read_text(encoding="utf-8")
+    where = page.relative_to(DOCS).as_posix()
     wrong = []
     for block in MERMAID.findall(text):
         first = block.strip().splitlines()[0].strip() if block.strip() else ""
         if not any(first.startswith(name) for name in MERMAID_TYPES):
             wrong.append(first[:40])
-    assert not wrong, f"{page.relative_to(DOCS).as_posix()} has unrenderable diagrams: {wrong}"
+    assert not wrong, f"{where} has unrenderable diagrams: {wrong}"
+
+    # the regex above needs a closing fence to match at all, so an unclosed fence is caught here;
+    # a fence with nothing between the markers would render as an empty box, not a diagram
+    openings = text.count("```mermaid")
+    closings = len(re.findall(r"^```\s*$", text, re.MULTILINE))
+    assert openings == len(MERMAID.findall(text)), f"{where} has an unclosed Mermaid fence"
+    assert openings * 2 <= closings + openings, f"{where} has an unbalanced code fence"
+    empty = [block for block in MERMAID.findall(text) if not block.strip()]
+    assert not empty, f"{where} has an empty Mermaid fence"
 
 
 def _inventory_module():

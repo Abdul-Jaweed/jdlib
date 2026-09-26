@@ -144,6 +144,33 @@ nav:
           - The observability flow: jdlib/architecture/observability-flow.md
       - The example application's architecture: jdlib/architecture/example-architecture.md
       - The long-form reference: architecture/long-form-reference.md
+  - Features:
+      - Overview: jdlib/features/README.md
+      - Authentication: jdlib/features/authentication.md
+      - Authorization: jdlib/features/authorization.md
+      - Tenancy: jdlib/features/tenancy.md
+      - Resource management: jdlib/features/resource-management.md
+      - Query system: jdlib/features/query-system.md
+      - Credentials: jdlib/features/credentials.md
+      - Caching: jdlib/features/caching.md
+      - Storage: jdlib/features/storage.md
+      - Connectors: jdlib/features/connectors.md
+      - Graph: jdlib/features/graph.md
+      - MCP: jdlib/features/mcp.md
+      - Background jobs: jdlib/features/jobs.md
+      - Audit: jdlib/features/audit.md
+      - Observability and reliability: jdlib/features/observability.md
+  - Capabilities:
+      - Overview: jdlib/capabilities/README.md
+      - Credentials: jdlib/capabilities/credentials.md
+      - Caching: jdlib/capabilities/caching.md
+      - Resources: jdlib/capabilities/resources.md
+      - Connectors: jdlib/capabilities/connectors.md
+      - Query: jdlib/capabilities/query.md
+      - Storage: jdlib/capabilities/storage.md
+      - Jobs: jdlib/capabilities/jobs.md
+      - Graph: jdlib/capabilities/graph.md
+      - MCP: jdlib/capabilities/mcp.md
   - Integrations:
       - Overview: integrations/overview.md
       - FastAPI: integrations/fastapi.md
@@ -173,33 +200,6 @@ nav:
       - Add a cache: guides/add-a-cache.md
       - Add a migration: guides/add-a-migration.md
       - Test your integration: guides/test-your-integration.md
-  - Features:
-      - Overview: jdlib/features/README.md
-      - Authentication: jdlib/features/authentication.md
-      - Authorization: jdlib/features/authorization.md
-      - Tenancy: jdlib/features/tenancy.md
-      - Resource management: jdlib/features/resource-management.md
-      - Query system: jdlib/features/query-system.md
-      - Credentials: jdlib/features/credentials.md
-      - Caching: jdlib/features/caching.md
-      - Storage: jdlib/features/storage.md
-      - Connectors: jdlib/features/connectors.md
-      - Graph: jdlib/features/graph.md
-      - MCP: jdlib/features/mcp.md
-      - Background jobs: jdlib/features/jobs.md
-      - Audit: jdlib/features/audit.md
-      - Observability and reliability: jdlib/features/observability.md
-  - Capabilities:
-      - Overview: jdlib/capabilities/README.md
-      - Credentials: jdlib/capabilities/credentials.md
-      - Caching: jdlib/capabilities/caching.md
-      - Resources: jdlib/capabilities/resources.md
-      - Connectors: jdlib/capabilities/connectors.md
-      - Query: jdlib/capabilities/query.md
-      - Storage: jdlib/capabilities/storage.md
-      - Jobs: jdlib/capabilities/jobs.md
-      - Graph: jdlib/capabilities/graph.md
-      - MCP: jdlib/capabilities/mcp.md
   - Examples:
       - Overview: jdlib/examples/overview.md
       - Minimal example: jdlib/examples/minimal-example.md
@@ -238,12 +238,6 @@ nav:
       - Metrics: observability/metrics.md
       - Tracing: observability/tracing.md
       - Audit events: observability/audit-events.md
-  - Reference:
-      - Public API: reference/public-api.md
-      - Configuration: reference/configuration-reference.md
-      - Error codes: reference/error-codes.md
-      - CLI: reference/cli-reference.md
-      - Extension points: reference/extension-points.md
   - Operations:
       - Operations: operations/README.md
       - Deployment: operations/deployment.md
@@ -252,6 +246,20 @@ nav:
       - Incident response: operations/incident-response.md
       - Production checklist: operations/production-checklist.md
       - Production readiness: jdlib/production-readiness.md
+  - Reference:
+      - Public API: reference/public-api.md
+      - Configuration: reference/configuration-reference.md
+      - Error codes: reference/error-codes.md
+      - CLI: reference/cli-reference.md
+      - Extension points: reference/extension-points.md
+  - Development:
+      - Validation: development/portal-validation.md
+      - Test matrix: development/documentation-test-matrix.md
+      - Review: development/portal-review.md
+      - How this documentation works: development/documentation.md
+      - Documentation inventory: development/documentation-inventory.md
+      - Testing: development/testing.md
+      - Architecture decisions: development/architecture-decisions.md
   - Programme:
       - Overview: jdlib/successor/README.md
       - Current state: jdlib/successor/00-current-state.md
@@ -262,8 +270,4 @@ nav:
       - Roadmap: jdlib/successor/05-roadmap.md
       - Reliability inventory: jdlib/successor/06-reliability-inventory.md
       - Example application report: jdlib/successor/06-example-report.md
-  - Development:
-      - How this documentation works: development/documentation.md
-      - Documentation inventory: development/documentation-inventory.md
-      - Testing: development/testing.md
-      - Architecture decisions: development/architecture-decisions.md
+      - Portal report: jdlib/successor/07-portal-report.md

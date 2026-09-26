@@ -87,6 +87,7 @@ step "the generated documentation matches the tree"
 "$VENV_PY" scripts/feature-matrix.py --check
 "$VENV_PY" scripts/docs-inventory.py --check
 "$VENV_PY" scripts/api-reference.py --check
+"$VENV_PY" scripts/docs-matrix.py --check
 
 step "pytest -q (with coverage; integration skips cleanly without Docker)"
 set +e

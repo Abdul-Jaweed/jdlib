@@ -28,6 +28,7 @@ jobs:
       - run: python scripts/feature-matrix.py --check
       - run: python scripts/docs-inventory.py --check
       - run: python scripts/api-reference.py --check
+      - run: python scripts/docs-matrix.py --check
       # The documentation portal is validated here rather than in a job of its own: `--strict`
       # turns every configured warning (a broken link, a missing page, an unlisted page, a missing
       # anchor) into a failure, and the docs extra is small.

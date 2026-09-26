@@ -3,6 +3,23 @@
 The shape of a deployment, in the order the steps have to happen. The
 [operations authority](../operations/README.md) is the long form; this page is the sequence.
 
+The topology those steps produce:
+
+```mermaid
+flowchart TB
+    Client([Client]) --> Edge[The gateway: TLS, rate and size limits]
+    Edge --> IdP[Identity provider: OIDC discovery and JWKS]
+    Edge --> App[Application: FastAPI or MCP, one process per revision]
+    App --> Context[SecurityContext: the tenant and the identity, from the token]
+    Context --> PDP[A policy engine, or your own PDP]
+    App --> Control[(Control plane: tenants, policy, bindings, audit)]
+    App --> Tenant[(Tenant plane: the tenant's own tables)]
+    App --> Graph[(Graph plane: derived, and re-derivable)]
+    App --> Cache[(Cache: shared, never authoritative)]
+    App --> Store[(Object store: documents and blobs)]
+    App -.-> Collector[OTel collector: traces, metrics, audit export]
+```
+
 ## 1. Provision the infrastructure
 
 | Component | Why it is there | If it is missing |

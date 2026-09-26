@@ -500,8 +500,29 @@ what each covers, and which tools were evaluated and rejected.
 
 ## Documentation index
 
+The documentation is a **portal** - one MkDocs site over every authority page in this repository -
+and the pages below are its sources:
+
+```bash
+pip install -e ".[docs]"
+mkdocs serve          # http://127.0.0.1:8000
+mkdocs build --strict # the gate runs this: a broken link or a missing page fails the build
+```
+
 | Where | What |
 |---|---|
+| `mkdocs.yml`, `docs/index.md` | the portal: its configuration, its navigation, and the reading order it defines |
+| `docs/getting-started/` | install, configure, the first request, the mental model |
+| `docs/concepts/` | the ideas the rest of the site assumes |
+| `docs/architecture/`, `docs/jdlib/architecture/` | high level, components, data, security, request lifecycle, and the example's architecture |
+| `docs/features/` (`docs/jdlib/features/`) | one guide per mechanism, with the test that proves each claim |
+| `docs/integrations/` | FastAPI, the CLI, MCP, PostgreSQL, Neo4j, identity providers |
+| `docs/guides/` | ten task-shaped walkthroughs, each ending in a symptom-to-cause table |
+| `docs/reliability/`, `docs/observability/` | the primitives and the signals, with their failure modes |
+| `docs/operations/` | deployment, health, troubleshooting, incident response, the production checklist |
+| `docs/reference/` | configuration, error codes, the CLI, extension points, and the generated public API |
+| `docs/development/` | testing, decisions, the inventory and matrices (all generated), the review |
+| `docs/jdlib/successor/` | the successor programme: capability matrix, target architecture, adoption decisions, the roadmap, the example report, and the portal report |
 | `docs/jdlib/02`–`07` | the approved design documents: relational schema, isolation invariants, authorization model, tenant lifecycle, strategy matrix, implementation design |
 | `docs/jdlib/` (rest) | per-area reference: architecture, authentication, authorization, tenancy, query system, resource management, credentials, connectors, privileged access, security model, production readiness |
 | `docs/jdlib/capabilities/` | caching, connectors, credentials, jobs, query, resources, storage |
@@ -509,5 +530,5 @@ what each covers, and which tools were evaluated and rejected.
 | `docs/security/README.md` | the security-hardening programme: one document per phase, the adversarial review, the CI security gates, the compliance surface |
 | `docs/operations/`, `docs/compliance/` | runbooks, and the technical-control register with its own gaps |
 | `docs/architecture/long-form-reference.md` | the long-form technical reference |
-| `knowledge_base/` | orientation: module map, data flow, development guide, testing |
+| `knowledge_base/` | **archived**: a point-in-time snapshot of an earlier commit, kept for the audit trail and deliberately outside the portal |
 | `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` | contribution rules, what the library is responsible for and how to report a vulnerability, release notes |
