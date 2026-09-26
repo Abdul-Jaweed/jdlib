@@ -23,7 +23,7 @@ with the reason recorded. `REJECT` — would duplicate or weaken an existing gua
 | JDLib capability | JDLib interface | Existing provider | AWS provider | Adapter needed? | Priority | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | Authentication | `Authenticator` (`authn/base.py`), `JwtTokenValidator` (`security/authn/jwt.py`) | ZITADEL (`security/authn/zitadel.py`) | Amazon Cognito | **ADAPTER** | P0 | **Implemented** — `security/authn/cognito.py` |
-| Application authorization | `PolicyDecisionPoint` (`authz/pdp.py`), `security/authz/interfaces.py` | Cerbos (`security/authz/cerbos.py`), `DefaultPDP` | Amazon Verified Permissions (Cedar) | **ADAPTER** | P0 | Planned — design and mapping on [the page](authorization-verified-permissions.md) |
+| Application authorization | `PolicyDecisionPoint` (`authz/pdp.py`), `security/authz/interfaces.py` | Cerbos (`security/authz/cerbos.py`), `DefaultPDP` | Amazon Verified Permissions (Cedar) | **ADAPTER** | P0 | **Implemented** — `security/authz/verified_permissions.py` |
 | Secret resolution | `SecretProvider.resolve()` (`persistence/secrets.py`) | `MemorySecretProvider`, `EnvSecretProvider` | AWS Secrets Manager | **ADAPTER** | P0 | Planned — `persistence/secrets_manager.py` |
 | Application audit sink | `SecurityEventSink` (`security/audit/`) | Postgres-backed sink | CloudWatch Logs | **OPTIONAL** | P2 | Planned — `security/audit/cloudwatch.py` |
 | Relational data | `persistence/` + isolation strategies | PostgreSQL (verified against containers and a live lab) | RDS for PostgreSQL, Aurora PostgreSQL | **ADOPT** | P1 | Documented — deployment target, no adapter |

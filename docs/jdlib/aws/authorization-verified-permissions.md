@@ -1,9 +1,15 @@
 ---
 guide: aws
 authority: docs/jdlib/aws/research-sources.md
-modules: []
-exports: []
-test_files: []
+modules:
+  - src/jdlib/security/authz/verified_permissions.py
+exports:
+  - VerifiedPermissionsConfig
+  - VerifiedPermissionsPDP
+  - AvpTransport
+  - AvpThrottlingError
+test_files:
+  - tests/unit/test_aws_verified_permissions.py
 ---
 
 # Authorization with Amazon Verified Permissions
@@ -102,13 +108,23 @@ documented details matter:
 
 ## Status
 
-**The adapter is not implemented yet.** This page exists because the capability matrix links to it
-and because the mapping and its limits are research output that the implementation must honour. The
-implementation slice will add `security/authz/verified_permissions.py` (a `PolicyDecisionPoint`
-whose `evaluate` calls AVP and returns the library's `Decision`), the contract test that proves it
-answers the same protocol as `DefaultPDP`, and the reliability tests the directive requires (PDP
-unavailable, PDP timeout, throttled, deny, malformed response). Until that lands, this page says so
-rather than implying a capability that does not exist.
+**Implemented** in `security/authz/verified_permissions.py`: `VerifiedPermissionsConfig`,
+`VerifiedPermissionsPDP`, and the injected `AvpTransport` seam that keeps AWS credentials and SigV4
+signing out of the library. `VerifiedPermissionsPDP` answers the same protocol Cerbos does, and
+`tests/unit/test_aws_verified_permissions.py` asserts that conformance with an `isinstance` check
+against the runtime-checkable protocol.
+
+Twenty-two tests cover the mapping and the failure space, including the reliability cases the
+directive names: engine unavailable, timeout, throttled (`engine_throttled`, distinct from
+unavailable, because a throttled deployment needs backoff and an unreachable one needs an incident),
+deny, and malformed or unknown responses. Cancellation propagates rather than turning into an
+authorization answer nobody asked for. Every degraded decision is denied — and that invariant is
+enforced by `AuthorizationDecision` itself, not by this adapter's discipline, so no adapter can
+weaken it.
+
+Two honest limits: the transport is injected and no test speaks to AWS, so the live path is
+`NOT RUN — AWS credentials unavailable`; and only `IsAuthorized` is spoken, with `IsAuthorizedWithToken`
+documented above as the Cognito-native alternative rather than implemented here.
 
 ## Limits worth designing around
 
