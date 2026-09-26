@@ -879,3 +879,28 @@ names the commit that fixed it.
   example does not use the feature at all) versus *not named directly* (the example uses the feature
   through another seam, so this symbol never appears under `examples/`). Conflating the two would
   have been the easy lie.
+
+### The example application — the security review, the report, and the phase closes (directive §18, E8)
+
+* **The security review** (`docs/jdlib/examples/security-review.md`): nine sections — identity,
+  authorization, tenancy, the graph plane, the error surface, the audit trail, operational, build
+  and supply chain, and **what the review does not claim**. Every row names the control, the
+  evidence (a test at its line, or a command) and what it showed. The last section is not decoration:
+  no penetration test, no coverage-guided fuzzing, one database vendor, a lab that is not hardened,
+  and the Windows `SIGTERM` skip recorded as a skip.
+* **The report** (`docs/jdlib/successor/06-example-report.md`): what landed per slice with its
+  commit, the **nine findings** that came from running the example rather than describing it, what
+  was verified, and what remains open. The findings include the two library defects the minimal
+  example found, the CI extras gap, and **a suspicion a live probe disproved** — recorded because a
+  review that lists only confirmations is not a review.
+* **The review's own citations are checked.** Three rows cited a file without a line, which made them
+  the only claims in the page a reader had to take on trust; they now carry the test and its line,
+  and a check asserts that every `file:line` cell in the review lands on a test function. Writing it
+  found a real error: the database row claimed an unscoped statement "returns nothing", while the
+  test asserts it is **refused** — the stronger claim, and the one the test makes.
+* **The phase is closed**: the roadmap's §18 slice table carries E1–E8 and the status line records
+  the whole phase with its commits. The example composes §16's graph plane and §17's MCP surface over
+  §4–§12's mechanisms, and the documentation that describes it is checked by the same suite that
+  describes it — 201 checks in `tests/unit/test_example_docs.py`, the matrices regenerated and
+  compared by both `scripts/ci-local.sh` and the runner, and the full local gate green
+  (**2226 passed, 39 skipped**, clean-venv install and console-script smoke included).
