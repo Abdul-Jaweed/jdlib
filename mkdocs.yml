@@ -182,6 +182,11 @@ nav:
       - Redis: integrations/redis.md
       - S3: integrations/s3.md
       - Cerbos: integrations/cerbos.md
+      - AWS:
+          - Capability matrix: jdlib/aws/aws-capability-matrix.md
+          - Authentication (Cognito): jdlib/aws/authentication-cognito.md
+          - Authorization (Verified Permissions): jdlib/aws/authorization-verified-permissions.md
+          - Research sources: jdlib/aws/research-sources.md
       - Request and security flows:
           - The security flow, step by step: jdlib/architecture/security-flow.md
           - The tenant flow: jdlib/architecture/tenant-flow.md
