@@ -36,7 +36,7 @@ rather than inferred from a grep.
 | `jdlib.persistence` | no declared exports | DOCUMENTED | `docs/jdlib/03-isolation-invariants.md`, `docs/jdlib/06-strategy-matrix.md` | 35 |
 | `jdlib.persistence.strategies` | no declared exports | DOCUMENTED | `docs/jdlib/06-strategy-matrix.md`, `docs/jdlib/03-isolation-invariants.md` | 14 |
 | `jdlib.query` | `__all__` (21) | DOCUMENTED | `docs/jdlib/capabilities/query.md` | 4 |
-| `jdlib.reliability` | `__all__` (11) | PARTIALLY DOCUMENTED | `architecture/long-form-reference.md`, `development/documentation-inventory.md`, `getting-started/project-structure.md` | 11 |
+| `jdlib.reliability` | `__all__` (11) | PARTIALLY DOCUMENTED | `architecture/component-architecture.md`, `architecture/high-level-architecture.md`, `architecture/long-form-reference.md` | 11 |
 | `jdlib.resources` | `__all__` (4) | DOCUMENTED | `docs/jdlib/capabilities/resources.md` | 6 |
 | `jdlib.security` | `__all__` (38) | DOCUMENTED | `docs/jdlib/security-model.md`, `docs/security/security-core.md` | 62 |
 | `jdlib.security.audit` | `__all__` (26) | DOCUMENTED | `docs/jdlib/features/audit.md` | 16 |
@@ -46,7 +46,7 @@ rather than inferred from a grep.
 | `jdlib.security.gateway` | `__all__` (5) | DOCUMENTED | `docs/security/gateway-hardening.md` | 4 |
 | `jdlib.storage` | `__all__` (11) | DOCUMENTED | `docs/jdlib/capabilities/storage.md`, `docs/jdlib/features/storage.md` | 1 |
 | `jdlib.tenancy` | no declared exports | DOCUMENTED | `docs/jdlib/features/tenancy.md` | 25 |
-| `jdlib.testing` | `__all__` (3) | PARTIALLY DOCUMENTED | `architecture/long-form-reference.md`, `development/documentation-inventory.md`, `getting-started/project-structure.md` | 1 |
+| `jdlib.testing` | `__all__` (3) | PARTIALLY DOCUMENTED | `architecture/component-architecture.md`, `architecture/long-form-reference.md`, `development/documentation-inventory.md` | 1 |
 
 **22 namespaces are DOCUMENTED, 2 are PARTIALLY DOCUMENTED, and 0 are UNDOCUMENTED** (of 24 public namespaces).
 

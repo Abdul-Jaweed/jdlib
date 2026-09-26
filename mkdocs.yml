@@ -128,7 +128,33 @@ nav:
           - Strategy matrix: jdlib/06-strategy-matrix.md
           - Implementation design: jdlib/07-implementation-design.md
   - Architecture:
-      - Long-form technical reference: architecture/long-form-reference.md
+      - Overview: architecture/overview.md
+      - High-level architecture: architecture/high-level-architecture.md
+      - Component architecture: architecture/component-architecture.md
+      - Request lifecycle: architecture/request-lifecycle.md
+      - Data architecture: architecture/data-architecture.md
+      - Security architecture: architecture/security-architecture.md
+      - Reliability architecture: architecture/reliability-architecture.md
+      - Observability architecture: architecture/observability-architecture.md
+      - Request and security flows:
+          - The security flow, step by step: jdlib/architecture/security-flow.md
+          - The tenant flow: jdlib/architecture/tenant-flow.md
+          - The graph flow: jdlib/architecture/neo4j-flow.md
+          - The MCP flow: jdlib/architecture/mcp-flow.md
+          - The observability flow: jdlib/architecture/observability-flow.md
+      - The example application's architecture: jdlib/architecture/example-architecture.md
+      - The long-form reference: architecture/long-form-reference.md
+  - Integrations:
+      - Overview: integrations/overview.md
+      - FastAPI: integrations/fastapi.md
+      - MCP: integrations/mcp.md
+      - CLI: integrations/cli.md
+      - pytest: integrations/pytest.md
+      - PostgreSQL: integrations/postgresql.md
+      - Neo4j: integrations/neo4j.md
+      - Redis: integrations/redis.md
+      - S3: integrations/s3.md
+      - Cerbos: integrations/cerbos.md
       - Request and security flows:
           - The security flow, step by step: jdlib/architecture/security-flow.md
           - The tenant flow: jdlib/architecture/tenant-flow.md
