@@ -57,6 +57,7 @@ MERMAID_TYPES = (
 #: The target of a markdown link, up to the first whitespace or closing parenthesis. A link's
 #: optional title is ignored: this module checks where a link points, not how it is labelled.
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)")
+FENCE = re.compile(r"```.*?```", re.DOTALL)
 MERMAID = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
 
 
@@ -146,6 +147,10 @@ def test_a_page_has_a_title_and_a_body(page: Path) -> None:
 @pytest.mark.parametrize("page", _published_pages(), ids=lambda p: p.relative_to(DOCS).as_posix())
 def test_a_pages_relative_links_resolve(page: Path) -> None:
     text = page.read_text(encoding="utf-8")
+    # Fenced blocks are not Markdown: a Mermaid message like `St->>MR: upgrade_tenant[_url](...)`
+    # is diagram syntax, and reading it as a link made this test pass on Windows (where a path
+    # ending in dots resolves to the directory, so it "existed") and fail on Linux.
+    text = FENCE.sub("", text)
     broken = []
     for target in LINK.findall(text):
         if target.startswith(("http://", "https://", "mailto:", "#")):
@@ -153,7 +158,9 @@ def test_a_pages_relative_links_resolve(page: Path) -> None:
         path = target.split("#", 1)[0]
         if not path:
             continue
-        if not (page.parent / path).exists():
+        # is_file, not exists: a link to a directory is still a broken link, and `exists` cannot
+        # tell the difference on a platform that resolves the target for you.
+        if not (page.parent / path).is_file():
             broken.append(target)
     where = page.relative_to(DOCS).as_posix()
     assert not broken, f"{where} links to files that do not exist: {broken}"
