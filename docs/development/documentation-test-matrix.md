@@ -32,7 +32,7 @@ name the file each tick stands on, so a row can be audited without trusting a sc
 
 ## What each row stands on
 
-* **Authentication** - `jdlib.authn` - documentation: jdlib/features/authentication.md; example: examples/enterprise/app/security/authentication.py; diagram: architecture/security-architecture.md; validated: tests/infra/test_zitadel_infra.py (+ the documentation test).
+* **Authentication** - `jdlib.authn` - documentation: jdlib/features/authentication.md; example: examples/aws_cognito_avp/composition.py; diagram: architecture/security-architecture.md; validated: tests/infra/test_zitadel_infra.py (+ the documentation test).
 * **SecurityContext** - `jdlib.security.context` - documentation: jdlib/features/tenancy.md; example: examples/enterprise/app/graph.py; diagram: architecture/security-architecture.md; validated: tests/integration/test_audit_isolation_export.py (+ the documentation test).
 * **Authorization** - `jdlib.authz` - documentation: jdlib/features/authorization.md; example: examples/enterprise/app/main.py; diagram: architecture/security-architecture.md; validated: tests/integration/test_access_bindings.py (+ the documentation test).
 * **Tenancy** - `jdlib.tenancy` - documentation: jdlib/features/tenancy.md; example: examples/enterprise/app/main.py; diagram: architecture/data-architecture.md; validated: tests/infra/test_kong_infra.py (+ the documentation test).

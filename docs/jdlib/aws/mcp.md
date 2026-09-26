@@ -60,6 +60,30 @@ guidance, it decomposes cleanly:
 * **Cold starts and timeouts.** A tool that runs a graph query can exceed a synchronous integration
   timeout; long work belongs behind a queue, and the library's tools are deliberately bounded.
 
+## The three pairings the directive names
+
+**Cognito + MCP.** Cognito is the identity provider and the MCP server is the resource server, which
+is exactly the shape the MCP authorization model expects. The token's audience is the MCP server's
+app client, the [Cognito adapter](authentication-cognito.md) validates it (issuer, audience, expiry,
+`token_use`), and group membership (`cognito:groups`) becomes the roles the policy store's schema
+declares. Two Cognito specifics matter here: the ID token is the one whose `aud` the generic
+validator can check, and revocation is invisible to a JWT check, so short lifetimes are the
+mitigation — for an agent that acts continuously, that is a design constraint, not a footnote.
+
+**Verified Permissions + MCP.** The MCP call already carries a principal, an action and a resource,
+which is precisely what `IsAuthorized` takes: `VerifiedPermissionsPDP` needs no adaptation for the
+MCP path beyond the [composition the example shows](example-cognito-avp.md). The policy store's
+schema must declare the tool's resource types and the action ids the tools use — the same work any
+Cedar deployment does — and `cognito:groups` arrives as a principal attribute because Cedar has no
+role construct.
+
+**API Gateway + MCP.** API Gateway in front of an MCP server is the same edge story as
+[the HTTP case](api-gateway.md), with one addition that matters: MCP's streamable HTTP transport
+holds long-lived responses open, so the 29-second REST integration timeout is not merely tight, it is
+a hard failure. Either raise the integration to its maximum and keep tools fast, or terminate at an
+ALB that can hold the stream. And the authorizer cache still applies: a 300-second cached allow
+outlives a revocation, and the MCP server must validate the token itself regardless.
+
 ## What the architecture does not change
 
 Nothing about the library's model. A tool call still authenticates, still resolves a tenant, still

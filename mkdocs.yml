@@ -204,6 +204,9 @@ nav:
           - Bedrock AgentCore: jdlib/aws/agentcore.md
           - MCP authorization model: jdlib/aws/mcp-authorization.md
           - Example (Cognito + Verified Permissions): jdlib/aws/example-cognito-avp.md
+          - Reference architectures: jdlib/aws/reference-architectures.md
+          - Comparisons: jdlib/aws/comparisons.md
+          - Certification report: jdlib/aws/certification-report.md
           - Research sources: jdlib/aws/research-sources.md
       - Request and security flows:
           - The security flow, step by step: jdlib/architecture/security-flow.md

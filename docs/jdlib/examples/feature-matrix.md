@@ -31,9 +31,9 @@ names the symbol. Regenerate with `python scripts/feature-matrix.py`;
 
 | Seam | Implements | The example uses it at | Asserted by |
 |---|---|---|---|
-| `AuthorizationPEP` | `src/jdlib/security/authz/pep.py:36` | `examples/enterprise/app/main.py:53` | `tests/unit/security/test_authz_pep.py:113` |
-| `AuthorizationQuery` | `src/jdlib/security/authz/decision.py:36` | `examples/enterprise/app/main.py:54` | `tests/unit/security/test_authz_pep.py:187` |
-| `AuthorizationDecision` | `src/jdlib/security/authz/decision.py:86` | `examples/enterprise/app/security/authorization.py:6` | `tests/unit/security/test_authz_pep.py:187` |
+| `AuthorizationPEP` | `src/jdlib/security/authz/pep.py:36` | `examples/aws_cognito_avp/composition.py:26` | `tests/unit/security/test_authz_pep.py:113` |
+| `AuthorizationQuery` | `src/jdlib/security/authz/decision.py:36` | `examples/aws_cognito_avp/composition.py:25` | `tests/unit/security/test_authz_pep.py:187` |
+| `AuthorizationDecision` | `src/jdlib/security/authz/decision.py:86` | `examples/aws_cognito_avp/composition.py:25` | `tests/unit/security/test_authz_pep.py:187` |
 | `CerbosPDP` | `src/jdlib/security/authz/cerbos.py:119` | `examples/enterprise/app/security/authorization.py:26` | — |
 | `CerbosConfig` | `src/jdlib/security/authz/cerbos.py:88` | `examples/enterprise/app/configuration/settings.py:12` | — |
 

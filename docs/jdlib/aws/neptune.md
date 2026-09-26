@@ -47,6 +47,25 @@ piece of design — worth building when a deployment needs Neptune, not speculat
 adapter that silently fails on `CALL` or `shortestPath` would be worse than not shipping one, and
 shipping one that pretends the two engines are equivalent is exactly what this programme forbids.
 
+## The graph strategy, stated for both engines
+
+The directive asks for the Neo4j-and-AWS graph strategy to be documented, and the strategy is the
+same sentence in both directions: **the query vocabulary is the portability boundary, and the client
+enforces tenancy.**
+
+* **Today (Neo4j).** The graph layer speaks a closed query vocabulary; `Neo4jClient` opens for one
+  tenant and checks every statement against it before the driver sees it, so isolation does not
+  depend on the database's features.
+* **On AWS (Neptune, if it is ever adopted).** The same client shape works over Bolt with openCypher,
+  and the same client-side tenant check applies. What changes is the subset of Cypher that will
+  execute, which is why the verdict above is DEFER rather than ADOPT.
+* **What makes it portable.** Keeping the vocabulary closed — no APOC, no procedures, no
+  shortest-path functions, no dynamic property access — is what would make the two engines
+  interchangeable. That is a discipline the library can hold deliberately, and the reason this page
+  records the constraint rather than hiding it.
+* **What is not portable at all.** Neptune Analytics is a different engine for analytical workloads
+  with a different connection model; a strategy that assumes one adapter covers both would be wrong.
+
 ## What would change the verdict
 
 * A deployment that needs Neptune **and** a graph layer restricted to the portable subset — at which
