@@ -169,8 +169,8 @@ def surface_of(namespace: str) -> str:
     return "no declared exports"
 
 
-def documented_pages() -> dict[str, list[str]]:
-    """Which pages mention each namespace, and whether the two page kinds exist."""
+def documented_pages() -> dict[str, str]:
+    """Every published page, by path, with its text - the raw material of an audit."""
 
     pages = {
         path.relative_to(DOCS).as_posix(): path.read_text(encoding="utf-8")
@@ -237,12 +237,14 @@ ROOT_SURFACE_PAGES = (
 )
 
 
-def classify(namespace: str, pages: dict[str, list[str]]) -> tuple[str, str]:
+def classify(namespace: str, pages: dict[str, str]) -> tuple[str, str]:
     short = namespace.split(".")[-1] if namespace != "jdlib" else ""
     capability = (DOCS / "jdlib" / "capabilities" / f"{short}.md").exists() if short else True
     guide = (DOCS / "jdlib" / "features" / f"{short}.md").exists() if short else True
     pattern = re.compile(rf"\b{re.escape(namespace)}\b")
-    mentions = [name for name, text in pages.items() if pattern.search(text)]
+    # sorted: `rglob` yields in filesystem order, which differs between NTFS and ext4, and a page
+    # that lists different files on different machines fails the gate on one of them.
+    mentions = sorted(name for name, text in pages.items() if pattern.search(text))
     tests = test_files_for(namespace)
     aliases = PAGE_ALIASES.get(namespace, ())
     if (capability or guide or aliases) and tests:
