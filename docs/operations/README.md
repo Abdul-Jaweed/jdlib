@@ -126,7 +126,7 @@ What that means operationally:
   unreachable collector is a failure, not a skip.
 * Kong, Cerbos, ZITADEL, Tyk and the OpenTelemetry collector skip when their environment
   variables are unset; that is how a machine without the local stack stays green without
-  pretending to have tested them ([`tests/infra/README.md`](../../tests/infra/README.md)).
+  pretending to have tested them ([`tests/infra/README.md`](https://github.com/Abdul-Jaweed/jdlib/blob/main/tests/infra/README.md)).
 
 ## 5. CI security job and its artifacts
 
@@ -202,7 +202,7 @@ boundary. Installing JDLib does not discharge them.
    the library; JDLib reads them from configuration, holds secrets as
    secret-typed values and keeps them out of `repr`, logs, spans, error
    responses and audit metadata. Secret management itself is listed as out of
-   scope in [`SECURITY.md`](../../SECURITY.md), as are database roles and their
+   scope in [`SECURITY.md`](https://github.com/Abdul-Jaweed/jdlib/blob/main/SECURITY.md), as are database roles and their
    privileges — including the requirement that the RLS runtime role is
    `NOBYPASSRLS`, not the table owner and not a superuser (`README.md`, *RLS
    enablement*).
@@ -233,11 +233,11 @@ boundary. Installing JDLib does not discharge them.
 
 | For | Read |
 |---|---|
-| What the library guarantees and what it explicitly does not | [`SECURITY.md`](../../SECURITY.md) |
+| What the library guarantees and what it explicitly does not | [`SECURITY.md`](https://github.com/Abdul-Jaweed/jdlib/blob/main/SECURITY.md) |
 | The compliance register, evidence and posture, framed for a reviewer | [`docs/compliance/README.md`](../compliance/README.md) |
 | The engineering record of the audit trail and its residual risk | [`docs/security/audit-hardening.md`](../security/audit-hardening.md) |
 | The CI gates, their exceptions and their blind spots | [`docs/security/ci-security.md`](../security/ci-security.md) |
 | Gateway trust, including the Tyk limitation | [`docs/security/gateway-hardening.md`](../security/gateway-hardening.md) |
 | The index of security documents | [`docs/security/README.md`](../security/README.md) |
-| Local infrastructure for the test layers | [`tests/infra/README.md`](../../tests/infra/README.md) |
-| Building and testing in this repository | [`CONTRIBUTING.md`](../../CONTRIBUTING.md) |
+| Local infrastructure for the test layers | [`tests/infra/README.md`](https://github.com/Abdul-Jaweed/jdlib/blob/main/tests/infra/README.md) |
+| Building and testing in this repository | [`CONTRIBUTING.md`](https://github.com/Abdul-Jaweed/jdlib/blob/main/CONTRIBUTING.md) |

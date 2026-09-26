@@ -32,7 +32,7 @@ test_files:
 ---
 # Observability and reliability
 
-> **Design authority:** [`docs/security/observability-hardening.md`](docs/security/observability-hardening.md) — this guide is the developer-facing
+> **Design authority:** [`docs/security/observability-hardening.md`](../../security/observability-hardening.md) — this guide is the developer-facing
 > shape of that page, not a second authority for it. Where the two disagree, the authority page and
 > the code win.
 

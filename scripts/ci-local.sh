@@ -61,11 +61,31 @@ if missing:
 print("extras present: neo4j, fastmcp")
 PY
 
+step "the docs extra is installed"
+# The documentation portal is part of the gate: `mkdocs build --strict` fails on a broken link, a
+# missing page or an unlisted page, and a page that breaks the site should break the build here
+# rather than on the runner. This step is what makes that failure legible instead of an ImportError.
+"$VENV_PY" - <<'PY'
+import importlib.util
+import sys
+
+if importlib.util.find_spec("mkdocs") is None:
+    print("FAIL: the documentation build needs mkdocs, and this venv does not have it")
+    print('install with: python -m pip install -e ".[docs]"')
+    sys.exit(1)
+print("docs extra present: mkdocs")
+PY
+
+step "mkdocs build --strict (the documentation portal)"
+"$VENV_PY" -m mkdocs build --strict
+echo "the documentation portal builds clean"
+
 step "the generated documentation matches the tree"
 # The coverage and feature matrices are generated (scripts/feature-matrix.py) because a hand-written
 # table of line numbers is wrong the first time someone edits the file above it. This step is what
 # makes them *stay* generated: if a cell would change, the page is stale and the gate says so.
 "$VENV_PY" scripts/feature-matrix.py --check
+"$VENV_PY" scripts/docs-inventory.py --check
 
 step "pytest -q (with coverage; integration skips cleanly without Docker)"
 set +e

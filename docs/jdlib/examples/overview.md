@@ -2,7 +2,7 @@
 
 Two runnable applications, and what each one is for.
 
-| | [`examples/minimal`](../../../examples/minimal) | [`examples/enterprise`](../../../examples/enterprise) |
+| | [`examples/minimal`](https://github.com/Abdul-Jaweed/jdlib/tree/main/examples/minimal) | [`examples/enterprise`](https://github.com/Abdul-Jaweed/jdlib/tree/main/examples/enterprise) |
 |---|---|---|
 | **What it is** | the smallest correct JDLib application: FastAPI → JDLib → PostgreSQL | the whole surface: gateway-shaped HTTP, Cerbos, PostgreSQL, Neo4j, MCP, audit, reliability, observability |
 | **Size** | one app, one route, one test file per layer | a layered application (`configuration/`, `security/`, `api/`, `services/`, `repositories/`, `models/`, `mcp/`) |
@@ -25,8 +25,8 @@ Two runnable applications, and what each one is for.
 
 ## Where to read next
 
-* the feature guides ([`../features/`](../features/)) for how each mechanism is meant to be used;
-* the architecture pages ([`../architecture/`](../architecture/)) for how the enterprise example is
+* the feature guides ([`../features/`](../features/README.md)) for how each mechanism is meant to be used;
+* the architecture pages ([`../architecture/`](../architecture.md)) for how the enterprise example is
   put together and what happens between a request and a handler;
 * [`with-and-without.md`](with-and-without.md) for what the library is doing for you, side by side
   with the code you would otherwise write;

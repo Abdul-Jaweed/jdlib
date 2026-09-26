@@ -22,9 +22,9 @@ than in this index, which is a map and not a summary.
 | [`compliance-evidence.md`](compliance-evidence.md) | Phase 9 — the control register, the control model, the evidence record and its collectors, the posture layer, and the `jdlib security` CLI. Readiness, not certification. |
 | [`ci-security.md`](ci-security.md) | Phase 10 — the five gates in the `security` CI job with their pinned tool versions, the reviewed exception list, what is deliberately not covered (§7), and the tools that were evaluated and rejected (§8). |
 
-Companion documents outside this directory: [`SECURITY.md`](../../SECURITY.md)
+Companion documents outside this directory: [`SECURITY.md`](https://github.com/Abdul-Jaweed/jdlib/blob/main/SECURITY.md)
 (what the library is responsible for, what it leaves to a deployment, known
-limitations, how to report a vulnerability), [`CONTRIBUTING.md`](../../CONTRIBUTING.md)
+limitations, how to report a vulnerability), [`CONTRIBUTING.md`](https://github.com/Abdul-Jaweed/jdlib/blob/main/CONTRIBUTING.md)
 (gate commands, test layers, contribution rules),
 [`docs/operations/README.md`](../operations/README.md) (running the posture and
 evidence commands, CI artifacts, operator responsibilities) and
@@ -48,4 +48,4 @@ of the register, the evidence and the posture outcomes).
 | Adversarial review — attacking the controls | [`adversarial-review.md`](adversarial-review.md) |
 | Running the checks in a deployment | [`docs/operations/README.md`](../operations/README.md) |
 | Tenant lifecycle, deprovisioning, retention semantics | [`docs/jdlib/05-tenant-lifecycle.md`](../jdlib/05-tenant-lifecycle.md) |
-| Implementation structure and extension points | [`docs/jdlib/07-implementation-design.md`](../jdlib/07-implementation-design.md), [`README.md`](../../README.md) |
+| Implementation structure and extension points | [`docs/jdlib/07-implementation-design.md`](../jdlib/07-implementation-design.md), [`README.md`](https://github.com/Abdul-Jaweed/jdlib/blob/main/README.md) |

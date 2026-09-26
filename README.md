@@ -508,6 +508,6 @@ what each covers, and which tools were evaluated and rejected.
 | `docs/jdlib/successor/` | the successor programme: capability matrix, target architecture, adoption decisions and the roadmap, with per-phase status |
 | `docs/security/README.md` | the security-hardening programme: one document per phase, the adversarial review, the CI security gates, the compliance surface |
 | `docs/operations/`, `docs/compliance/` | runbooks, and the technical-control register with its own gaps |
-| `JDLib-Architecture.md` | the long-form technical reference |
+| `docs/architecture/long-form-reference.md` | the long-form technical reference |
 | `knowledge_base/` | orientation: module map, data flow, development guide, testing |
 | `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` | contribution rules, what the library is responsible for and how to report a vulnerability, release notes |

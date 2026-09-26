@@ -904,3 +904,49 @@ names the commit that fixed it.
   describes it — 201 checks in `tests/unit/test_example_docs.py`, the matrices regenerated and
   compared by both `scripts/ci-local.sh` and the runner, and the full local gate green
   (**2226 passed, 39 skipped**, clean-venv install and console-script smoke included).
+
+### The documentation portal — the site builds, and the audit says what is missing (documentation directive §2–§5)
+
+Commit: `PENDING` (`docs(portal): the site builds, and the audit says what is missing`)
+
+* **The site exists.** `mkdocs.yml` puts MkDocs Material over the existing `docs/` tree: search,
+  Mermaid through `pymdownx.superfences`, admonitions, tabbed code and permalinked headings, with
+  `validation` configured so a broken link, a missing page, an unlisted page or a missing anchor is
+  a warning — and `mkdocs build --strict` turns every one of them into a failure.
+* **`docs/index.md`** is the portal's home: what the library is, the reading paths for five
+  audiences, and the request path as a Mermaid diagram that follows the real chain.
+* **`docs/getting-started/`** — six pages: introduction, installation, quickstart, your first
+  application, configuration, project structure. The configuration table is `TenancyConfig` read at
+  this commit, the commands are the ones the repository runs, and the example commands match
+  `examples/minimal/README.md` rather than paraphrasing it.
+* **The long-form reference is published with its status.** `JDLib-Architecture.md` moved to
+  `docs/architecture/long-form-reference.md` under a banner that states the revision it describes
+  (`6125558`) and which phase documents supersede it for the packages that arrived afterwards.
+* **The audit is generated.** `scripts/docs-inventory.py` writes
+  `docs/development/documentation-inventory.md` from the tree: **34 namespaces**, every package under
+  `src/jdlib` — including the seven that declare no `__all__` and whose surface is per-module
+  (`jdlib.tenancy`, `jdlib.persistence`, `jdlib.authn`, `jdlib.authz`, `jdlib.migrations`,
+  `jdlib.integrations`, `jdlib.persistence.strategies`) — each with its public surface, its
+  classification, the pages that document it and the number of test files that hold it.
+  Namespaces documented under a page named after the capability rather than the package are mapped
+  by an alias table, because a false gap sends someone to write a page that already exists.
+* **The judgement rows are judgements.** EXPERIMENTAL, DEPRECATED, IMPLEMENTED BUT INTERNAL and
+  NOT IMPLEMENTED cannot be inferred from a grep, so they are recorded with their reason and a
+  citation that `tests/unit/test_docs_portal.py` checks against the tree. The three real gaps the
+  audit reports — `jdlib.reliability`, `jdlib.testing` and the sections that do not exist yet — are
+  the portal's remaining work, not an omission nobody noticed.
+* **`tests/unit/test_docs_portal.py`** — 275 checks: every navigation entry resolves, every
+  published page is reachable from the navigation, every relative link resolves to a file that
+  exists, every Mermaid fence names a diagram type the renderer draws, every page has a title and a
+  body, and the inventory is regenerated rather than edited.
+* **Both gates carry the site.** `mkdocs build --strict` and `scripts/docs-inventory.py --check` are
+  steps in `scripts/ci-local.sh` and in `.github/workflows/ci.yml`; the `docs` extra carries
+  `mkdocs-material`, and the gate fails with the install command when it is missing rather than
+  skipping the build.
+* **Nineteen real warnings were fixed to reach a strict build**, none of them by widening the
+  configuration: files that live outside `docs_dir` (`SECURITY.md`, `CONTRIBUTING.md`, `README.md`,
+  `tests/infra/README.md` and the two example directories) are linked by URL, four links written
+  from the repository root became docs-relative, two directory links became links to the file they
+  resolve to, and the long-form reference's own table-of-contents anchor carried a double hyphen
+  where the real slug collapses it.
+

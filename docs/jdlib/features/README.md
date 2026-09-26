@@ -40,8 +40,8 @@ A register that lies fails its own test.
 | [`graph.md`](graph.md) — graph | [`docs/jdlib/capabilities/graph.md`](../capabilities/graph.md) | yes |
 | [`mcp.md`](mcp.md) — mcp | [`docs/jdlib/capabilities/mcp.md`](../capabilities/mcp.md) | yes |
 | [`jobs.md`](jobs.md) — jobs | [`docs/jdlib/capabilities/jobs.md`](../capabilities/jobs.md) | **no** — said so in the guide |
-| [`audit.md`](audit.md) — audit | [`docs/security/audit-hardening.md`](docs/security/audit-hardening.md) | yes |
-| [`observability.md`](observability.md) — observability | [`docs/security/observability-hardening.md`](docs/security/observability-hardening.md) | yes |
+| [`audit.md`](audit.md) — audit | [`docs/security/audit-hardening.md`](../../security/audit-hardening.md) | yes |
+| [`observability.md`](observability.md) — observability | [`docs/security/observability-hardening.md`](../../security/observability-hardening.md) | yes |
 
 ## The template
 

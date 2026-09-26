@@ -228,5 +228,5 @@ the register view. Exit codes are documented in
 * Nothing here is a certification, an audit result or advice about an external
   auditor's opinion. Organisation-level controls (governance, people, physical
   security, backup and retention, keys, audit-storage tamper evidence) are the
-  deployment's, as listed in [`SECURITY.md`](../../SECURITY.md) under *What is
+  deployment's, as listed in [`SECURITY.md`](https://github.com/Abdul-Jaweed/jdlib/blob/main/SECURITY.md) under *What is
   out of scope*, and in [`docs/operations/README.md`](../operations/README.md).

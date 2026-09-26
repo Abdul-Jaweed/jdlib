@@ -19,13 +19,18 @@ jobs:
       # extras directly -- an example that needed an extra the gate does not install fails
       # collection, which is how the enterprise example's graph plane broke this job once.
       # Docker is present here, so these tests can run rather than report SKIPPED.
-      - run: python -m pip install -e ".[dev,s3,redis,graph,mcp]"
+      - run: python -m pip install -e ".[dev,s3,redis,graph,mcp,docs]"
       - run: python -m ruff check .
       - run: python -m mypy src/jdlib examples
       # The coverage and feature matrices are generated (scripts/feature-matrix.py). This step
       # fails when a page would change, so a stale table cannot pass -- the same step runs in
       # scripts/ci-local.sh, and the docs test checks the cells' contents rather than the page.
       - run: python scripts/feature-matrix.py --check
+      - run: python scripts/docs-inventory.py --check
+      # The documentation portal is validated here rather than in a job of its own: `--strict`
+      # turns every configured warning (a broken link, a missing page, an unlisted page, a missing
+      # anchor) into a failure, and the docs extra is small.
+      - run: python -m mkdocs build --strict
       - run: python -m pytest -q
 
   # Security gates. Every command below fails this job (and therefore the build)

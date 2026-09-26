@@ -1,5 +1,18 @@
 # JDLib — Complete Technical Architecture and Implementation Reference
 
+!!! warning "A snapshot, published with its own status"
+    This is the long-form technical reference, written at commit `6125558` and synchronised through
+    the security-hardening programme. The successor phases landed **after** that revision -
+    `jdlib.credentials`, `jdlib.caching`, `jdlib.data`, `jdlib.query`, `jdlib.storage`,
+    `jdlib.reliability`, and the audit and observability boundaries - so its tree, its line counts
+    and its package list describe the earlier revision.
+
+    Where this document and a phase document disagree about a package that arrived later, **the
+    phase document is current**: see [`../jdlib/successor/05-roadmap.md`](../jdlib/successor/05-roadmap.md)
+    for the per-phase status, [`../jdlib/capabilities/README.md`](../jdlib/capabilities/README.md)
+    for the capabilities delivered since, and [`../jdlib/features/README.md`](../jdlib/features/README.md)
+    for how each mechanism is meant to be used.
+
 > **Single source of truth for the `jdlib` library.**
 > Derived from the repository at commit `a30601d` (`main`) and synchronised with
 > the security-hardening programme at commit `6125558` (`main`); the phase 11
@@ -72,7 +85,7 @@
 21. [End-to-End Workflows](#21-end-to-end-workflows)
 22. [Architectural Decisions](#22-architectural-decisions)
 23. [Current Limitations](#23-current-limitations)
-24. [Future Architecture (Proposed / Not Currently Implemented)](#24-future-architecture-proposed--not-currently-implemented)
+24. [Future Architecture (Proposed / Not Currently Implemented)](#24-future-architecture-proposed-not-currently-implemented)
 25. [Complete Architecture Diagrams](#25-complete-architecture-diagrams)
 26. [Accuracy and Verification Notes](#26-accuracy-and-verification-notes)
 27. [Final Architecture Summary](#27-final-architecture-summary)

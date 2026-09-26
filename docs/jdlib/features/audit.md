@@ -32,7 +32,7 @@ test_files:
 ---
 # Audit and security events
 
-> **Design authority:** [`docs/security/audit-hardening.md`](docs/security/audit-hardening.md) — this guide is the developer-facing
+> **Design authority:** [`docs/security/audit-hardening.md`](../../security/audit-hardening.md) — this guide is the developer-facing
 > shape of that page, not a second authority for it. Where the two disagree, the authority page and
 > the code win.
 

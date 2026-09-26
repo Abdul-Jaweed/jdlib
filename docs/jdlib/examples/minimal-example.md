@@ -14,8 +14,8 @@ docker run -d --name jdlib-minimal -p 5433:5432 \
 export JDLIB_CONTROL_DSN=postgresql://...
 
 # 3. the operator step, then the app
-python -m examples.minimal.app.bootstrap
-uvicorn examples.minimal.app.asgi:app --host 127.0.0.1 --port 8001
+python -m examples.minimal.app.bootstrap --slug acme --name "Acme Inc"
+uvicorn examples.minimal.app.asgi:app --host 127.0.0.1 --port 8000
 ```
 
 ## What it contains

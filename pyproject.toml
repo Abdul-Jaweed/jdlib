@@ -21,6 +21,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+docs = [
+  "mkdocs-material>=9.5",
+]
 # The Redis cache provider is optional: importing jdlib does not require the
 # client, but using RedisCache does. Kept out of the base install on purpose.
 redis = [

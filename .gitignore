@@ -26,3 +26,6 @@ security-artifacts/
 .coverage
 .coverage.*
 dist/
+
+# the documentation portal's build output
+site/
