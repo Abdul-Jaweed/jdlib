@@ -190,6 +190,11 @@ nav:
           - Configuration (Parameter Store): jdlib/aws/parameter-store.md
           - Edge (API Gateway): jdlib/aws/api-gateway.md
           - Gateway comparison (Kong / Tyk / API Gateway): jdlib/aws/gateway-comparison.md
+          - Data (RDS / Aurora): jdlib/aws/rds-aurora.md
+          - Graph (Neptune): jdlib/aws/neptune.md
+          - Cache (ElastiCache): jdlib/aws/elasticache.md
+          - Object storage (S3): jdlib/aws/s3.md
+          - Messaging (SQS / SNS / EventBridge): jdlib/aws/messaging.md
           - Research sources: jdlib/aws/research-sources.md
       - Request and security flows:
           - The security flow, step by step: jdlib/architecture/security-flow.md
