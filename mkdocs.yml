@@ -200,6 +200,9 @@ nav:
           - Health and dependency checks: jdlib/aws/health.md
           - The IAM boundary: jdlib/aws/iam.md
           - The AWS security model: jdlib/aws/security-model.md
+          - MCP on AWS: jdlib/aws/mcp.md
+          - Bedrock AgentCore: jdlib/aws/agentcore.md
+          - MCP authorization model: jdlib/aws/mcp-authorization.md
           - Research sources: jdlib/aws/research-sources.md
       - Request and security flows:
           - The security flow, step by step: jdlib/architecture/security-flow.md
