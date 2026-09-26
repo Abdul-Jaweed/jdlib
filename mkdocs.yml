@@ -203,6 +203,7 @@ nav:
           - MCP on AWS: jdlib/aws/mcp.md
           - Bedrock AgentCore: jdlib/aws/agentcore.md
           - MCP authorization model: jdlib/aws/mcp-authorization.md
+          - Example (Cognito + Verified Permissions): jdlib/aws/example-cognito-avp.md
           - Research sources: jdlib/aws/research-sources.md
       - Request and security flows:
           - The security flow, step by step: jdlib/architecture/security-flow.md
