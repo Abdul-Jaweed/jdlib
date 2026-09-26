@@ -188,6 +188,8 @@ nav:
           - Authorization (Verified Permissions): jdlib/aws/authorization-verified-permissions.md
           - Secrets (Secrets Manager): jdlib/aws/secrets-manager.md
           - Configuration (Parameter Store): jdlib/aws/parameter-store.md
+          - Edge (API Gateway): jdlib/aws/api-gateway.md
+          - Gateway comparison (Kong / Tyk / API Gateway): jdlib/aws/gateway-comparison.md
           - Research sources: jdlib/aws/research-sources.md
       - Request and security flows:
           - The security flow, step by step: jdlib/architecture/security-flow.md
