@@ -763,3 +763,51 @@ names the commit that fixed it.
   binds **both** scopes (`jdlib/integrations/mcp/invocation.py`), so the change was reverted and the
   probe kept as a test: a claim about which context is bound is measured here, not read off the
   source and trusted.
+
+### The example application — the four test layers (directive §18)
+
+* **What landed.** `examples/enterprise/tests/` is now the directive's four layers: `unit/` (24),
+  `integration/` (29), `security/` (16) and `e2e/` (8), with `tests/support/` as the harness they
+  share — the lab's environment, the provisioning (tenants, callers, roles, and API keys that are
+  really in the control plane), and a chain that builds the application's own composition with an
+  HTTP client and a tool caller over it. The two earlier live files gave up their duplicated helpers
+  to it (`wait_for_database`, `mint_key`).
+* **The security layer** asks three questions the earlier layers did not: can a caller reach another
+  tenant's data **by any path**, does a denial execute nothing, and does any failure leak an
+  internal. Isolation is asked over **both surfaces** with credentials that really are in the control
+  plane and with both callers holding the *same* role, so every difference is a difference the
+  tenant made; the denial is measured three ways (the answer, the row read as the *owner*, and the
+  audit trail); the error surface is probed with the requests an attacker sends first — no
+  credential, a malformed one, an unknown route inside and outside the mount, a malformed body, an
+  absent row, another tenant's row — and every answer is checked against a deny-list of internals
+  (drivers, schemas, module paths, DSNs, SQL, stack-trace shapes).
+* **The e2e layer** runs the documented command — `uvicorn examples.enterprise.app.asgi:app` — as a
+  subprocess and drives it over TCP: the liveness probe without credentials, the readiness probe
+  asking the real dependencies, an allowed request through the whole chain, a denial, a 401, a
+  cross-tenant read, a refusal to start without its environment, and a `SIGTERM` stop asserted to
+  exit 0.
+* **Evidence.** 77 tests in the example (76 passed, 1 skipped) with the lab up; the whole example
+  suite green in the repository gate. Mutations **2/2**: with the archive route declaring the weaker
+  permission, the denial test fails *and shows the write happening* (the row becomes `archived`);
+  with the outer error envelope removed, the unknown-route probe answers `{"detail": "Not Found"}`.
+* **Found by writing them**, and each corrected rather than asserted around:
+  * the library answers an unreachable row **`409 INVALID_REFERENCE`** ("does not exist in this
+    tenant"), not 404 — the example deliberately does not re-map it, and the test now asserts the
+    library's own answer and the part that matters (the message names the caller's id and nothing
+    about whether the row exists elsewhere);
+  * a **denied MCP call writes three audit events** where HTTP writes one — the boundary's
+    `mcp.request`, the engine's decision, and the chain's own refusal — so the trail evidence is
+    per-surface rather than one shape imposed on both;
+  * a failure **inside** a tool handler is answered generically ("the tool could not complete")
+    while a *schema* refusal is precise ("does not declare: extra"): the library cannot know which
+    part of a driver's exception is safe to repeat, and a malformed uuid reaching the service is
+    that case;
+  * the audit events name the target the **question** was about — the tenant scope — not the row the
+    handler would have touched, so "which event did this call produce" is answered by a before/after
+    delta and not by a filter on an id that is never in the row;
+  * a harness that **invented** a tenant slug passed every assertion that compared it with itself and
+    failed the one that compared it with the application's answer; the fixture now carries the slug
+    the registry created;
+  * Windows has no `SIGTERM` — `Popen.send_signal` terminates the process — so the graceful-shutdown
+    assertion is POSIX-only and **says so** in the test, rather than asserting something weaker
+    everywhere and calling it the same thing.

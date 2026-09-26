@@ -64,6 +64,7 @@ from examples.enterprise.app.dsn import async_dsn
 from examples.enterprise.app.models.resources import Resource
 from examples.enterprise.app.repositories.resources import ResourceRepository
 from examples.enterprise.app.services.resources import ResourceService
+from examples.enterprise.tests.support.lab import wait_for_database
 from jdlib.context import Principal, PrincipalKind, TenantContext
 from jdlib.control.audit import DatabaseAuditSink
 from jdlib.control.enums import PlacementStrategy
@@ -110,35 +111,12 @@ class Lab:
         )
 
 
-async def _wait_for_database(url: str, *, attempts: int = 20) -> None:
-    """Wait until the database accepts connections, rather than assuming it does.
-
-    A container that has just initialised a volume answers "the database system is not yet accepting
-    connections" for a few seconds, and a suite that connects during that window reports ten errors
-    that are all the same race -- which reads like a broken example.
-    """
-    engine = create_async_engine(async_dsn(url), isolation_level="AUTOCOMMIT")
-    try:
-        for attempt in range(1, attempts + 1):
-            try:
-                async with engine.connect() as connection:
-                    await connection.execute(sa.text("SELECT 1"))
-                return
-            except (sa.exc.OperationalError, ConnectionError) as error:
-                if attempt == attempts:
-                    raise
-                print(f"waiting for the database ({attempt}/{attempts}): {error!s:.60}")
-                await asyncio.sleep(2)
-    finally:
-        await engine.dispose()
-
-
 @pytest.fixture(scope="module")
 def lab() -> Lab:
     """Migrate the control plane, create the tables, install the policies, make two tenants."""
 
     async def _provision() -> Lab:
-        await _wait_for_database(MIGRATION_DSN)
+        await wait_for_database(MIGRATION_DSN)
         MigrationRunner(MIGRATION_DSN).upgrade_control()
         app_role = sa.engine.make_url(RUNTIME_DSN).username
         assert app_role is not None

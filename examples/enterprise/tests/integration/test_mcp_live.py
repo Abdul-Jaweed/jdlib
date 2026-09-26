@@ -56,6 +56,7 @@ from examples.enterprise.app.dsn import async_dsn
 from examples.enterprise.app.graph import GraphPlane, graph_config
 from examples.enterprise.app.main import build_collaborators
 from examples.enterprise.app.mcp.server import McpSurface, build_example_mcp_server
+from examples.enterprise.tests.support.lab import mint_key
 from jdlib.authn.apikey import hash_api_key_secret
 from jdlib.config import TenancyConfig
 from jdlib.context import Principal, PrincipalKind, TenantContext
@@ -114,13 +115,6 @@ class Lab:
         )
 
 
-def _mint_key(prefix: str) -> tuple[str, str, str]:
-    """A key in the format the library parses: `prefix.salt.secret` -> (token, prefix, secret)."""
-    salt = uuid.uuid4().hex[:8]
-    secret = secrets.token_urlsafe(32)
-    return f"{prefix}.{salt}.{secret}", f"{prefix}.{salt}", secret
-
-
 async def _provision() -> Lab:
     """Provision a tenant and a caller holding `support`, with a real key in the control plane."""
     config = TenancyConfig()  # type: ignore[call-arg]  # env-filled
@@ -143,7 +137,7 @@ async def _provision() -> Lab:
 
         account_id = uuid.uuid4()
         role_id = uuid.uuid4()
-        token, key_prefix, secret = _mint_key(config.api_keys.prefix)
+        token, key_prefix, secret = mint_key(config.api_keys.prefix)
         async with sessions() as session:
             session.add(
                 ServiceAccount(
@@ -361,7 +355,7 @@ def test_the_key_that_authenticated_is_the_one_in_the_control_plane(lab: Lab) ->
     forged = Lab(
         tenant_id=lab.tenant_id,
         principal_id=lab.principal_id,
-        token=_mint_key("jd")[0],
+        token=mint_key("jd")[0],
     )
 
     resource_id = _create(lab, name=f"control-{uuid.uuid4().hex[:6]}")

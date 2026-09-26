@@ -24,6 +24,7 @@ whose job".
 | `app/services/`, `app/repositories/` — the tenant plane | **here** |
 | `app/graph.py` — the tenant-bound graph plane and the projection | **here** — 7 live tests against Neo4j |
 | `app/mcp/` — the MCP surface (tools, the boundary over the same collaborators, the graph runner) | **here** — 8 unit, 6 live |
+| `tests/{unit,integration,security,e2e}` — the four layers, and `tests/support/` | **here** — 24 unit, 29 live, 16 security, 8 e2e |
 | `tests/{integration,security,e2e}` — the matrix the directive asks for | next |
 
 The order is deliberate and dependency-forced: the policy files and the container lab land with the
@@ -221,9 +222,39 @@ pytest examples/enterprise/tests/test_mcp_live.py -q -W error       # with the l
 
 ## Tests
 
+Four layers, and each answers a different question. `tests/support/` is the harness they share: the
+lab's environment, the provisioning (tenants, callers, roles, keys that are really in the control
+plane), and a chain that builds the application's own composition with an HTTP client and a tool
+caller over it.
+
+| Layer | Question | Needs |
+|---|---|---|
+| `tests/unit/` | what is declared, and how it is wired — the routes and their permissions, the policy bridge's mapping, the tool inventory, the composition's identity | nothing |
+| `tests/integration/` | does the real infrastructure answer: PostgreSQL through the two roles, the live policy engine, Neo4j, and the MCP surface over the whole chain | the lab |
+| `tests/security/` | can a caller reach another tenant's data, does a denial execute nothing, and does any failure leak an internal | the lab |
+| `tests/e2e/` | does the documented command work as a *process*: `uvicorn` over TCP, the probes, the whole chain, and a clean stop | the lab |
+
 ```bash
-pytest examples/enterprise/tests -q -W error     # from the repository root
+pytest examples/enterprise/tests -q -W error              # everything (the lab layers skip without it)
+pytest examples/enterprise/tests/unit -q -W error         # no lab needed
+pytest examples/enterprise/tests/security -q -W error     # with the lab up
+pytest examples/enterprise/tests/e2e -q -W error          # starts and stops a real server
 ```
+
+The security layer measures its claims rather than assuming them. A denial is checked three ways —
+the answer, the row (read as the *owner*, so the measurement cannot be affected by what the caller
+may see), and the audit trail (as a before/after delta: the events name the target the *question*
+was about, which is the tenant scope, not the row the handler would have touched). Tenant isolation
+is asked over both surfaces with credentials that really are in the control plane, and both callers
+hold the same role, so every difference is a difference the tenant made. And a forged key is refused
+on both surfaces: without that negative control, every other assertion would also hold for a
+boundary that authenticated nobody.
+
+The end-to-end layer runs `uvicorn examples.enterprise.app.asgi:app` as a subprocess and drives it
+over TCP, then asserts the server *starts* without its environment failing loudly and *stops* on
+`SIGTERM` with exit status 0 — that last assertion is POSIX-only and says so: Windows has no
+`SIGTERM`, so the process is terminated rather than asked to stop, and its exit status would say
+nothing about the shutdown path.
 
 The structural slice: the ops routes answer without credentials, every tenant route declares a
 permission, an unauthenticated request answers the canonical envelope, and a plaintext policy
