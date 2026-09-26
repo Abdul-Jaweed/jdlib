@@ -976,3 +976,34 @@ Commit: `c9a0e4c` (`docs(portal): the architecture and the edges, in eighteen pa
   warnings over the enlarged tree — the navigation, the links, the Mermaid fence types and the
   regenerated inventory all hold.
 
+### The documentation portal — guides, operations, reference, and the generated API (documentation directive §9–§26)
+
+Commit: `699cc56` (`docs(portal): the guides, the operational pages, and the reference the source writes`)
+
+* **`docs/guides/`** — ten task-shaped walkthroughs (add a tenant-scoped table, an endpoint, a
+  permission, a resource type, an MCP tool, a connector, a cache, a migration; test your
+  integration). Each shows the change **and the test that proves it**, and each ends with a
+  symptom-to-cause table, because in this library a change without a test is a claim rather than a
+  control.
+* **`docs/reliability/`** — timeouts and deadlines, retries and budgets, circuit breakers, rate
+  limiting versus admission, shutdown and draining, and a failure-modes table that says what each
+  dependency being down looks like from outside.
+* **`docs/observability/`** — logging, metrics, tracing and audit events, each with the rule that
+  makes it safe: the redaction floor, the bounded-label rule, the span allow-list, and the audit
+  vocabulary that records decisions rather than traffic.
+* **`docs/operations/`** — deployment, health and readiness, troubleshooting (an eighteen-row
+  symptom table), incident response, and a production checklist whose every line names its evidence.
+* **`docs/development/`** — testing (the layers, the gate, the generated pages) and the architecture
+  decisions (ten decisions with their reasoning and where each is recorded).
+* **`docs/reference/`** — the configuration reference (every field, its default and its effect, read
+  from `TenancyConfig`), the error codes, the CLI reference, the extension points, and the **public
+  API reference, generated** by `scripts/api-reference.py` from the source: 24 namespaces, 257
+  exported names, their signatures and their own docstrings. `--check` runs in both gates, and two
+  unit tests fail when the page is stale or a namespace is missing from it.
+* **Two rules the generator learned the hard way, and keeps**: `inspect.getdoc` walks the MRO, so a
+  class with no docstring of its own was credited with its base's — the reference reads `__doc__`
+  now; and the namespace walk is rooted at `src/jdlib`, not `src`, which is the difference between a
+  reference of the surface and a reference of one package named `jdlib.jdlib`.
+* **`tests/unit/test_docs_portal.py` is now 433 checks**, and the strict build passes with zero
+  warnings over 49 pages of new material.
+
