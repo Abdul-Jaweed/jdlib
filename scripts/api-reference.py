@@ -70,18 +70,29 @@ def exported(namespace: str) -> list[tuple[str, Any]]:
     return pairs
 
 
+def _portable(text: str) -> str:
+    """A signature that does not depend on the platform it was rendered on.
+
+    pydantic-settings renders its `_env_file` default as `WindowsPath('.')` on Windows and
+    `PosixPath('.')` on Linux, so the generated page passed locally and failed in CI. The path
+    classes are canonicalised to `Path`, which is what the source says and what a reader needs.
+    """
+
+    return text.replace("WindowsPath(", "Path(").replace("PosixPath(", "Path(")
+
+
 def signature_of(obj: Any) -> str:
     """A one-line signature, or an empty string for something that is not callable."""
 
     if inspect.isclass(obj):
         try:
             rendered = f"{obj.__name__}{inspect.signature(obj.__init__)}"
-            return rendered.replace("(self, ", "(").replace("(self)", "()")
+            return _portable(rendered.replace("(self, ", "(").replace("(self)", "()"))
         except (TypeError, ValueError):
             return obj.__name__
     if callable(obj):
         try:
-            return f"{getattr(obj, '__name__', 'callable')}{inspect.signature(obj)}"
+            return _portable(f"{getattr(obj, '__name__', 'callable')}{inspect.signature(obj)}")
         except (TypeError, ValueError):
             return getattr(obj, "__name__", "callable")
     return ""
