@@ -188,6 +188,33 @@ def test_the_documentation_inventory_is_generated_not_edited() -> None:
     )
 
 
+def _api_reference_module():
+    generator = ROOT / "scripts" / "api-reference.py"
+    spec = importlib.util.spec_from_file_location("api_reference", generator)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_api_reference_is_generated_not_edited() -> None:
+    """The reference is read from the source, so a page that drifts from it is a false claim."""
+
+    module = _api_reference_module()
+    on_disk = (DOCS / "reference" / "public-api.md").read_text(encoding="utf-8")
+    assert on_disk.replace("\r\n", "\n") == module.page_text().replace("\r\n", "\n"), (
+        "docs/reference/public-api.md is stale: regenerate it with "
+        "`python scripts/api-reference.py`"
+    )
+
+
+def test_the_api_reference_covers_every_public_namespace() -> None:
+    module = _api_reference_module()
+    text = (DOCS / "reference" / "public-api.md").read_text(encoding="utf-8")
+    missing = [ns for ns in module.namespaces() if module.exported(ns) and f"## `{ns}`" not in text]
+    assert not missing, f"the API reference omits these namespaces: {missing}"
+
+
 def test_the_inventorys_judgement_rows_cite_paths_that_exist() -> None:
     module = _inventory_module()
     missing = [citation for _, _, _, citation in module.JUDGEMENT if not (ROOT / citation).exists()]

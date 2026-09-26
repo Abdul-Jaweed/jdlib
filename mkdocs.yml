@@ -162,6 +162,17 @@ nav:
           - The MCP flow: jdlib/architecture/mcp-flow.md
           - The observability flow: jdlib/architecture/observability-flow.md
       - The example application's architecture: jdlib/architecture/example-architecture.md
+  - Guides:
+      - Overview: guides/overview.md
+      - Add a tenant-scoped table: guides/add-a-tenant-scoped-table.md
+      - Add an endpoint: guides/add-an-endpoint.md
+      - Add a permission: guides/add-a-permission.md
+      - Add a resource type: guides/add-a-resource-type.md
+      - Add an MCP tool: guides/add-an-mcp-tool.md
+      - Add a connector: guides/add-a-connector.md
+      - Add a cache: guides/add-a-cache.md
+      - Add a migration: guides/add-a-migration.md
+      - Test your integration: guides/test-your-integration.md
   - Features:
       - Overview: jdlib/features/README.md
       - Authentication: jdlib/features/authentication.md
@@ -213,8 +224,33 @@ nav:
       - Final certification: security/final-certification.md
       - Threat model: threat-model/README.md
       - Compliance surface: compliance/README.md
+  - Reliability:
+      - Overview: reliability/overview.md
+      - Timeouts and deadlines: reliability/timeouts.md
+      - Retries and budgets: reliability/retries-and-backoff.md
+      - Circuit breakers: reliability/circuit-breakers.md
+      - Rate limiting and admission: reliability/rate-limiting.md
+      - Shutdown and draining: reliability/shutdown.md
+      - Failure modes: reliability/failure-modes.md
+  - Observability:
+      - Overview: observability/overview.md
+      - Logging: observability/logging.md
+      - Metrics: observability/metrics.md
+      - Tracing: observability/tracing.md
+      - Audit events: observability/audit-events.md
+  - Reference:
+      - Public API: reference/public-api.md
+      - Configuration: reference/configuration-reference.md
+      - Error codes: reference/error-codes.md
+      - CLI: reference/cli-reference.md
+      - Extension points: reference/extension-points.md
   - Operations:
       - Operations: operations/README.md
+      - Deployment: operations/deployment.md
+      - Health and readiness: operations/health-and-readiness.md
+      - Troubleshooting: operations/troubleshooting.md
+      - Incident response: operations/incident-response.md
+      - Production checklist: operations/production-checklist.md
       - Production readiness: jdlib/production-readiness.md
   - Programme:
       - Overview: jdlib/successor/README.md
@@ -229,3 +265,5 @@ nav:
   - Development:
       - How this documentation works: development/documentation.md
       - Documentation inventory: development/documentation-inventory.md
+      - Testing: development/testing.md
+      - Architecture decisions: development/architecture-decisions.md
