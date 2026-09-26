@@ -15,14 +15,17 @@ jobs:
         with:
           python-version: "3.12"
       # The optional extras are installed on purpose: the S3 and Redis integration suites need
-  # them, and the examples import the graph (neo4j) and mcp (fastmcp) extras directly -- an
-  # example that needed an extra the gate does not install fails collection, which is how
-  # the enterprise example's graph plane broke this job once.
-      # their client libraries, and a suite that skips on the runner is not evidence. Docker is
-      # present here, so these tests can run rather than report SKIPPED.
+      # their client libraries, and the examples import the graph (neo4j) and mcp (fastmcp)
+      # extras directly -- an example that needed an extra the gate does not install fails
+      # collection, which is how the enterprise example's graph plane broke this job once.
+      # Docker is present here, so these tests can run rather than report SKIPPED.
       - run: python -m pip install -e ".[dev,s3,redis,graph,mcp]"
       - run: python -m ruff check .
       - run: python -m mypy src/jdlib examples
+      # The coverage and feature matrices are generated (scripts/feature-matrix.py). This step
+      # fails when a page would change, so a stale table cannot pass -- the same step runs in
+      # scripts/ci-local.sh, and the docs test checks the cells' contents rather than the page.
+      - run: python scripts/feature-matrix.py --check
       - run: python -m pytest -q
 
   # Security gates. Every command below fails this job (and therefore the build)
