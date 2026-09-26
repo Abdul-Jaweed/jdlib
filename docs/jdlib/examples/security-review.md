@@ -33,9 +33,10 @@ The lab for the live rows: PostgreSQL `127.0.0.1:45432/jdlib_enterprise` (two ro
 | A resource is invisible to another tenant | `tests/security/test_tenant_isolation.py:35` | pass — answered `409 INVALID_REFERENCE`, the library's own mapping, deliberately not re-mapped |
 | A listing never crosses the tenant | `tests/security/test_tenant_isolation.py:59` | pass — the other tenant's rows are absent from the page |
 | The tenant is the credential, not an argument | `tests/integration/test_mcp_live.py:316` | pass — a tool argument naming a tenant changes nothing |
-| The database enforces the same rule | `tests/integration/test_tenant_plane_live.py` | pass — with RLS installed, an unscoped statement returns nothing, and the scoped form beside it returns the row |
-| The composite foreign key holds | `tests/integration/test_tenant_plane_live.py` | pass — a child row naming another tenant's parent is refused by the database |
-| The write fence refuses a suspended tenant | `tests/integration/test_tenant_plane_live.py` | pass |
+| The database enforces the same rule | `tests/integration/test_tenant_plane_live.py:366` (refused) and `:388` (the scoped form beside it) | pass — an unscoped text statement is **refused**, and the scoped bulk update is the safe path that works |
+| The policy alone hides another tenant's rows | `tests/integration/test_tenant_plane_live.py:272` | pass — with the policy and no application filter, the rows are still absent |
+| The composite foreign key holds | `tests/integration/test_tenant_plane_live.py:324` | pass — a child row naming another tenant's parent is refused **by the database** |
+| The write fence refuses a suspended tenant | `tests/integration/test_tenant_plane_live.py:433` | pass |
 
 ## 4. The graph plane
 

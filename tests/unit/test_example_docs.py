@@ -441,3 +441,33 @@ def test_the_coverage_matrix_counts_match_the_files() -> None:
         if counted != int(claimed):
             wrong.append(f"{raw} claims {claimed}, holds {counted}")
     assert not wrong, f"the coverage matrix's counts are stale: {wrong}"
+
+
+#: The review cites tests at their line, so those lines are claims like any other.
+REVIEW = EXAMPLES_DOCS / "security-review.md"
+
+
+def test_the_security_reviews_citations_land_on_tests() -> None:
+    """Every `file:line` in the review must name a test function.
+
+    The review's whole argument is that each control is evidenced by something that was run; a line
+    number pointing at a comment or a fixture would make that argument false in a way prose cannot
+    detect. Cells are resolved against the two roots, like every other citation in these pages.
+    """
+
+    cells = CELL.findall(REVIEW.read_text(encoding="utf-8"))
+    assert len(cells) >= 15, f"the review cites only {len(cells)} tests"
+    wrong = []
+    for raw, line_number in cells:
+        path = _resolve(raw)
+        if path is None:
+            wrong.append(f"{raw}:{line_number} (no such file)")
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        number = int(line_number)
+        if number > len(lines):
+            wrong.append(f"{raw}:{line_number} (past the end of the file)")
+            continue
+        if not re.match(r"\s*(async )?def test_", lines[number - 1]):
+            wrong.append(f"{raw}:{line_number} does not name a test function")
+    assert not wrong, f"the review cites {len(wrong)} lines that are not tests: {wrong[:6]}"
