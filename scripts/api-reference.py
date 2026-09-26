@@ -163,6 +163,27 @@ def page_text() -> str:
     return "\n".join(out)
 
 
+def _first_difference(current: str, generated: str) -> str:
+    """Where a stale page differs, so the failure names the line instead of only the fact."""
+
+    old = current.replace("\r\n", "\n").splitlines()
+    new = generated.replace("\r\n", "\n").splitlines()
+    for number, (was, now) in enumerate(zip(old, new, strict=False), start=1):
+        if was != now:
+            return (
+                f"line {number}:\n"
+                f"  on disk:   {was[:120]}\n"
+                f"  generated: {now[:120]}"
+            )
+    if len(old) != len(new):
+        longer = old if len(old) > len(new) else new
+        label = "on disk" if len(old) > len(new) else "generated"
+        extra = abs(len(old) - len(new))
+        following = longer[min(len(old), len(new))][:120]
+        return f"{label} has {extra} more line(s); next: {following!r}"
+    return "the text differs only in line endings"
+
+
 def main() -> int:
     text = page_text()
     if "--check" in sys.argv:
@@ -170,6 +191,7 @@ def main() -> int:
         if current.replace("\r\n", "\n") != text.replace("\r\n", "\n"):
             print("FAIL: docs/reference/public-api.md is stale")
             print("regenerate with: python scripts/api-reference.py")
+            print(_first_difference(current, text))
             return 1
         print("the public API reference matches the tree")
         return 0

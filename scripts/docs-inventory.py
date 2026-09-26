@@ -44,7 +44,7 @@ JUDGEMENT: tuple[tuple[str, str, str, str], ...] = (
     (
         "jdlib.data",
         "PARTIALLY DOCUMENTED",
-        "PostgreSQL is the only connector with an implementation; the other four engines are"
+        "PostgreSQL is the only connector with an implementation; the other four engines are "
         "deferred "
         "by decision, not by omission.",
         "docs/jdlib/successor/05-roadmap.md",
@@ -59,7 +59,7 @@ JUDGEMENT: tuple[tuple[str, str, str, str], ...] = (
     (
         "jdlib.storage",
         "PARTIALLY DOCUMENTED",
-        "S3 is verified against real MinIO. Google Cloud Storage and Azure Blob have **no module"
+        "S3 is verified against real MinIO. Google Cloud Storage and Azure Blob have **no module "
         "and "
         "no export** - a provider class in the public surface is a claim that it works, and a test "
         "asserts they are absent.",
@@ -93,7 +93,7 @@ JUDGEMENT: tuple[tuple[str, str, str, str], ...] = (
         "PARTIALLY DOCUMENTED",
         "API keys and OIDC are implemented. Other identity methods (SAML, Kerberos, mTLS) are **not"
         ""
-        "implemented**: `build_authenticator` wires what exists and refuses a method it does not"
+        "implemented**: `build_authenticator` wires what exists and refuses a method it does not "
         "have.",
         "docs/jdlib/features/authentication.md",
     ),
@@ -277,27 +277,27 @@ def page_text() -> str:
         "# Documentation inventory",
         "",
         "The audit the documentation directive asks for before anything is written: every public",
-        "namespace, whether it is documented, where the evidence is, and how many test files hold"
+        "namespace, whether it is documented, where the evidence is, and how many test files hold "
         "it.",
         "",
-        "**Generated** by `scripts/docs-inventory.py` - the counts are read from the tree, so this"
+        "**Generated** by `scripts/docs-inventory.py` - the counts are read from the tree, so this "
         "page",
-        "cannot drift from it. The rows that need judgement (experimental, deferred, internal,"
+        "cannot drift from it. The rows that need judgement (experimental, deferred, internal, "
         "absent)",
-        "are in the second table, each with its reason and a citation the documentation test"
+        "are in the second table, each with its reason and a citation the documentation test "
         "checks.",
         "",
         "## How a row is classified",
         "",
         "| Classification | The mechanical rule |",
         "|---|---|",
-        "| **DOCUMENTED** | a capability page, a feature guide or an alias page exists **and** at"
+        "| **DOCUMENTED** | a capability page, a feature guide or an alias page exists **and** at "
         "least one test file names the namespace |",
-        "| **PARTIALLY DOCUMENTED** | the namespace is mentioned in `docs/` but lacks a capability"
+        "| **PARTIALLY DOCUMENTED** | the namespace is mentioned in `docs/` but lacks a capability "
         "page, a feature guide, or a test |",
         "| **UNDOCUMENTED** | nothing under `docs/` mentions it |",
         "",
-        "The directive's other classifications - EXPERIMENTAL, DEPRECATED, IMPLEMENTED BUT"
+        "The directive's other classifications - EXPERIMENTAL, DEPRECATED, IMPLEMENTED BUT "
         "INTERNAL,",
         "NOT IMPLEMENTED - are judgements, so they are recorded as judgements in the table below",
         "rather than inferred from a grep.",
@@ -328,13 +328,13 @@ def page_text() -> str:
         "",
         "* **Google Cloud Storage and Azure Blob backends.** No module, no export, and a test that",
         "  asserts their absence: a provider class in the public surface is a claim that it works.",
-        "* **A job queue.** `jdlib.tenancy.job_envelope` gives work an authority and a lifetime;"
+        "* **A job queue.** `jdlib.tenancy.job_envelope` gives work an authority and a lifetime; "
         "the",
         "  queue, its retries and its dead-letter store are the deployment's.",
-        "* **A free-text graph search tool.** The MCP surface exposes the closed vocabulary"
+        "* **A free-text graph search tool.** The MCP surface exposes the closed vocabulary "
         "instead.",
         "* **SAML, Kerberos and mTLS authentication.** API keys and OIDC are what exists.",
-        "* **A second database vendor in the test suite.** The dialect seam exists; PostgreSQL is"
+        "* **A second database vendor in the test suite.** The dialect seam exists; PostgreSQL is "
         "what",
         "  is run, and no page claims otherwise.",
         "",
@@ -342,18 +342,38 @@ def page_text() -> str:
         "",
         "| Where | What | Why it is not in the portal |",
         "|---|---|---|",
-        "| `knowledge_base/` | a source-derived knowledge base written at commit `a30601d` | it"
+        "| `knowledge_base/` | a source-derived knowledge base written at commit `a30601d` | it "
         "describes an earlier revision; the portal publishes current behaviour |",
-        "| `.recon/` | reconnaissance notes from the successor programme | working notes, not"
+        "| `.recon/` | reconnaissance notes from the successor programme | working notes, not "
         "reference material |",
-        "| `docs/superpowers/plans/` | the phase plans the programme was executed from | working"
+        "| `docs/superpowers/plans/` | the phase plans the programme was executed from | working "
         "documents against earlier revisions; kept in the repository for the audit trail |",
         "",
-        "Regenerate with `python scripts/docs-inventory.py`; `tests/unit/test_docs_portal.py` fails"
-        "when",
-        "this page is stale.",
+        "Regenerate with `python scripts/docs-inventory.py`; the documentation test fails when a",
+        "page is stale.",
     ]
     return "\n".join(out)
+
+
+def _first_difference(current: str, generated: str) -> str:
+    """Where a stale page differs, so the failure names the line instead of only the fact."""
+
+    old = current.replace("\r\n", "\n").splitlines()
+    new = generated.replace("\r\n", "\n").splitlines()
+    for number, (was, now) in enumerate(zip(old, new, strict=False), start=1):
+        if was != now:
+            return (
+                f"line {number}:\n"
+                f"  on disk:   {was[:120]}\n"
+                f"  generated: {now[:120]}"
+            )
+    if len(old) != len(new):
+        longer = old if len(old) > len(new) else new
+        label = "on disk" if len(old) > len(new) else "generated"
+        extra = abs(len(old) - len(new))
+        following = longer[min(len(old), len(new))][:120]
+        return f"{label} has {extra} more line(s); next: {following!r}"
+    return "the text differs only in line endings"
 
 
 def main() -> int:
@@ -366,6 +386,7 @@ def main() -> int:
         if on_disk != text.replace("\r\n", "\n"):
             print("FAIL: the documentation inventory is stale")
             print("regenerate with: python scripts/docs-inventory.py")
+            print(_first_difference(on_disk, text))
             return 1
         print("the documentation inventory matches the tree")
         return 0
