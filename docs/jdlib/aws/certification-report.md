@@ -160,11 +160,32 @@ regenerated for the new public symbols — the check caught that it needed to be
 | --- | --- |
 | New AWS tests | **77 passed** (26 + 22 + 13 + 11 + 5) |
 | Documentation tests | **928 passed, 7 skipped** |
+| Full local gate (`scripts/ci-local.sh`, every lab live) | **PASS** — ruff clean, **3027 passed / 8 skipped** in 2:48, packaging, clean-venv import smoke, all four generated-page checks |
 | Strict documentation build | **clean** (`mkdocs build --strict`, exit 0) |
 | Generated-page checks | `docs-inventory`, `docs-matrix`, `api-reference`, `feature-matrix` — **all OK** |
 | Ruff | clean on every new module and test |
 | Mypy | clean on every new module and test |
-| CI | six runs verified **success**: `d4fb75f`, `2d9837b`, `2dda321`, `8cbbb85`, `a229e44`, `05d2abb`; `8153cd2` and `e552f02` were in flight when this report was written |
+| CI | **eight runs verified success**: `d4fb75f`, `2d9837b`, `2dda321`, `8cbbb85`, `a229e44`, `05d2abb`, `8153cd2`, `fc4db59` |
+
+### Two failures this programme produced, and what they were
+
+A certification report that hides its own process failures is the thing this programme exists to
+avoid, so both are recorded:
+
+* **CI run on `e552f02` failed.** The commit added `examples/aws_cognito_avp/`, which changes what
+  `scripts/feature-matrix.py` generates (the authentication row's example cell moves to the new
+  example, because the generator's documented rule is "the first line under `examples/` that
+  mentions the symbol", sorted). The generated page was regenerated in the *next* commit instead of
+  the same one, so the check failed exactly as designed. `fc4db59` regenerates it and CI is green.
+* **The first two local gate runs failed on my environment, not on the code.** I passed the
+  enterprise lab's graph password as `JDLIB_INFRA_NEO4J_PASSWORD`, and the infra Neo4j's password
+  defaults to `jdliblab` (`NEO4J_AUTH: "neo4j/${JDLIB_INFRA_NEO4J_PASSWORD:-jdliblab}"`), so seven
+  Neo4j infrastructure tests, a readiness probe and two setup fixtures failed to authenticate. The
+  corrected environment gives 3027 passed / 8 skipped and the gate's own PASS line.
+
+Neither was a defect in the adapters, and neither is hidden behind a re-run: the first is why the
+generated-page checks run in both gates, and the second is why the lab environment is passed inline
+rather than inherited.
 
 ## Known Limitations
 
