@@ -811,3 +811,71 @@ names the commit that fixed it.
   * Windows has no `SIGTERM` — `Popen.send_signal` terminates the process — so the graceful-shutdown
     assertion is POSIX-only and **says so** in the test, rather than asserting something weaker
     everywhere and calling it the same thing.
+
+### The example application — the feature guides (directive §18, E5)
+
+* **What landed.** `docs/jdlib/features/`: **14 guides**, one per feature a developer consumes —
+  authentication, authorization, tenancy, resource-management, query-system, credentials, caching,
+  storage, connectors, graph, mcp, jobs, audit, observability — each carrying the directive's
+  template (what / why / when / when not / how / architecture / example / security / reliability /
+  observability / audit / configuration / testing / common mistakes / production checklist), each
+  linking to its **design authority** page and saying so, and each with machine-read front-matter
+  (`guide`, `authority`, `modules`, `exports`, `example`, `test_files`).
+* **Every citation is verified before it lands.** The front-matter is generated against the working
+  tree and asserted: every module path exists, every exported symbol resolves in the modules the
+  guide names, every test file exists, and every authority page is real. The first attempt cited 17
+  paths and symbols that did not exist (a test in `tests/unit/` that lives in `tests/integration/`,
+  `CerbosPDP` in a module that does not define it, and so on) — the check caught all of them before
+  a single file was written, which is the difference between a guide that is true and one that reads
+  as if it were.
+* **Where the fourteen come from, recorded rather than implied.** The directive names the set; this
+  list is the library's own surfaces, because a guide for a feature the library does not have is the
+  failure this programme exists to remove. Where the example application does not use a feature —
+  **background jobs** — the guide says so in its own Example section instead of inventing one, and
+  points at the library's suites as the evidence. Privileged access and the error envelope are
+  cross-cutting and are documented where they live (the authorization guide and every guide's
+  security section respectively), with the README naming both.
+* **The index** (`docs/jdlib/features/README.md`) states the rule the set rests on: these guides are
+  not the design authority, they link to it, and where the two disagree the authority page and the
+  code win. It also names the test that will keep them honest (`tests/unit/test_example_docs.py`,
+  E7) — the same treatment the capability pages already get.
+
+### The example application — architecture pages and example documentation (directive §18, E6)
+
+* **What landed.** `docs/jdlib/architecture/` (**6 pages**): `example-architecture` (the layers and
+  what each may decide, one composition over two surfaces), `security-flow` (the request, step by
+  step, over HTTP *and* MCP), `tenant-flow` (provisioning, placement, and the binding end to end),
+  `neo4j-flow` (why the graph is derived, and what follows), `mcp-flow` (the chain, and why the
+  authorization question is about the tenant scope), `observability-flow` (the ids, the allow-list,
+  and degrading rather than failing). `docs/jdlib/examples/` (**5 pages**): `overview`,
+  `minimal-example`, `enterprise-example`, `with-and-without`, `developer-journey`.
+* **`with-and-without`** is the §25 comparison, and it obeys the directive's constraint: the
+  "without" snippets are marked **illustrative, not runnable** in the first line of every block, and
+  a test asserts that — unmarked illustrative code is indistinguishable from recommended code. Each
+  "with JDLib" cell names the seam that does the work.
+* **The example's findings are recorded where a reader meets them**: the enterprise page lists the
+  runtime-role grant, the MCP tenant-scope policy gap, the `409 INVALID_REFERENCE` mapping, the
+  three-event MCP denial, and the suspicion that was disproved.
+
+### The example application — the documentation is checked, and the matrices are generated (E7)
+
+* **`tests/unit/test_example_docs.py`** (115 checks): the guide set is exactly the fourteen named;
+  every guide carries every template heading; every guide names its design authority and links it;
+  every cited module, export, test file and example path resolves; every path cited in the
+  architecture and example pages exists (resolved against the repository root **or** the example it
+  documents, a rule stated in the test); and the with-and-without snippets are marked.
+* **It found real problems immediately**: the first run failed on five pages citing paths relative
+  to `examples/enterprise/` (`tests/security/…`) that the test was resolving against the repository
+  root — which is how the two-root rule came to be written down instead of assumed.
+* **`scripts/feature-matrix.py` generates both matrices** — `docs/jdlib/examples/feature-matrix.md`
+  (69 rows: the seam's definition site, the first use in `examples/`, the test function that names
+  it) and `coverage-matrix.md` (the layers, their files, their test-function counts, what each needs
+  and what it answers). Line numbers are read from the tree, not typed.
+* **The gate keeps them generated**: `scripts/ci-local.sh` runs the generator with `--check` and
+  fails when a page would change — because a hand-written table of line numbers is wrong the first
+  time someone edits the file above it. Line endings are normalised in the comparison, so the check
+  means the same thing on Windows and on the runner.
+* **A cell says exactly what was measured**: *library-only* (the guide declares no example path — the
+  example does not use the feature at all) versus *not named directly* (the example uses the feature
+  through another seam, so this symbol never appears under `examples/`). Conflating the two would
+  have been the easy lie.

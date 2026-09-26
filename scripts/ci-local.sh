@@ -61,6 +61,12 @@ if missing:
 print("extras present: neo4j, fastmcp")
 PY
 
+step "the generated documentation matches the tree"
+# The coverage and feature matrices are generated (scripts/feature-matrix.py) because a hand-written
+# table of line numbers is wrong the first time someone edits the file above it. This step is what
+# makes them *stay* generated: if a cell would change, the page is stale and the gate says so.
+"$VENV_PY" scripts/feature-matrix.py --check
+
 step "pytest -q (with coverage; integration skips cleanly without Docker)"
 set +e
 "$VENV_PY" -m pytest -q -W error --cov=jdlib --cov-report=term:skip-covered 2>&1 | tail -40
