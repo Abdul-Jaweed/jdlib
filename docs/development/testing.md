@@ -55,6 +55,20 @@ pytest tests/integration -q                   # against containers or the lab
 pytest tests/unit/test_docs_portal.py -q      # the documentation checks alone
 ```
 
+## Test support: `jdlib.testing`
+
+`jdlib.testing` is a public namespace, and it holds three assertions for the property every other
+guarantee rests on. A test of tenant-scoped code should reach for these rather than hand-writing the
+check, so that "isolated" means the same thing in your suite as in the library's own:
+
+| helper | what it asserts |
+|---|---|
+| `assert_tenant_isolated` | creates a row for one context and asserts another cannot see it; returns the id of the row it created |
+| `assert_scoped_count` | a model has exactly the expected number of rows visible to a context |
+| `assert_cross_tenant_write_rejected` | a row owned by another tenant cannot be flushed under the wrong context |
+
+They are what the isolation suites are built from, and they are exported for exactly that reason.
+
 ## The rule
 
 A test that needs infrastructure **skips** when the environment does not offer it, and says which

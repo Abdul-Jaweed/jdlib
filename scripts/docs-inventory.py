@@ -219,6 +219,15 @@ PAGE_ALIASES: dict[str, tuple[str, ...]] = {
         "docs/jdlib/06-strategy-matrix.md",
         "docs/jdlib/03-isolation-invariants.md",
     ),
+    # Both namespaces are documented by a portal section rather than by a capability or feature
+    # page, which is what this table is for. Without these rows the inventory read PARTIALLY
+    # DOCUMENTED while its own judgement table (below) called the same namespace DOCUMENTED.
+    "jdlib.reliability": (
+        "docs/reliability/overview.md",
+        "docs/reliability/circuit-breakers.md",
+        "docs/reliability/failure-modes.md",
+    ),
+    "jdlib.testing": ("docs/development/testing.md",),
     "jdlib.migrations": ("docs/jdlib/production-readiness.md",),
     "jdlib.integrations": ("docs/jdlib/architecture.md",),
     "jdlib.resources": (
