@@ -165,7 +165,7 @@ regenerated for the new public symbols — the check caught that it needed to be
 | Generated-page checks | `docs-inventory`, `docs-matrix`, `api-reference`, `feature-matrix` — **all OK** |
 | Ruff | clean on every new module and test |
 | Mypy | clean on every new module and test |
-| CI | **eight runs verified success**: `d4fb75f`, `2d9837b`, `2dda321`, `8cbbb85`, `a229e44`, `05d2abb`, `8153cd2`, `fc4db59` |
+| CI | **every programme commit's run verified success** — nine at the time of writing, `d4fb75f` through `abae263` — with one exception, recorded below |
 
 ### Two failures this programme produced, and what they were
 
@@ -250,7 +250,7 @@ rather than inherited.
 | Mypy clean | **Met** |
 | Tests pass | **Met** — 77 new tests, 928 documentation tests |
 | Documentation builds with `mkdocs build --strict` | **Met** |
-| Final CI passes | **Met for six runs; two in flight at the time of writing** — the honest status, not a prediction |
+| Final CI passes | **Met** — every commit in the programme is CI-green from `d4fb75f` through `abae263`; the single failure was `e552f02`, fixed by the next commit and recorded above |
 | Final report generated | **Met** — this page |
 
 ## The programme's own conclusion
