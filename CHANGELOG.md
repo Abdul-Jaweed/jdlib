@@ -1007,3 +1007,33 @@ Commit: `699cc56` (`docs(portal): the guides, the operational pages, and the ref
 * **`tests/unit/test_docs_portal.py` is now 433 checks**, and the strict build passes with zero
   warnings over 49 pages of new material.
 
+### The documentation portal, closed: the matrix, the review, and the report (documentation directive §34–§40)
+
+Commit: `8af98b0` (`docs(portal): the matrix, the review, and the report`)
+
+* **`docs/development/documentation-test-matrix.md`** - the directive's section 36 table, but
+  **generated**: `scripts/docs-matrix.py` earns each tick from the tree (the page exists and the
+  navigation reaches it; a file under `examples/` names a marker the area owns; the area's page
+  carries a Mermaid diagram; a test file names the namespace and the documentation test runs) and
+  prints `-` where there is no evidence. 14 areas, 55 of 56 cells earned; the empty one is
+  `Observability`'s test column, and the page says why (no test names `jdlib.observability`; the
+  signals are covered through `jdlib.security.telemetry` and `jdlib.security.tracing`).
+* **`docs/development/portal-validation.md`** - what validates the portal, what it has caught, and
+  what it deliberately does not check. Four defects it caught in the portal itself are recorded
+  there: `inspect.getdoc` crediting a class with its base's docstring, a namespace walk rooted one
+  directory too high, a line-splitting helper that dropped a space at every chunk boundary, and a
+  generated page that listed files in filesystem order - which is why it passed on Windows and
+  failed in CI, and why both generators now name the first differing line instead of only the fact.
+* **`docs/development/portal-review.md`** - the directive's section 38 review from four chairs
+  (developer, architect, security engineer, operations engineer), each question answered with the
+  page that answers it, and what the review changed: the deployment topology and the MCP invocation
+  chain now have diagrams, and the failure-mode table says what a *degraded* policy engine means.
+* **`docs/jdlib/successor/07-portal-report.md`** - the closing report: the deliverables, the
+  directive's forty-four success criteria each against its evidence, and what remains open.
+* **The navigation now follows the directive's reading order** (Getting Started, Concepts,
+  Architecture, Features, Capabilities, Integrations, Guides, Examples, Security, Reliability,
+  Observability, Operations, Reference, Development, Programme), and `README.md` points at the
+  portal, says how to build it, and marks `knowledge_base/` as an archived snapshot.
+* **`scripts/docs-matrix.py --check` runs in both gates**, and the Mermaid check now also fails on
+  an unclosed or empty fence rather than only on an unknown diagram type.
+
